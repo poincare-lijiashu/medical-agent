@@ -224,6 +224,12 @@ class Settings(BaseSettings):
     fhir_token: str = ""
     fhir_timeout_s: float = 8.0
     fhir_verify_tls: bool = True
+    # ---- HIS 深度集成：HL7 v2 MLLP 适配器（老院区通道，HIS_ADAPTER=hl7v2）----
+    # 院内集成网关的 MLLP 端口（常见 2575）；host 留空即未对接（适配器构造时响亮失败）。
+    hl7_mllp_host: str = ""
+    hl7_mllp_port: int = 2575
+    hl7_mllp_timeout_s: float = 5.0
+    hl7_encoding: str = "utf-8"
 
     # 质控自动化（QC_AUTO_PASS / QC_AUTO_SIGN / QC_AUTO_SIGN_FULL 均可被同名环境变量覆盖）
     qc_auto_pass: bool = False  # True：qc/record 三档分流（确定性硬伤自动驳回 / ≥0.85 自动归档 / 其余人工）；默认关闭保持人工终审

@@ -7030,3 +7030,47 @@ Python 全量（不含 e2e）→ 1656 passed / 1 skipped（跨栈无回归）
 - 前端 HIS 工作台尚未接入这两个内部端点（Java 侧能力已就绪，需前端按钮 + 结果面板）；
 - `internal/**` 的网关白名单需在 Helm ingress 配置中显式放行（当前网关默认屏蔽）；
 - HL7 v2 MLLP 适配器（老院区通道）仍待做；EMPI 唯一真源与 staging 双系统联调仍待做。
+
+## 173. 2026-11-10 HIS 深度集成第三步：HL7 v2 MLLP 适配器（老院区通道）（第 170 批）
+
+**问题**
+
+- 第 168 批只覆盖 FHIR（新建/集成平台化院区）；老院区主力是 **HL7 v2.5 + MLLP**
+  （ADT/ORM/ORU + 逐条 ACK），没有这条通道，"深度集成"只覆盖一半院区。
+
+**已做**
+
+1. **`backend/integration/mllp.py`（协议层，纯标准库）**
+   - 帧：`\x0b` + 报文 + `\x1c\x0d`；短连接 + 单次请求-响应；
+   - 字段转义（先反斜杠防二次转义）：`\→\E\`、`|→\F\`、`^→\S\`、`~→\R\`、`&→\T\`；
+   - `send_message` 超时（连接+ACK 共用 `HL7_MLLP_TIMEOUT_S`）抛 `MllpTimeout`；
+     响应无帧边界抛 `MllpError`；`parse_ack` 取 `MSA` 状态码；
+   - 依赖方向：放在 **integration 层**（`test_architecture` 禁止 integration→core，首跑即红，
+     已迁位并复跑通过）。
+2. **`backend/integration/hl7v2_adapter.py`（`HIS_ADAPTER=hl7v2`）**
+   - `fetch_patient` → `QBP^Q22^QBP_Q21`（`QPD` 按 `@PID.3`），解析 `PID`（3/5/7/8）；
+   - `fetch_orders` → `QRY^R02^QRY_R02`，解析 `ORC`+`OBR`，输出与 FHIR 适配器**同字段名**
+     （读端点无需分支）；
+   - `push_qc_result` → `ORU^R01`（`OBR-2`=质控单号、`OBR-4`=QCRESULT、`OBX-5`=结论 JSON）；
+     `MSA|AA`→True、`AE/AR`→False（不重试）、无 ACK→抛异常（调用方 502 + 审计）；
+   - 配置：`HL7_MLLP_HOST/PORT/TIMEOUT_S/ENCODING`；host 缺失构造即 `ValueError`（响亮失败）。
+3. **registry**：`register_adapter("hl7v2", Hl7v2HisAdapter)`——与 fhir/demo/none 同一端口。
+4. **文档**：`docs/INTEGRATION.md` 新增第十节（激活、消息映射、MLLP 协议细节、
+   FHIR/HL7v2 选型对照、测试）。
+5. **测试**（`tests/test_mllp_hl7v2.py` 12 条）：本地 TCP 回环服务器验证 MLLP 帧/ACK/
+   超时/无帧报错；mock 传输验证 PID/ORC/OBR 映射、AE→None/[]、AA/AE/无 ACK 三态、
+   转义（`|` 变 `\F\` 且 JSON 不被破坏）、缺配置、registry。
+
+**验证**
+
+```
+定向：test_architecture + test_mllp_hl7v2 + test_fhir_adapter + test_router_split_guard → 27 passed
+全量（不含 e2e）→ 1668 passed / 1 skipped
+```
+
+**遗留**
+
+- HL7 v2 查询报文（QBP/QRY）在部分厂商网关叫法不同，映射已集中为 3 个纯函数，
+  院方规范到手后改函数即可；
+- 长连接/重连/批量预取未做（短连接 + 逐条 ACK 是兼容性最好的起点）；
+- 尚无 staging 真实网关联调（当前用 TCP 回环 + mock 覆盖协议与映射）。

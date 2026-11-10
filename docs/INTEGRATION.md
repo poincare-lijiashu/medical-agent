@@ -1,4 +1,4 @@
-# MedAssist HIS 对接架构（integration 层）
+﻿# MedAssist HIS 对接架构（integration 层）
 
 > 批2 任务2 落地。对接哪家医院、用何种协议，核心业务零改动——所有院内系统对接收口在 `backend/integration/`。
 
@@ -198,3 +198,48 @@ clinical:
 mvn -q -pl clinical -am "-Dtest=AiAssistClientTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
 → Tests run: 8, Failures: 0, Errors: 0
 ```
+
+## 十、HL7 v2.5 MLLP 适配器（`HIS_ADAPTER=hl7v2`，老院区通道）
+
+> FHIR 面向"新建/集成平台化"院区；老院区仍以 **HL7 v2 + MLLP** 为主（ADT/ORM/ORU + 逐条 ACK）。
+> 两条通道同一 `HisAdapter` 端口，选型只改一行配置，核心业务零改动。
+
+### 10.1 激活
+
+```bash
+HIS_ADAPTER=hl7v2
+HL7_MLLP_HOST=<院内集成网关地址>
+HL7_MLLP_PORT=2575
+HL7_MLLP_TIMEOUT_S=5
+HL7_ENCODING=utf-8
+```
+
+### 10.2 消息映射（`backend/integration/hl7v2_adapter.py`）
+
+| 业务 | 发送报文 | 解析 | 失败语义 |
+|---|---|---|---|
+| 患者摘要 | `QBP^Q22^QBP_Q21`（`QPD` 按 `@PID.3` 查询） | 响应 `PID` 段（PID-3/5/7/8） | `MSA|AE/AR` → `None`；无 PID → `None`；网络/超时 → 抛异常 |
+| 医嘱清单 | `QRY^R02^QRY_R02`（`QRD` 按 `@PID.3`） | 响应 `ORC`+`OBR` 段 | `AE/AR` → `[]`；网络 → 抛异常 |
+| 质控回写 | `ORU^R01`（`OBR-2`=质控单号、`OBR-4`=QCRESULT、`OBX-5`=结论 JSON） | `MSA` | `AA`→True；`AE/AR`→False（不重试）；无 ACK → 抛异常 |
+
+### 10.3 MLLP 协议层（`backend/integration/mllp.py`）
+
+- 帧：`\x0b` + 报文 + `\x1c\x0d`；短连接 + 逐条 ACK（不维护长连接池）；
+- 字段转义：`\ → \E\`、`| → \F\`、`^ → \S\`、`~ → \R\`、`& → \T\`（先转义反斜杠防二次转义）；
+- 超时：连接超时与 ACK 等待共用同一个 `HL7_MLLP_TIMEOUT_S`，超时抛 `MllpTimeout`；
+- 响应无 MLLP 帧边界 → `MllpError`（说明网关不是 MLLP 或代理改写了报文）。
+
+### 10.4 与 FHIR 适配器的选择
+
+| 院区形态 | 建议 |
+|---|---|
+| 有集成平台 / 新上 FHIR 网关 | `fhir`（JSON、REST、字段语义清晰） |
+| 老 HIS 只有 HL7 v2 接口机 | `hl7v2`（QBP/QRY、ACK 明确） |
+| 尚未对接 | `none`（默认，读端点 501、回写静默跳过） |
+
+### 10.5 测试
+
+`tests/test_mllp_hl7v2.py`（12 条）：本地 TCP 回环服务器验证 MLLP 帧/ACK/超时/无帧报错；
+适配器用 mock 传输验证 PID/ORC/OBR 映射、AE→None/[]、AA/AE/无 ACK 三态、缺配置响亮失败、
+registry 注册。
+

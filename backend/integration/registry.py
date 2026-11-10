@@ -18,6 +18,7 @@ from backend.config import settings
 from backend.integration.base import HisAdapter, NullAdapter
 from backend.integration.demo_adapter import DemoHisAdapter
 from backend.integration.fhir_adapter import FhirHisAdapter
+from backend.integration.hl7v2_adapter import Hl7v2HisAdapter
 
 _REGISTRY: dict[str, type[HisAdapter]] = {}
 _NONE_ALIASES = {"", "none", "noop"}  # "noop" 为历史别名兼容（与 none 等价）
@@ -47,3 +48,5 @@ def get_adapter() -> HisAdapter:
 register_adapter("demo", DemoHisAdapter)
 # 评测「HIS 深度集成」第一步：标准协议适配器（FHIR R4 REST，HIS_ADAPTER=fhir + FHIR_BASE_URL）
 register_adapter("fhir", FhirHisAdapter)
+# 评测「HIS 深度集成」第三步：老院区通道（HL7 v2 MLLP，HIS_ADAPTER=hl7v2 + HL7_MLLP_HOST）
+register_adapter("hl7v2", Hl7v2HisAdapter)
