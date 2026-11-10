@@ -42,6 +42,15 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'AI 智能',
   },
   {
+    // 第 199 批：AI 病例影像（多模态病例总结 + 影像初步所见）
+    name: 'ai-case',
+    path: '/ai/case',
+    title: 'AI 病例影像',
+    hint: '多模态病例总结 · 影像初步所见 · 图片自动压缩 · 双人核对',
+    icon: 'scan',
+    group: 'AI 智能',
+  },
+  {
     // 第 190 批：统一系统迁入的第一个 AI 视图（AI 中台 /api/v1，与控制台共用同一会话令牌）
     name: 'ai-overview',
     path: '/ai-overview',

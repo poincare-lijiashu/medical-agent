@@ -35,6 +35,12 @@ const router = createRouter({
           component: () => import('@/views/AiChatView.vue'),
         },
         {
+          // 第 199 批：AI 病例影像（多模态病例总结 + 影像初步所见）
+          path: 'ai/case',
+          name: 'ai-case',
+          component: () => import('@/views/AiCaseView.vue'),
+        },
+        {
           path: 'ai-overview',
           name: 'ai-overview',
           component: () => import('@/views/AiOverviewView.vue'),

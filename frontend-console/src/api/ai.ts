@@ -647,3 +647,39 @@ export function aiAgentConsult(
 ): Promise<AiConsultResult> {
   return aiPost<AiConsultResult>('/agent/consult', body, signal)
 }
+
+/* ------------------------------------------------------------------ *
+ * 多模态病例总结 / 影像阅片（第 199 批）
+ *
+ * 两个端点共用 `AskReq {question, images}` → `AskResp`；`status` 可能是：
+ *   - need_input：病例未提供任何内容（返回引导文案，不是错误）
+ *   - need_image：影像未上传图片（同上）
+ * 图片是压缩后的 data URL（最多 10 张，单张 ≤6MB），由浏览器先压缩再提交。
+ * ------------------------------------------------------------------ */
+
+/** 通用 AskResp（文献 / 病例 / 影像同构）。 */
+export type AiAskResponse = AiLiteratureResult
+
+export function aiCaseAsk(
+  question: string,
+  images: string[],
+  signal?: AbortSignal,
+): Promise<AiAskResponse> {
+  return aiPost<AiAskResponse>(
+    '/medical/case/ask',
+    { question, ...(images.length ? { images } : {}) },
+    signal,
+  )
+}
+
+export function aiImagingAsk(
+  question: string,
+  images: string[],
+  signal?: AbortSignal,
+): Promise<AiAskResponse> {
+  return aiPost<AiAskResponse>(
+    '/medical/imaging/ask',
+    { question, ...(images.length ? { images } : {}) },
+    signal,
+  )
+}
