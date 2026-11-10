@@ -653,6 +653,104 @@ export function aiAppLogs(lines = 200): Promise<AiAppLog> {
 }
 
 /* ------------------------------------------------------------------ *
+ * LLM 模型配置（第 203 批，仅 admin）
+ *
+ * 对话 / 视觉双通道，openai / anthropic 双格式；密钥在服务端加密存储，
+ * GET 只返回脱敏值。激活/停用后服务端会重建模型缓存，下一请求立即生效。
+ * ------------------------------------------------------------------ */
+
+export interface AiLlmProvider {
+  id: string
+  api_format?: string
+  base_url?: string
+  model_id?: string
+  display_name?: string
+  /** 脱敏后的密钥（前 6 后 4，中间 ***）；不是明文 */
+  api_key?: string
+  extra_params?: string
+  created_at?: string
+}
+
+export interface AiLlmChannel {
+  active?: string | null
+  providers?: AiLlmProvider[]
+}
+
+export interface AiLlmProviders {
+  chat?: AiLlmChannel
+  vision?: AiLlmChannel
+}
+
+export interface AiLlmProviderInput {
+  kind: 'chat' | 'vision'
+  api_format: 'openai' | 'anthropic'
+  base_url: string
+  model_id: string
+  display_name?: string
+  api_key?: string
+  extra_params?: string
+}
+
+export interface AiLlmTestResult {
+  ok?: boolean
+  latency_ms?: number
+  detail?: string
+}
+
+/** 静态加密版本盘点：只有计数与 keyId，不含任何密钥材料。 */
+export interface AiLlmKeyInventory {
+  mode?: string
+  activeKey?: string | null
+  total?: number
+  versions?: Record<string, number>
+  plaintext?: number
+  legacyV1?: number
+  currentKey?: number
+  keysOutOfRing?: string[]
+  rotationReady?: boolean
+}
+
+export function aiLlmProviders(): Promise<AiLlmProviders> {
+  return aiGet<AiLlmProviders>('/medical/admin/llm/providers')
+}
+
+export function aiLlmAdd(input: AiLlmProviderInput): Promise<{ id?: string }> {
+  return aiPost<{ id?: string }>('/medical/admin/llm/providers', input)
+}
+
+export function aiLlmDelete(kind: string, pid: string): Promise<{ ok?: boolean }> {
+  return aiDelete<{ ok?: boolean }>(
+    `/medical/admin/llm/providers/${encodeURIComponent(kind)}/${encodeURIComponent(pid)}`,
+  )
+}
+
+export function aiLlmActivate(kind: string, pid: string): Promise<{ ok?: boolean; active?: string }> {
+  return aiPost<{ ok?: boolean; active?: string }>('/medical/admin/llm/activate', { kind, pid })
+}
+
+/** 停用激活 provider（回落 .env 内置配置；原配置保留可切回）。 */
+export function aiLlmDeactivate(kind: string): Promise<{ ok?: boolean }> {
+  return aiPost<{ ok?: boolean }>('/medical/admin/llm/deactivate', { kind })
+}
+
+/** 连通性测试（不落盘；detail 不含 api_key）。 */
+export function aiLlmTest(input: AiLlmProviderInput): Promise<AiLlmTestResult> {
+  return aiPost<AiLlmTestResult>('/medical/admin/llm/test', input)
+}
+
+/** 厂商额外参数预设（仅建议不落库；无匹配返回空串）。 */
+export function aiLlmSuggestExtra(baseUrl: string, modelId: string): Promise<{ suggested?: string }> {
+  return aiGet<{ suggested?: string }>('/medical/admin/llm/suggest-extra', {
+    base_url: baseUrl,
+    model_id: modelId,
+  })
+}
+
+export function aiLlmKeyInventory(): Promise<AiLlmKeyInventory> {
+  return aiGet<AiLlmKeyInventory>('/medical/admin/llm/key-inventory')
+}
+
+/* ------------------------------------------------------------------ *
  * AI 知识库管理（第 197 批，仅 admin）
  *
  * 上传走 JSON `data_b64`（与后端契约一致，不是 multipart）；大文件立即返回

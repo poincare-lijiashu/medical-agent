@@ -489,6 +489,16 @@ export const NAV_ITEMS: NavItem[] = [
     group: '系统管理',
     permissions: ['auth:user:read', 'audit:log:read'],
   },
+  {
+    // 第 203 批：LLM 模型配置（对话/视觉双通道，仅管理员）
+    name: 'ai-llm',
+    path: '/ai/llm',
+    title: 'AI 模型配置',
+    hint: '对话 / 视觉双通道 · openai / anthropic 双格式 · 连通性测试 · 密钥加密盘点',
+    icon: 'sliders',
+    group: '系统管理',
+    roles: ['ADMIN'],
+  },
 ]
 
 export const NAV_GROUPS = [
