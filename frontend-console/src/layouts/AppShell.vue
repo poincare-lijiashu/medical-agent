@@ -56,6 +56,44 @@
           <span class="cmd-key">{{ metaKey }}K</span>
         </button>
 
+        <!-- 第 220 批：全局待办角标（只聚合本人有权限、有明确入口的事项） -->
+        <button
+          class="cmd todo-trigger"
+          type="button"
+          aria-haspopup="menu"
+          :aria-expanded="todoOpen ? 'true' : 'false'"
+          @click="toggleTodos"
+        >
+          <AppIcon name="bell" :size="15" />
+          <span>{{ t('todo.title') }}</span>
+          <span v-if="todoTotal > 0" class="todo-badge">{{ todoTotal > 99 ? '99+' : todoTotal }}</span>
+          <span v-else-if="todoLoading" class="cmd-key">{{ t('todo.loading') }}</span>
+        </button>
+        <div v-if="todoOpen" class="todo-menu" role="menu" @keydown.esc.prevent="closeTodos">
+          <div class="todo-head">
+            <b>{{ t('todo.title') }}</b>
+            <span class="spacer" />
+            <button class="btn btn--ghost btn--sm" type="button" :disabled="todoLoading" @click="refreshTodos">
+              {{ t('todo.refresh') }}
+            </button>
+          </div>
+          <div v-if="!todos.length" class="todo-empty">{{ t('todo.empty') }}</div>
+          <RouterLink
+            v-for="item in todos"
+            :key="item.key"
+            :to="item.to"
+            class="todo-item"
+            role="menuitem"
+            @click="todoOpen = false"
+          >
+            <span class="todo-label">{{ item.label }}</span>
+            <span class="spacer" />
+            <span v-if="item.failed" class="todo-failed">{{ t('todo.failed') }}</span>
+            <span v-else class="todo-count" :class="{ 'is-zero': item.count === 0 }">{{ item.count }}</span>
+          </RouterLink>
+          <div v-if="todos.some((x) => x.failed)" class="todo-note">{{ t('todo.failedNote') }}</div>
+        </div>
+
         <button
           ref="userBtn"
           class="user"
@@ -139,6 +177,7 @@ import { NAV_GROUPS, NAV_ITEMS, canSeeNav, findNav } from '@/navigation'
 import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
 import { broadcastLogout, onRemoteLogout } from '@/utils/sessionBus'
 import { clearSession, session } from '@/stores/session'
+import { loadTodoItems, type TodoItem } from '@/todos'
 
 const route = useRoute()
 const router = useRouter()
@@ -149,6 +188,13 @@ const theme = ref<'light' | 'dark'>(
 const userMenuOpen = ref(false)
 const userBtn = ref<HTMLElement | null>(null)
 const userMenuEl = ref<HTMLElement | null>(null)
+const todos = ref<TodoItem[]>([])
+const todoOpen = ref(false)
+const todoLoading = ref(false)
+const todoTotal = computed(() =>
+  todos.value.reduce((sum, item) => sum + (item.count ?? 0), 0),
+)
+let todoTimer = 0
 const paletteOpen = ref(false)
 const mobileOpen = ref(false)
 const isMobile = ref(false)
@@ -194,6 +240,7 @@ async function focusMenuItem(index: number) {
 
 async function openUserMenu() {
   if (userMenuOpen.value) return
+  todoOpen.value = false
   userMenuOpen.value = true
   await focusMenuItem(0)
 }
@@ -203,8 +250,30 @@ async function toggleUserMenu() {
     closeUserMenu()
     return
   }
+  todoOpen.value = false
   userMenuOpen.value = true
   await focusMenuItem(0)
+}
+
+/* ---- 全局待办（第 220 批）：打开即刷新；60s 轮询仅在标签页可见时进行 ---- */
+function toggleTodos() {
+  userMenuOpen.value = false
+  todoOpen.value = !todoOpen.value
+  if (todoOpen.value) void refreshTodos()
+}
+
+function closeTodos() {
+  todoOpen.value = false
+}
+
+async function refreshTodos() {
+  if (!session.isLoggedIn.value) return
+  todoLoading.value = true
+  try {
+    todos.value = await loadTodoItems()
+  } finally {
+    todoLoading.value = false
+  }
 }
 
 function closeUserMenu(restoreFocus = true) {
@@ -295,6 +364,7 @@ function onKeydown(e: KeyboardEvent) {
   }
   if (e.key === 'Escape') {
     if (userMenuOpen.value) closeUserMenu()
+    if (todoOpen.value) closeTodos()
     if (mobileOpen.value) closeNav(true)
   }
 }
@@ -302,6 +372,7 @@ function onKeydown(e: KeyboardEvent) {
 function onDocClick(e: MouseEvent) {
   const el = e.target as HTMLElement
   if (!el.closest('.user') && !el.closest('.user-menu')) closeUserMenu(false)
+  if (!el.closest('.todo-trigger') && !el.closest('.todo-menu')) closeTodos()
 }
 
 onMounted(async () => {
@@ -318,10 +389,15 @@ onMounted(async () => {
     void router.replace('/login')
   })
   await session.validate()
+  await refreshTodos()
+  todoTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshTodos()
+  }, 60_000)
 })
 
 onBeforeUnmount(() => {
   document.body.style.overflow = ''
+  window.clearInterval(todoTimer)
   offRemoteLogout?.()
   mq?.removeEventListener('change', onViewportChange)
   document.removeEventListener('click', onDocClick)
@@ -538,6 +614,87 @@ function onViewportChange(e: MediaQueryListEvent) {
   margin-left: auto;
   font-size: 11px;
   color: var(--faint);
+}
+
+.todo-badge {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--negative);
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-menu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+  z-index: var(--z-rail);
+}
+
+.todo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.todo-empty {
+  padding: 14px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.todo-item:hover {
+  background: var(--raised);
+  text-decoration: none;
+}
+
+.todo-count {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.todo-count.is-zero {
+  color: var(--faint);
+  font-weight: 400;
+}
+
+.todo-failed {
+  color: var(--negative);
+  font-size: 12px;
+}
+
+.todo-note {
+  padding: 8px 12px;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .user {

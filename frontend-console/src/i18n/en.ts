@@ -40,6 +40,17 @@ const messages: Record<MessageKey, string> = {
   'toast.region': 'Action feedback',
   'toast.close': 'Dismiss notification',
 
+  /* ---------- Global todo ---------- */
+  'todo.title': 'Todo',
+  'todo.loading': 'Refreshing…',
+  'todo.refresh': 'Refresh',
+  'todo.empty': 'No todo right now',
+  'todo.failed': 'Failed',
+  'todo.failedNote': 'Some counters failed to load and are shown as failed, not zero. Please refresh later.',
+  'todo.review': 'AI awaiting review',
+  'todo.consults': 'Consults awaiting my opinion',
+  'todo.rxRejected': 'Rejected prescriptions',
+
   /* ---------- Command palette ---------- */
   'palette.dialog': 'Command palette',
   'palette.search': 'Command search',

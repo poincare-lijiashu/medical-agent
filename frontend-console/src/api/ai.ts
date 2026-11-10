@@ -84,6 +84,36 @@ export function aiReviewPending(query: AiReviewQuery = {}): Promise<AiReviewPage
   return aiGet<AiReviewPage>('/medical/review/pending', { ...query })
 }
 
+/* ---- 全局待办角标（第 220 批）：全部走 summary/limit=0，只取计数 ---- */
+
+export interface AiConsultsInboxSummary {
+  total?: number
+  /** 本科室尚未填写意见的会诊数（服务端口径） */
+  pendingForMe?: number
+  dept?: string
+  me?: string
+}
+
+/** 会诊收件箱计数：silent=1 跳过读审计，limit=0 不搬正文。 */
+export function aiConsultsInboxSummary(): Promise<AiConsultsInboxSummary> {
+  return aiGet<AiConsultsInboxSummary>('/medical/consults/inbox', {
+    summary: 1,
+    limit: 0,
+    silent: 1,
+  })
+}
+
+export interface AiRxMineSummary {
+  total?: number
+  counts?: Record<string, number>
+  items?: unknown[]
+}
+
+/** 我的处方计数（按状态）；返回 counts.rejected = 被驳回待改写。 */
+export function aiRxMineSummary(): Promise<AiRxMineSummary> {
+  return aiGet<AiRxMineSummary>('/medical/prescriptions/mine', { summary: 1, limit: 0 })
+}
+
 export function aiReviewHistory(query: AiReviewQuery = {}): Promise<AiReviewPage> {
   return aiGet<AiReviewPage>('/medical/review/history', { ...query })
 }

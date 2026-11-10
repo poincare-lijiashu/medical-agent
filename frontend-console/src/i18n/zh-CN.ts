@@ -43,6 +43,17 @@ const messages = {
   'toast.region': '操作反馈',
   'toast.close': '关闭提示',
 
+  /* ---------- 全局待办 ---------- */
+  'todo.title': '待办',
+  'todo.loading': '刷新中…',
+  'todo.refresh': '刷新',
+  'todo.empty': '当前没有待办',
+  'todo.failed': '失败',
+  'todo.failedNote': '部分待办取数失败，显示“失败”而不是 0；请稍后刷新。',
+  'todo.review': 'AI 待核对',
+  'todo.consults': '会诊待我填',
+  'todo.rxRejected': '处方被驳回',
+
   /* ---------- 命令面板 ---------- */
   'palette.dialog': '命令面板',
   'palette.search': '命令搜索',
