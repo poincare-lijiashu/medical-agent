@@ -305,3 +305,125 @@ export function aiMarkDrugRules(
     decision,
   })
 }
+
+/* ------------------------------------------------------------------ *
+ * AI 数据面板 + 审计流（第 196 批，仅 admin）
+ *
+ * `GET /medical/admin/data` 是首屏聚合（复核统计 / 基础设施探针 / 运行时开关），
+ * 过滤与翻页只走轻端点 `GET /medical/admin/audit`，避免每敲一个字都拉全量面板。
+ * 导出行数与截断标记在响应头里，必须显式回显给用户（不静默丢行）。
+ * ------------------------------------------------------------------ */
+
+export interface AiAuditFilter {
+  actor?: string
+  event?: string
+  action?: string
+  from?: string
+  to?: string
+}
+
+export interface AiAuditRow {
+  ts?: string
+  event?: string
+  action?: string
+  actor?: string
+  payload?: Record<string, unknown>
+}
+
+export interface AiAuditPage {
+  items?: AiAuditRow[]
+  /** null = 服务端也算不出（前端回退"本页是否满页"判断下一页） */
+  total?: number | null
+  offset?: number
+  limit?: number
+  tz?: string
+}
+
+export interface AiAuditFacetItem {
+  v?: string
+  n?: number
+}
+
+export interface AiAuditFacets {
+  actors?: AiAuditFacetItem[]
+  events?: AiAuditFacetItem[]
+  actions?: AiAuditFacetItem[]
+  limit?: number
+  tz?: string
+}
+
+export interface AiInfraStatus {
+  milvus?: { connected?: boolean; uri?: string }
+  pg?: { ok?: boolean }
+  storage?: { mode?: string; circuitOpen?: boolean; staleDomains?: string[] }
+}
+
+export interface AiAdminData {
+  audit_recent?: AiAuditRow[]
+  audit_total?: number | null
+  review?: { pending?: number; approved?: number; rejected?: number }
+  pg_counts?: Record<string, number>
+  kb_docs?: number
+  events_total?: number
+  device?: string
+  uptime_s?: number
+  infra?: AiInfraStatus
+  flags?: { qc_auto_sign_full?: boolean }
+}
+
+/** 过滤条件 → 后端审计参数（空值不下发，保持旧 SQL 无 WHERE 的语义）。 */
+export function aiAuditQuery(filter: AiAuditFilter, offset = 0) {
+  return {
+    audit_offset: offset,
+    ...(filter.actor ? { audit_actor: filter.actor } : {}),
+    ...(filter.event ? { audit_event: filter.event } : {}),
+    ...(filter.action ? { audit_action: filter.action } : {}),
+    ...(filter.from ? { audit_from: filter.from } : {}),
+    ...(filter.to ? { audit_to: filter.to } : {}),
+  }
+}
+
+export function aiAdminData(filter: AiAuditFilter = {}, offset = 0): Promise<AiAdminData> {
+  return aiGet<AiAdminData>('/medical/admin/data', aiAuditQuery(filter, offset))
+}
+
+export function aiAuditPage(filter: AiAuditFilter = {}, offset = 0): Promise<AiAuditPage> {
+  return aiGet<AiAuditPage>('/medical/admin/audit', aiAuditQuery(filter, offset))
+}
+
+export function aiAuditFacets(): Promise<AiAuditFacets> {
+  return aiGet<AiAuditFacets>('/medical/admin/audit/facets')
+}
+
+export interface AiAuditVerify {
+  ok?: boolean
+  checked?: number
+  legacy?: number
+  firstBroken?: { reason?: string; file?: string; line?: number; seq?: number } | null
+}
+
+export function aiAuditVerify(): Promise<AiAuditVerify> {
+  return aiGet<AiAuditVerify>('/medical/admin/audit/verify')
+}
+
+/** 运行时开关（白名单键；返回切换后的真值）。 */
+export function aiToggleFlag(key: string, value?: boolean): Promise<{ ok?: boolean; key?: string; value?: boolean }> {
+  return aiPost<{ ok?: boolean; key?: string; value?: boolean }>('/medical/admin/config-toggle', {
+    key,
+    ...(value === undefined ? {} : { value }),
+  })
+}
+
+export interface AiAppLog {
+  file?: string
+  lines?: string[]
+  note?: string
+  path?: string
+  size_bytes?: number
+  exists?: boolean
+  total_lines?: number
+}
+
+export function aiAppLogs(lines = 200): Promise<AiAppLog> {
+  return aiGet<AiAppLog>('/medical/admin/logs', { lines })
+}

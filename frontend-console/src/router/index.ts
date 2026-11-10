@@ -40,6 +40,12 @@ const router = createRouter({
           component: () => import('@/views/AiReviewView.vue'),
         },
         {
+          // 第 196 批：AI 数据面板 + 审计流（仅管理员）
+          path: 'ai/data',
+          name: 'ai-data',
+          component: () => import('@/views/AiDataView.vue'),
+        },
+        {
           path: 'ops-insights',
           name: 'ops-insights',
           component: () => import('@/views/OpsInsightView.vue'),

@@ -387,3 +387,50 @@ export function aiGet<T>(path: string, query?: RequestOptions['query'], signal?:
 export function aiPost<T>(path: string, body?: unknown, signal?: AbortSignal) {
   return aiRequest<T>(path, { method: 'POST', body, signal })
 }
+
+export interface AiDownloadResult {
+  blob: Blob
+  /** 服务端回显的导出行数（缺失按 0） */
+  rows: number
+  /** 是否因上限被截断（必须显式告知用户，不能静默丢行） */
+  truncated: boolean
+}
+
+/**
+ * AI 中台文件下载（第 196 批：审计 CSV 全量导出）。
+ *
+ * 与 `aiGet` 共用同一枚 Bearer 与 401 刷新语义；区别是响应体是字节流，
+ * 且导出行数/截断标记在响应头（X-Export-Rows / X-Export-Truncated）。
+ */
+export async function aiDownload(
+  path: string,
+  query?: RequestOptions['query'],
+  retried = false,
+): Promise<AiDownloadResult> {
+  const headers: Record<string, string> = {}
+  if (tokens.accessToken) headers.Authorization = `Bearer ${tokens.accessToken}`
+
+  let res: Response
+  try {
+    res = await fetch(buildUrlWith(AI_BASE, path, query), { method: 'GET', headers })
+  } catch (e) {
+    const err = e as Error
+    if (err.name === 'AbortError') throw err
+    throw new AiRequestError('AI 服务不可达，请检查网关与 AI 中台是否在线', 0)
+  }
+
+  if (res.status === 401) {
+    if (!retried && (await doRefresh())) return aiDownload(path, query, true)
+    onSessionExpired?.()
+    throw new AiRequestError('登录状态已失效，请重新登录', 401)
+  }
+  if (!res.ok) {
+    const text = await res.text()
+    throw new AiRequestError(aiErrorMessage(text, res.status), res.status)
+  }
+  return {
+    blob: await res.blob(),
+    rows: Number(res.headers.get('X-Export-Rows') || 0),
+    truncated: res.headers.get('X-Export-Truncated') === '1',
+  }
+}

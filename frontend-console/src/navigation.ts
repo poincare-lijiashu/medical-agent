@@ -52,6 +52,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'DOCTOR', 'PHARMACIST', 'QC'],
   },
   {
+    // 第 196 批：数据面板 + 审计流（仅管理员；用户/角色管理保留在「系统管理」，不重复）
+    name: 'ai-data',
+    path: '/ai/data',
+    title: 'AI 数据面板',
+    hint: '运行概览 · 审计流检索与导出 · 审计链校验 · 留痕模式开关',
+    icon: 'database',
+    group: 'AI 智能',
+    roles: ['ADMIN'],
+  },
+  {
     name: 'ops-insights',
     path: '/ops-insights',
     title: '运营洞察',
