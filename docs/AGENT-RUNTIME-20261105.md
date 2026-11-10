@@ -8900,6 +8900,51 @@ argKeys）；入口（/ai/agent/lab + 系统管理 + ADMIN/QC）；体检只读�
 
 - 最后：单一登录收口与删除 `frontend-vue`。
 
+## 211. 2026-11-10 唯一前端收口：控制台迁到根路径（第 211 批）
+
+**范围**：`backend/main.py`、`frontend-console/vite.config.ts`、`AppShell`、宿主测试。
+按用户决策：控制台成为唯一前端并迁到 **根路径 `/`**；旧前端不再提供任何页面。
+
+**本批做了什么**
+
+1. **构建 base 改为 `/`**：`vite.config.ts` 固定 `base: '/'`（此前 build 为 `/console/`），
+   资源引用变为 `/assets/*`；router 继续使用 `import.meta.env.BASE_URL`，无需改路由。
+2. **后端根路径托管**：`APP_DIST_DIR` 指向 `frontend-console/dist`；`/` 与 `/index.html`
+   直出 index.html；SPA catch-all 对非 API/探针/文档路径回落 index.html；
+   静态文件按 `normpath + 前缀校验` 直出（防目录穿越）。
+3. **旧路径只做 307**：`/console`、`/console/**` → 根路径对应页面；`/app`、`/app/**`
+   → 根路径；历史书签不 404，但不再有第二套 UI。
+4. **排除清单收口**：`_SPA_FALLBACK_EXCLUDED` 去掉 `app`/`console`（已由显式 307 处理），
+   保留 `/api`、`/assets`、探针、文档、`/js`。
+5. **删除跨端交接**：用户菜单移除「AI 深度工作台」；删除无消费者的
+   `frontend-console/src/utils/sso.ts` 与 `shell.aiWorkbench` 文案。
+6. **Dockerfile**：只打包 `frontend-console/dist`，删除 `frontend-vue/dist` 的 COPY。
+7. 宿主回归锁重写：根路径直出、深链刷新、静态资源、API JSON 404、旧路径 307；
+   SSO 测试改为锁定「交接已删除、平台登录回调仍在」。
+
+**本批设计决策（可回退）**
+
+- **根路径而不是保留 `/console/`**：商业系统只应有一个入口；旧路径用 307 保留书签，
+  不保留第二套 UI。
+- **不做前端运行时重定向 `/console → /`**：重定向放在后端 307，避免 SPA 先加载再跳，
+  也保证深链（`/console/orders`）跳转到对应页面而不是首页。
+- **交接模块直接删掉**：AI 能力已内联 `/ai/*`，保留 `issueHandoff` 只会制造
+  「点了又回到同一系统」的假入口。
+
+**验证**
+
+```
+typecheck → 通过；build → 通过（dist 资源改为 /assets/*）
+定向：宿主 + SSO + 登出总线 → 13 passed
+全量：pytest --ignore=tests/e2e → 1876 passed / 1 skipped
+```
+
+**遗留**
+
+- `frontend-vue/` 目录仍在仓库中（已不被托管、不被打包、CI 不构建）；
+  下一批删除目录并清理仅剩的旧前端测试/脚本/文档引用（§212）。
+
+
 
 
 

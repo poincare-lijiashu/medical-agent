@@ -71,11 +71,7 @@
               <div class="user-menu-name">{{ session.user.value?.displayName }}</div>
               <div class="user-menu-sub">{{ session.roleLabel.value }} · {{ scopeLabel }}</div>
             </div>
-            <!-- 第 186 批：同域 SSO —— 写一次性交接票再新开页签（令牌不进 URL/历史记录） -->
-            <button class="user-menu-item" type="button" role="menuitem" @click="openAiWorkbench">
-              <AppIcon name="spark" :size="16" />
-              {{ t('shell.aiWorkbench') }}
-            </button>
+            <!-- 第 211 批：控制台是唯一前端，AI 能力已内联为 /ai/* 页面，不再跨端新开页签 -->
             <button class="user-menu-item" type="button" role="menuitem" @click="switchLocale">
               <AppIcon name="globe" :size="16" />
               {{ t('shell.language') }}
@@ -130,7 +126,6 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
 import { NAV_GROUPS, NAV_ITEMS, canSeeNav, findNav } from '@/navigation'
 import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
-import { issueHandoff } from '@/utils/sso'
 import { broadcastLogout, onRemoteLogout } from '@/utils/sessionBus'
 import { clearSession, session } from '@/stores/session'
 
@@ -177,16 +172,6 @@ function applyTheme() {
 function switchLocale() {
   userMenuOpen.value = false
   toggleLocale()
-}
-
-/**
- * 打开 AI 工作台（第 186 批）：先写一次性 SSO 票据再新开页签。
- * 票据写入失败（隐私模式/存储被禁）不阻断跳转——目标页会走自己的登录页。
- */
-function openAiWorkbench() {
-  userMenuOpen.value = false
-  issueHandoff(session.state.accessToken)
-  window.open('/', '_blank', 'noopener')
 }
 
 function toggleTheme() {

@@ -1,28 +1,21 @@
-"""同域 SSO 交接（第 186 批）：控制台 → AI 工作台，令牌不进 URL。
+"""跨端 SSO 交接已随旧前端下线（第 211 批）。
 
-为什么需要这一层：两套 UI 共用同一枚 Java 签发的 JWT（Python 侧 `deps` 已按 `roles`
-映射角色并做吊销校验），但控制台会话在 sessionStorage、AI 工作台在另一个标签页——
-不交接就会"跳到对面又要登录一次"，这是最像拼装系统的地方。
+背景：第 186 批曾用一次性票据把控制台登录态交给根路径的 AI 工作台。旧前端删除后，
+AI 能力已内联为控制台 `/ai/*` 页面，不再需要跨端交接——保留它会变成无消费者的死代码，
+且用户菜单里会出现"点了又回到同一系统"的假入口。
 
-设计约束（本文件锁死）：
-1. 交接走 localStorage 一次性票据，**不得**把令牌放 URL（历史/Referer/代理日志泄漏面）；
-2. 票据 60 秒过期、读即删除（先删再解析，坏票据也只能用一次）；
-3. AI 工作台必须在 **router 挂载前**采纳令牌，且仍由 `/auth/me` 服务端确认身份。
+本文件锁住收口后的契约：
+1. `utils/sso.ts` 不再存在，用户菜单不再有"AI 深度工作台"入口；
+2. 控制台内不得出现 `window.open('/')` 这类绕过路由的跨端跳转；
+3. 平台单点登录回调页仍在（这是登录入口，不是跨端交接）。
 """
 from __future__ import annotations
 
-import json
 import os
-import shutil
-import subprocess
-
-import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONSOLE_SSO = os.path.join(REPO, "frontend-console", "src", "utils", "sso.ts")
-CONSOLE_SHELL = os.path.join(REPO, "frontend-console", "src", "layouts", "AppShell.vue")
-VUE_SSO = os.path.join(REPO, "frontend-vue", "src", "utils", "sso.js")
-VUE_MAIN = os.path.join(REPO, "frontend-vue", "src", "main.js")
+SRC = os.path.join(REPO, "frontend-console", "src")
+SHELL = os.path.join(SRC, "layouts", "AppShell.vue")
 
 
 def _read(path: str) -> str:
@@ -30,58 +23,21 @@ def _read(path: str) -> str:
         return f.read()
 
 
-def test_console_issues_one_time_ticket():
-    src = _read(CONSOLE_SSO)
-    assert "medassist.sso.handoff.v1" in src
-    assert "60_000" in src, "票据必须有过期时间（60 秒）"
-    shell = _read(CONSOLE_SHELL)
-    assert "issueHandoff(session.state.accessToken)" in shell, "打开 AI 工作台前必须写票据"
-    assert "window.open('/', '_blank', 'noopener')" in shell
-    assert "token=" not in shell, "控制台不得把令牌拼进 URL"
+def test_legacy_handoff_module_removed():
+    assert not os.path.exists(os.path.join(SRC, "utils", "sso.ts")), \
+        "旧跨端交接模块必须删除，避免死代码与误用"
 
 
-def test_ai_workbench_consumes_ticket_before_router_mount():
-    main = _read(VUE_MAIN)
-    assert "takeHandoff()" in main
-    assert "adoptToken" in main, "票据令牌必须经 /auth/me 服务端确认"
-    assert main.index("takeHandoff()") < main.index("app.use(router)"), \
-        "必须先采纳令牌再挂载路由，否则守卫会把首屏踢回登录页"
+def test_shell_has_no_cross_entry_menu():
+    shell = _read(SHELL)
+    assert "openAiWorkbench" not in shell
+    assert "issueHandoff" not in shell
+    assert "window.open('/'" not in shell, "不得绕过路由新开旧工作台"
+    assert "shell.aiWorkbench" not in shell
 
 
-def test_take_handoff_ttl_and_single_use(tmp_path):
-    """用 node 直接跑 sso.js：验证一次性、过期、坏数据三条真实行为。"""
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("本机没有 node，跳过行为测试（CI 的 frontend job 会覆盖构建）")
-    harness = tmp_path / "harness.mjs"
-    harness.write_text(
-        """
-const store = new Map()
-globalThis.localStorage = {
-  getItem: (k) => (store.has(k) ? store.get(k) : null),
-  setItem: (k, v) => { store.set(k, String(v)) },
-  removeItem: (k) => { store.delete(k) },
-}
-const mod = await import(process.argv[2])
-const KEY = mod.HANDOFF_KEY
-const now = Date.now()
-localStorage.setItem(KEY, JSON.stringify({ token: 'tk-1', at: now }))
-const first = mod.takeHandoff(now + 1000)
-const second = mod.takeHandoff(now + 1000)
-localStorage.setItem(KEY, JSON.stringify({ token: 'tk-2', at: now - 120000 }))
-const expired = mod.takeHandoff(now)
-localStorage.setItem(KEY, '{bad json')
-const bad = mod.takeHandoff(now)
-const missing = mod.takeHandoff(now)
-console.log(JSON.stringify({ first, second, expired, bad, missing }))
-""",
-        encoding="utf-8",
-    )
-    out = subprocess.run([node, str(harness), "file:///" + VUE_SSO.replace("\\", "/")],
-                         capture_output=True, text=True, timeout=60)
-    assert out.returncode == 0, out.stderr
-    data = json.loads(out.stdout.strip().splitlines()[-1])
-    assert data["first"] == "tk-1"
-    assert data["second"] == "", "票据只能使用一次"
-    assert data["expired"] == "", "超过 60 秒必须失效"
-    assert data["bad"] == "" and data["missing"] == ""
+def test_platform_sso_callback_still_present():
+    view = os.path.join(SRC, "views", "SsoCallbackView.vue")
+    assert os.path.isfile(view), "平台单点登录回调页是登录入口，不能随旧前端一起删除"
+    router = _read(os.path.join(SRC, "router", "index.ts"))
+    assert "sso-callback" in router and "SsoCallbackView.vue" in router

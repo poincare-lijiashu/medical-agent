@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.config import settings
@@ -29,15 +29,13 @@ from backend.core import agent_flags
 
 logger = get_logger(__name__)
 
-# Vue3 前端构建产物目录（轮4 起唯一前端；legacy frontend/ 已删除，
-# git tag v-legacy-frontend 永久保存，回退步骤见 docs/plans/vue3_migration.md）。
-VUE_DIST_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-vue", "dist")
-# 临床控制台（第 183 批）：46 个视图的 HIS 侧控制台，对接 /api/v2（Java 网关）与 /api/v1。
-# 与 AI 工作台同镜像、同域，挂在 /console/ 子路径（vite base=/console/）；
-# dist 随轮入库（与 frontend-vue 同一策略：回退免 node 环境），Dockerfile 同步 COPY。
-CONSOLE_DIST_DIR = os.path.join(
+# 唯一前端（第 211 批）：临床控制台产物，**根路径**托管（/orders、/dashboard…）。
+# 旧 frontend-vue 已下线；历史迁移见 docs/plans/vue3_migration.md。
+# dist 随轮入库（回退免 node 环境），Dockerfile 同步 COPY。
+APP_DIST_DIR = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend-console", "dist")
+# 兼容既有测试/脚本命名；等价于 APP_DIST_DIR。
+CONSOLE_DIST_DIR = APP_DIST_DIR
 
 # /metrics 的短 TTL 缓存（评审 M-45）：抓取间隔远大于 5s，短缓存不会影响判读，
 # 但能把"一次抓取 11 次域加载"摊薄；进程重启自然失效。
@@ -450,38 +448,11 @@ async def health():
     return {"status": "ok", "service": "MedAssist", "version": settings.app_version}
 
 
-# ---- Vue3 前端（轮4 起唯一前端，手册 docs/plans/vue3_migration.md）----
-# / 与 /app 双入口均直出 dist/index.html（显式路由避免 StaticFiles 对无尾斜杠路径的
-# 307 跳转与目录列表）；/assets/* 等静态资源由文件末尾的 StaticFiles 托管（注册顺序
-# 必须最后，否则 Mount 前缀匹配会吞掉 /api/*、/healthz 等显式路由）。
-def _vue_index_response():
-    """直出 Vue3 构建产物入口；未构建时给出可操作的 503 提示（dist 随轮入库，正常部署恒 200）。"""
-    idx = os.path.join(VUE_DIST_DIR, "index.html")
-    if os.path.isfile(idx):
-        return FileResponse(idx, media_type="text/html")
-    return JSONResponse(
-        {"hint": "frontend-vue/dist 未构建；在 frontend-vue/ 下执行 npm ci && npm run build 后可用"},
-        status_code=503)
-
-
-@app.get("/app", include_in_schema=False)
-async def vue_app_index():
-    return _vue_index_response()
-
-
-@app.get("/", include_in_schema=False)
-@app.get("/index.html", include_in_schema=False)
-async def index():
-    return _vue_index_response()
-
-
-# ---- 临床控制台（第 183 批）：/console/** ----
-# 为什么要同镜像同域：控制台调 /api/v2（Java 网关）与 /api/v1（本服务），
-# 只有同源部署才能复用同一个登录态与 Cookie；子路径 /console 由 ingress 的 "/" 兜底
-# 路由自然落到本服务，网关无需新增规则。
-# 资源引用由 vite base=/console/ 生成（/console/assets/*），深链刷新由本路由回落 index.html。
-def _console_index_response():
-    idx = os.path.join(CONSOLE_DIST_DIR, "index.html")
+# ---- 唯一前端：临床控制台（根路径托管）----
+# / 与 /index.html 直出 dist/index.html；/console/** 与 /app/** 仅作历史书签的 307 重定向。
+def _app_index_response():
+    """直出控制台入口；未构建时给出可操作的 503 提示（dist 随轮入库，正常部署恒 200）。"""
+    idx = os.path.join(APP_DIST_DIR, "index.html")
     if os.path.isfile(idx):
         return FileResponse(idx, media_type="text/html")
     return JSONResponse(
@@ -490,49 +461,53 @@ def _console_index_response():
         status_code=503)
 
 
+@app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
+async def index():
+    return _app_index_response()
+
+
+def _legacy_redirect(full_path: str) -> RedirectResponse:
+    return RedirectResponse("/" + (full_path or ""), status_code=307)
+
+
+@app.get("/app", include_in_schema=False)
+@app.get("/app/{full_path:path}", include_in_schema=False)
+async def legacy_app(full_path: str = ""):
+    """旧 AI 工作台入口 → 根路径（历史书签兼容）。"""
+    return _legacy_redirect(full_path)
+
+
 @app.get("/console", include_in_schema=False)
 @app.get("/console/{full_path:path}", include_in_schema=False)
-async def console_spa(full_path: str = ""):
-    """静态资源直出 + SPA 深链回落（控制台全部路由的刷新/直链必须可用）。"""
-    candidate = (os.path.normpath(os.path.join(CONSOLE_DIST_DIR, full_path))
-                 if full_path else CONSOLE_DIST_DIR)
-    in_dist = candidate == CONSOLE_DIST_DIR or candidate.startswith(CONSOLE_DIST_DIR + os.sep)
-    if in_dist and os.path.isfile(candidate):
-        return FileResponse(candidate)
-    return _console_index_response()
+async def legacy_console(full_path: str = ""):
+    """旧控制台子路径 → 根路径（历史书签兼容）。"""
+    return _legacy_redirect(full_path)
 
 
-# ---- SPA fallback（F5）：vue-router createWebHistory 深链刷新 404 修复 ----
-# 现象：StaticFiles(html=True) 对 /review、/rx 等前端路由子路径查不到同名文件 → 404，
-# 刷新/直链全挂。修复：catch-all 路由回落 dist/index.html（前端路由接管）。
-# 排除清单（这些前缀不回退到 HTML 壳，保持原语义）：/api（API 未匹配路径仍 404 JSON）、
-# /assets（静态资源——本路由注册先于 StaticFiles mount，静态文件在此做存在性检查直出，
-# 行为与原 mount 等价）、/healthz /readyz /metrics、/docs /redoc /openapi.json、
-# /js（历史残留不存在）、/app（已有显式路由与 mount，深链 /app/xxx 非法路径 404 JSON）。
-# 注册顺序：具体路由（/api/...、/healthz、/、/app…）均已在此前注册，优先匹配不受影响。
+# ---- SPA fallback：vue-router createWebHistory 深链刷新 ----
+# /console 与 /app 已在上方注册显式 307，不进入本回落。
+# 排除清单：/api（未匹配仍 404 JSON）、/assets（真实文件优先直出）、探针与文档、/js（历史残留）。
 _SPA_FALLBACK_EXCLUDED = ("api", "assets", "healthz", "readyz", "metrics",
-                          "docs", "redoc", "openapi.json", "js", "app", "console")
+                          "docs", "redoc", "openapi.json", "js")
 
 
 @app.get("/{full_path:path}", include_in_schema=False)
 async def spa_fallback(full_path: str):
     first_seg = full_path.split("/", 1)[0].lower()
-    candidate = os.path.normpath(os.path.join(VUE_DIST_DIR, full_path))
-    in_dist = candidate == VUE_DIST_DIR or candidate.startswith(VUE_DIST_DIR + os.sep)
+    candidate = os.path.normpath(os.path.join(APP_DIST_DIR, full_path))
+    in_dist = candidate == APP_DIST_DIR or candidate.startswith(APP_DIST_DIR + os.sep)
     # dist 内真实静态文件优先（/assets/*.js、favicon 等；normpath+前缀校验防目录穿越）
     if in_dist and os.path.isfile(candidate):
         return FileResponse(candidate)
     if first_seg in _SPA_FALLBACK_EXCLUDED:
         raise HTTPException(status_code=404, detail="Not Found")
-    return _vue_index_response()
+    return _app_index_response()
 
 
-if os.path.isdir(VUE_DIST_DIR):
-    # /app：轮1-3 的旧入口（保留兼容历史书签/文档引用）；/：轮4 起默认入口。
-    # vite base=/ 与二者资源引用（/assets/*）一致；/app 下无独立资源（深链由
-    # vue-router catch-all 回落 /overview）。
-    app.mount("/app", StaticFiles(directory=VUE_DIST_DIR, html=True), name="frontend_vue")
-    app.mount("/", StaticFiles(directory=VUE_DIST_DIR, html=True), name="frontend_vue_root")
+if os.path.isdir(APP_DIST_DIR):
+    # 根路径兜底：显式路由优先（/api、探针、文档、SPA catch-all 均在此前注册）。
+    app.mount("/", StaticFiles(directory=APP_DIST_DIR, html=True), name="app_root")
 
 
 if __name__ == "__main__":
