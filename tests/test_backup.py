@@ -30,6 +30,9 @@ def iso(monkeypatch, tmp_path):
     monkeypatch.setattr(backup, "DATA_DIR", data)
     monkeypatch.setattr(backup, "BACKUP_DIR", data / "backups")
     monkeypatch.setattr(backup, "DUMP_FILE", data / "pg_dump.sql")
+    # 加密相关环境变量不继承宿主（否则本机配了密钥会让"明文"用例行为漂移）
+    monkeypatch.delenv("BACKUP_ENCRYPTION_KEY", raising=False)
+    monkeypatch.delenv("BACKUP_REQUIRE_ENCRYPTION", raising=False)
     from backend.config import settings as _settings
     monkeypatch.setattr(_settings, "pg_user", "medagent")
     monkeypatch.setattr(_settings, "pg_database", "medagent")
@@ -164,3 +167,59 @@ def test_rotate_backups_fewer_than_keep(iso):
     bdir.mkdir(parents=True)
     (bdir / "backup_20260901_000001.tar.gz").write_bytes(b"x")
     assert backup.rotate_backups(7) == []
+
+
+# ---------- 第 177 批（评测 04 P1-5）：备份归档静态加密 ----------
+
+def _key_b64() -> str:
+    import base64
+    return base64.b64encode(b"k" * 32).decode()
+
+
+def test_main_encrypts_archive_when_key_configured(iso, monkeypatch):
+    """配置密钥 → 产物为 .enc、明文 tar 删除、校验和覆盖密文、可解密回原 tar。"""
+    import tarfile
+
+    from backend.core import backup_crypto
+    monkeypatch.setenv("BACKUP_ENCRYPTION_KEY", _key_b64())
+    monkeypatch.setattr(backup.subprocess, "run", _FakeRun(0))
+
+    assert backup.main([]) == 0
+    bdir = iso / "backups"
+    encs = list(bdir.glob("backup_*.tar.gz.enc"))
+    assert len(encs) == 1
+    assert not list(bdir.glob("backup_*.tar.gz")), "明文 tar 加密后必须立即删除"
+
+    checksum = encs[0].with_name(encs[0].name + ".sha256")
+    assert checksum.exists()
+    assert checksum.read_text(encoding="utf-8").split()[1] == encs[0].name, "校验和必须覆盖密文产物"
+
+    out = iso / "dec.tar.gz"
+    backup_crypto.decrypt_file(encs[0], out, backup_crypto.load_key(_key_b64()))
+    with tarfile.open(out, "r:gz") as tar:
+        assert "data/drug_dict.json" in tar.getnames()
+
+
+def test_main_require_encryption_without_key_fails_before_dump(iso, monkeypatch):
+    """BACKUP_REQUIRE_ENCRYPTION=true 且缺密钥 → 退出码 2，且不得先跑 pg_dump。"""
+    fake = _FakeRun(0)
+    monkeypatch.setenv("BACKUP_REQUIRE_ENCRYPTION", "true")
+    monkeypatch.setattr(backup.subprocess, "run", fake)
+
+    assert backup.main([]) == 2
+    assert fake.calls == []
+    assert not list((iso / "backups").glob("backup_*"))
+
+
+def test_rotate_backups_mixes_plain_and_encrypted(iso):
+    """轮转必须同时统计明文与加密产物（迁移期两种后缀共存）。"""
+    bdir = iso / "backups"
+    bdir.mkdir(parents=True)
+    names = ["backup_20260901_000001.tar.gz",
+             "backup_20260902_000002.tar.gz.enc",
+             "backup_20260903_000003.tar.gz"]
+    for n in names:
+        (bdir / n).write_bytes(b"x")
+
+    assert backup.rotate_backups(2) == [names[0]]
+    assert sorted(p.name for p in bdir.iterdir()) == sorted(names[1:])

@@ -19,6 +19,9 @@ external:
     port: 5432
     database: medagent
     existingSecret: medassist-postgres
+    # 评测 04 P1-5：生产强制 TLS（库间抓包不可读 audit_log/review_queue）。
+    # 需在 PG 侧启用 TLS 并让 CA 可被容器信任；先用 prefer 验证连通再切 verify-full。
+    sslmode: verify-full
   nacos:
     enabled: true
     serverAddr: nacos-prod.medassist-infra.svc.cluster.local:8848

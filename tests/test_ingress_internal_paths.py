@@ -127,3 +127,18 @@ def test_gateway_denies_api_docs():
     deny = _load(GATEWAY_YML)["medassist"]["gateway"]["auth"]["deny-paths"]
     for p in ("/docs/**", "/redoc/**", "/openapi.json"):
         assert p in deny, f"网关 denylist 缺少 {p}"
+
+
+# ---------- 第 177 批（评测 04 P1-5）：PG 连接 TLS 配置交付 ----------
+
+def test_postgres_tls_mode_wired():
+    """预发布/生产必须 verify-full（库间抓包不可读 PHI）；本地 dev 用 prefer 不阻断联调。"""
+    prod = _load(os.path.join(CHART, "values-prod.yaml"))
+    staging = _load(os.path.join(CHART, "values-staging.yaml"))
+    dev = _load(os.path.join(CHART, "values-dev.yaml"))
+    assert prod["external"]["postgres"]["sslmode"] == "verify-full"
+    assert staging["external"]["postgres"]["sslmode"] == "verify-full"
+    assert dev["external"]["postgres"]["sslmode"] == "prefer"
+
+    cfg = _read(os.path.join(CHART, "templates", "configmap-ai-core.yaml"))
+    assert "PG_SSLMODE" in cfg, "AI 中台必须收到 PG_SSLMODE，否则配置了也不生效"

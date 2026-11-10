@@ -7339,3 +7339,50 @@ Java：GatewayRouteConfigTest → 14 passed
 - Grafana 面板未展示新 HTTP 指标（可加"AI 中台 5xx 比例 / P99"两个图，属展示层）；
 - 新告警沿用现有交付方式（无 runbook 链接）；告警 runbook 索引属评测 06 P3 项；
 - 下一步：评测 04 P1-5（静态加密方案）、03 前端 i18n 与长列表虚拟滚动。
+
+## 180. 2026-11-10 评测 04 P1-5：静态加密（备份归档 AES-GCM + PG TLS）（第 177 批）
+
+**问题**
+
+- `scripts/backup.py` 直接 `tarfile.open(..., "w:gz")`：备份文件被拷到共享盘/对象存储后
+  解开即得全部病历、处方、审计（含用户口令哈希）；产物权限也未收敛；
+- PG 连接 DSN 无 TLS 参数：库间抓包可读 `audit_log` / `review_queue` 明文。
+
+**已做**
+
+1. **`backend/core/backup_crypto.py`（AES-256-GCM 流式加解密）**：格式
+   `MAGIC(8) | nonce(12) | ciphertext | tag(16)`；1 MiB 分块（GB 级备份不进内存）；
+   认证加密——密钥错误/篡改在恢复时明确失败并删除半成品；密钥 base64 32 字节
+   fail-closed；`restrict_permissions` 尽量 0600。`requirements.txt` 固化
+   `cryptography==50.0.1`（此前仅传递依赖）。
+2. **备份脚本**：配置 `BACKUP_ENCRYPTION_KEY` 即加密（产物 `backup_*.tar.gz.enc`，
+   明文 tar 加密后立即删除，`.sha256` 覆盖密文）；`BACKUP_REQUIRE_ENCRYPTION=true`
+   缺密钥直接退出 2（**不跑 pg_dump**，不允许悄悄产明文备份）；轮转同时统计
+   明文/加密两种后缀；dry-run 打印加密状态。
+3. **恢复脚本**：`find_latest_backup` 纳入 `.enc`；`read_backup` 透明解密
+   （临时明文读完即删）；`pre_restore_*` safety tar 同样加密；密钥错误返回 2。
+4. **PG 连接 TLS**：`settings.pg_sslmode / pg_sslrootcert` → `async_database_url`
+   追加 `sslmode`/`sslrootcert`（未配置时 URL 不变，本地无 TLS 的 PG 不受影响）；
+   Helm `external.postgres.sslmode`（prod/staging `verify-full`，dev `prefer`）经
+   ai-core ConfigMap 注入 `PG_SSLMODE`。
+5. **回归锁**：`test_backup_crypto` 5 条（往返/错密钥/篡改/非法密钥/restore 透明解密）；
+   `test_backup` +3（加密主流程、强制加密缺密钥先失败、轮转混合后缀）；
+   `test_config_pg_tls` 3 条；部署接线断言 +1（三环境 sslmode + ConfigMap 注入）。
+6. **文档**：`docs/OPERATIONS.md` 新增「静态加密」章节（密钥生成、恢复、轮换、
+   未覆盖项）。
+
+**验证**
+
+```
+定向：test_backup_crypto + test_backup + test_restore + test_config_pg_tls
+      + test_ingress_internal_paths → 36 passed
+全量（不含 e2e）→ 1713 passed / 1 skipped
+```
+
+**遗留**
+
+- K8s 卷加密（StorageClass + KMS）属基础设施交付，不在应用代码内；
+- `llm_providers` 中 `api_key` 仍是明文 jsonb，字段级/信封加密未做（需密钥管理与迁移）；
+- Java 服务 JDBC 连接未加 `sslmode`（本批只覆盖 AI 中台 Python 侧）；
+- `deploy/backup/pg-backup-cronjob.yaml`（`pg_dump -Fc`）未加密，建议接 age 或密钥信封；
+- 下一步：03 前端 i18n 与长列表虚拟滚动。

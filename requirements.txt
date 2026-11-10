@@ -4,6 +4,8 @@ uvicorn[standard]==0.32.1
 python-multipart==0.0.20
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
+# 评测 04 P1-5：备份归档 AES-256-GCM 加解密（backend/core/backup_crypto.py）
+cryptography==50.0.1
 pymilvus==2.4.9
 httpx==0.28.1
 python-dotenv==1.0.1

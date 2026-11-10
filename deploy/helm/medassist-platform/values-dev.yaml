@@ -51,6 +51,8 @@ external:
     host: postgres.medassist-infra.svc.cluster.local
     port: 5432
     database: medagent
+    # 本地 PG 通常未开 TLS：prefer 有 TLS 就走、没有回落明文（不阻断本地联调）
+    sslmode: prefer
   nacos:
     enabled: false
   skywalking:

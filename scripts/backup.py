@@ -16,11 +16,14 @@
    - 校验失败：不打包、不轮转、退出码 2，上一份完整备份原样保留。
 2) tar 打包 data/ → data/backups/backup_YYYYmmdd_HHMMSS.tar.gz，并写同名 `.sha256`
    （恢复演练按此校验产物完整性）。
+   **评测 04 P1-5：配置了 `BACKUP_ENCRYPTION_KEY` 时归档以 AES-256-GCM 加密**
+   （产物 `backup_*.tar.gz.enc`，明文 tar 加密后立即删除；密钥走 Secret 注入）。
+   `BACKUP_REQUIRE_ENCRYPTION=true` 时缺密钥即失败（退出码 2），不允许"悄悄产生明文备份"。
    排除清单（**可重建缓存不入包**，新增可重建缓存在此登记）：
    - data/backups/                —— 备份目录自身（防递归膨胀）
    - data/kb/pubmed_v2_cache.json —— PubMed 拉取缓存，重跑 seed_kb_pubmed_v2 可重建
 3) 轮转：按文件名（backup_YYYYmmdd_HHMMSS 时间戳即字典序）排序，仅保留最近 --keep 份，
-   其余删除（连带删除 `.sha256`）。
+   其余删除（连带删除 `.sha256`；明文与加密两种后缀都参与轮转）。
 
 恢复：解包 tar.gz 覆盖 data/（PG 数据用解包出的 data/pg_dump.sql 导回：
 `docker exec -i <容器> psql -U <用户> <库> < data/pg_dump.sql`）。
@@ -39,6 +42,8 @@ from pathlib import Path
 # 直跑兜底（与 loadtest.py 同模式）：python scripts/backup.py 直接运行时把项目根
 # 加入 sys.path，保证 `from backend.config import settings` 可导入（否则只能 -m 方式跑）。
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from backend.core import backup_crypto  # noqa: E402 —— 备份归档加解密（评测 04 P1-5）
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -142,16 +147,51 @@ def write_checksum(archive: Path) -> Path:
 
 
 def rotate_backups(keep: int) -> list[str]:
-    """轮转：按文件名倒序保留最近 keep 份 backup_*.tar.gz，删除其余（连带校验文件）。"""
+    """轮转：按文件名倒序保留最近 keep 份 backup_*（明文/加密两种后缀），删除其余。"""
     if not BACKUP_DIR.is_dir():
         return []
-    backups = sorted(BACKUP_DIR.glob("backup_*.tar.gz"), reverse=True)  # 时间戳文件名=字典序
+    backups = sorted(
+        (p for p in BACKUP_DIR.iterdir()
+         if p.name.startswith("backup_") and (p.name.endswith(".tar.gz") or p.name.endswith(".tar.gz.enc"))),
+        reverse=True,  # 时间戳文件名=字典序（.enc 与明文同前缀，不会重复计数）
+    )
     removed: list[str] = []
     for old in backups[max(0, keep):]:
         old.unlink()
         old.with_name(old.name + ".sha256").unlink(missing_ok=True)
         removed.append(old.name)
     return removed
+
+
+def encryption_key(required_env: str = "BACKUP_REQUIRE_ENCRYPTION") -> bytes | None:
+    """读取备份加密密钥（评测 04 P1-5）。
+
+    - 配了 `BACKUP_ENCRYPTION_KEY` → 返回密钥（非法 base64/长度错误 → BackupError）；
+    - 没配且 `BACKUP_REQUIRE_ENCRYPTION` 为真 → 抛 BackupError（不允许悄悄产明文备份）；
+    - 没配且未强制 → 返回 None（本地开发兼容，保持旧行为）。
+    """
+    raw = (os.environ.get("BACKUP_ENCRYPTION_KEY") or "").strip()
+    required = (os.environ.get(required_env) or "").strip().lower() in ("1", "true", "yes", "on")
+    if raw:
+        try:
+            return backup_crypto.load_key(raw)
+        except backup_crypto.BackupCryptoError as exc:
+            raise BackupError(str(exc)) from exc
+    if required:
+        raise BackupError("BACKUP_REQUIRE_ENCRYPTION=true 但未配置 BACKUP_ENCRYPTION_KEY")
+    return None
+
+
+def finalize_archive(archive: Path, key: bytes | None) -> Path:
+    """按需加密归档并收敛文件权限；返回实际产物路径（加密后明文 tar 立即删除）。"""
+    if key is not None:
+        encrypted = archive.with_name(archive.name + ".enc")
+        backup_crypto.encrypt_file(archive, encrypted, key)
+        archive.unlink(missing_ok=True)
+        backup_crypto.restrict_permissions(encrypted)
+        return encrypted
+    backup_crypto.restrict_permissions(archive)
+    return archive
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -166,13 +206,26 @@ def main(argv: list[str] | None = None) -> int:
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_path = BACKUP_DIR / f"backup_{stamp}.tar.gz"
-    print(f"[backup] 目标：{out_path}（保留最近 {args.keep} 份）")
+
+    # 评测 04 P1-5：加密配置先解析（含"强制加密但缺密钥"的响亮失败），再动手备份
+    try:
+        key = encryption_key()
+    except BackupError as exc:
+        print(f"[backup] 失败：{exc}")
+        print("[backup] 未生成新备份、未轮转；请配置 BACKUP_ENCRYPTION_KEY 后重跑。")
+        return 2
+    encrypted = key is not None
+    print(f"[backup] 目标：{out_path.name}{'.enc' if encrypted else ''}（保留最近 {args.keep} 份）")
+
     if args.dry_run:
         print("[dry-run] 1) " + " ".join(pg_dump_cmd(container, user, db))
               + " → data/pg_dump.sql")
         print("[dry-run] 2) tar data/ → " + out_path.name
               + f"（排除 backups/ 自身与可重建缓存：{', '.join(EXCLUDE_REL)}）")
-        print(f"[dry-run] 3) 轮转保留最近 {args.keep} 份")
+        print("[dry-run] 3) "
+              + ("AES-256-GCM 加密归档（明文 tar 加密后删除）" if encrypted
+                 else "未配置 BACKUP_ENCRYPTION_KEY：归档为明文（生产请强制加密）"))
+        print(f"[dry-run] 4) 轮转保留最近 {args.keep} 份")
         return 0
 
     try:
@@ -184,8 +237,15 @@ def main(argv: list[str] | None = None) -> int:
 
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     included = create_archive(out_path)
-    checksum = write_checksum(out_path)
-    print(f"[backup] 已打包 {len(included)} 个文件 → {out_path}")
+    try:
+        final_path = finalize_archive(out_path, key)
+    except backup_crypto.BackupCryptoError as exc:
+        out_path.unlink(missing_ok=True)
+        print(f"[backup] 加密失败：{exc}；已删除明文归档，未轮转。")
+        return 2
+    checksum = write_checksum(final_path)
+    print(f"[backup] 已打包 {len(included)} 个文件 → {final_path}"
+          + ("（已加密）" if encrypted else "（明文，建议配置加密）"))
     print(f"[backup] 校验文件 → {checksum.name}")
     DUMP_FILE.unlink(missing_ok=True)  # dump 已随包归档，落盘副本清掉（下次重新生成）
     removed = rotate_backups(args.keep)

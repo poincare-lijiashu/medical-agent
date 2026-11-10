@@ -48,6 +48,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   "返回"不还原上一位患者数据）；**豁免** `/medical/drug/dict`（保留 ETag/304 省 116KB）
   与 `/medical/config`（非 PHI 高频配置）。`/healthz`、静态资源不强制。
 
+## 静态加密（评测 04 P1-5）
+
+- **备份归档加密（第 177 批，已实现）**：`scripts/backup.py` 在配置
+  `BACKUP_ENCRYPTION_KEY`（base64 32 字节，Secret 注入）时用 **AES-256-GCM** 加密归档，
+  产物 `backup_*.tar.gz.enc`，明文 tar 加密后立即删除；`.sha256` 覆盖密文。
+  `BACKUP_REQUIRE_ENCRYPTION=true` 时缺密钥直接失败（退出码 2），不允许"悄悄产生明文备份"。
+  - 生成：`openssl rand -base64 32`（写入 Secret，禁止进 Git）；
+  - 恢复：`scripts/restore.py` 用同一密钥透明解密（临时明文读完即删）；
+  - 轮换：新备份用新密钥，旧备份保留旧密钥（Secret 版本）即可恢复；
+  - 本地开发可不配（保持旧行为），生产必须配并开 `BACKUP_REQUIRE_ENCRYPTION=true`。
+- **PG 连接 TLS（第 177 批，已实现）**：`PG_SSLMODE`（空 = 不追加，保持旧行为；
+  staging/prod 默认 `verify-full`，dev 用 `prefer`）+ 可选 `PG_SSLROOTCERT`。
+  开启 `verify-full` 前需在 PG 侧启用 TLS、把 CA 挂进容器；建议先用 `prefer` 验证连通再切。
+- **尚未覆盖**（基础设施/后续批次）：K8s 卷加密（StorageClass + KMS）、
+  `llm_providers` 中 `api_key` 的字段级加密、Java 服务 JDBC 连接的 sslmode。
+
 ## 模型与供应商
 - 全局 chat/vision 模型由管理端「LLM 供应商」激活的 provider 决定（PG `llm_providers`）；
   未激活时回落 `.env` 的 `QWEN_*`。**给某类业务换模型不要改代码**：原

@@ -25,6 +25,8 @@ data:
   EMPI_TIMEOUT_S: {{ .Values.aiCore.empi.timeoutS | default 5 | quote }}
   EMPI_VERIFY_TLS: {{ .Values.aiCore.empi.verifyTls | default true | quote }}
   {{- end }}
+  # 评测 04 P1-5：PG 连接 TLS 模式（空 = 不追加，保持本地无 TLS 的行为）
+  PG_SSLMODE: {{ .Values.external.postgres.sslmode | default "" | quote }}
   {{- if .Values.external.nacos.enabled }}
   NACOS_ENABLED: "true"
   NACOS_SERVER_ADDRESSES: {{ .Values.external.nacos.serverAddr | quote }}

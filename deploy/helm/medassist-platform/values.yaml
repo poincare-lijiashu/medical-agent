@@ -41,6 +41,11 @@ external:
     secretKeys:
       username: username
       password: password
+    # 评测 04 P1-5：AI 中台（Python）连接 PG 的 TLS 模式（asyncpg 的 sslmode）。
+    # 空 = 不追加参数（本地无 TLS 的 PG）；生产/预发布建议 "verify-full"，
+    # 过渡期可用 "prefer"（有 TLS 就走、没有回落明文）。
+    # 用 verify-full 时需把 CA 挂进容器并设 PG_SSLROOTCERT（见 docs/OPERATIONS.md「静态加密」）。
+    sslmode: ""
 
   nacos:
     enabled: true

@@ -16,6 +16,8 @@ external:
     host: pg-staging.medassist-infra.svc.cluster.local
     port: 5432
     database: medagent
+    # 评测 04 P1-5：预发布同样强制 TLS（与生产同口径，提前暴露证书问题）
+    sslmode: verify-full
     existingSecret: medassist-postgres
   nacos:
     enabled: true

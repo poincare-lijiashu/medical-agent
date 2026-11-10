@@ -50,13 +50,25 @@ KEY_TABLES = ("users", "review_queue", "consults", "prescriptions", "case_archiv
 
 # 可重建缓存不入包/不入 safety tar（与 backup.py EXCLUDE_REL 同源）
 from scripts.backup import EXCLUDE_REL  # noqa: E402
+from backend.core import backup_crypto  # noqa: E402 —— 加密备份解密（评测 04 P1-5）
+
+
+def _optional_key() -> bytes | None:
+    """备份加密密钥：未配置返回 None；配置了但非法则抛 BackupCryptoError（响亮失败）。"""
+    if not (os.environ.get("BACKUP_ENCRYPTION_KEY") or "").strip():
+        return None
+    return backup_crypto.load_key()
 
 
 def find_latest_backup(backup_dir: Path = BACKUP_DIR) -> Path | None:
-    """取 data/backups 下最新一份 backup_*.tar.gz（时间戳文件名=字典序），无则 None。"""
+    """取 data/backups 下最新一份 backup_*（明文或 `.enc` 加密，时间戳字典序）。"""
     if not backup_dir.is_dir():
         return None
-    backups = sorted(backup_dir.glob("backup_*.tar.gz"), reverse=True)
+    backups = sorted(
+        (p for p in backup_dir.iterdir()
+         if p.name.startswith("backup_") and (p.name.endswith(".tar.gz") or p.name.endswith(".tar.gz.enc"))),
+        reverse=True,
+    )
     return backups[0] if backups else None
 
 
@@ -128,21 +140,34 @@ def read_backup(tar_path: Path) -> tuple[dict[str, bytes], bytes]:
     """读取备份：返回 (data/ 树内文件名→内容 映射, pg_dump.sql 字节)。
 
     data/pg_dump.sql 只入内存（喂 psql 用），调用方不得落盘。
+    第 177 批：`backup_*.tar.gz.enc` 先用 BACKUP_ENCRYPTION_KEY 解密到临时文件，
+    读取后立即删除临时明文（不把解密后的备份留在磁盘上）。
     """
     files: dict[str, bytes] = {}
     dump = b""
-    with tarfile.open(tar_path, "r:gz") as tar:
-        for m in tar.getmembers():
-            if not m.isfile():
-                continue
-            rel = _rel_of(m.name)
-            if rel is None:
-                continue
-            content = tar.extractfile(m).read()  # type: ignore[union-attr]
-            if rel == "pg_dump.sql":
-                dump = content
-            else:
-                files[rel] = content
+    src = tar_path
+    decrypted: Path | None = None
+    if backup_crypto.is_encrypted(tar_path):
+        key = backup_crypto.load_key()
+        decrypted = tar_path.with_name(tar_path.name + ".dec.tmp")
+        backup_crypto.decrypt_file(tar_path, decrypted, key)
+        src = decrypted
+    try:
+        with tarfile.open(src, "r:gz") as tar:
+            for m in tar.getmembers():
+                if not m.isfile():
+                    continue
+                rel = _rel_of(m.name)
+                if rel is None:
+                    continue
+                content = tar.extractfile(m).read()  # type: ignore[union-attr]
+                if rel == "pg_dump.sql":
+                    dump = content
+                else:
+                    files[rel] = content
+    finally:
+        if decrypted is not None:
+            decrypted.unlink(missing_ok=True)
     return files, dump
 
 
@@ -271,7 +296,11 @@ def main(argv: list[str] | None = None) -> int:
     if not tar_path or not tar_path.is_file():
         print(f"[restore] 未找到备份：{args.backup or BACKUP_DIR}（--backup 指定或先跑 scripts/backup.py）")
         return 1
-    files, dump = read_backup(tar_path)
+    try:
+        files, dump = read_backup(tar_path)
+    except backup_crypto.BackupCryptoError as exc:
+        print(f"[restore] 备份读取失败：{exc}")
+        return 2
 
     # 镜像删除预演：当前 data/（除 backups/ 与可重建缓存）内不在备份内的文件
     keep = set(files) | {"pg_dump.sql"}
@@ -305,10 +334,20 @@ def main(argv: list[str] | None = None) -> int:
 
     print("[警告] --yes：即将覆盖 data/ 并恢复 PG（先 DROP dump 内表）。"
           "请确认后端服务已停止、无写入进程后再继续。")
-    # 1) safety tar 先行：恢复前状态可回退
+    # 1) safety tar 先行：恢复前状态可回退（配置了加密密钥时同样加密，避免留下明文副本）
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safety_path = BACKUP_DIR / f"pre_restore_{stamp}.tar.gz"
     included = safety_archive(safety_path)
+    try:
+        key = _optional_key()
+        if key is not None:
+            encrypted_safety = safety_path.with_name(safety_path.name + ".enc")
+            backup_crypto.encrypt_file(safety_path, encrypted_safety, key)
+            safety_path.unlink(missing_ok=True)
+            safety_path = encrypted_safety
+    except backup_crypto.BackupCryptoError as exc:
+        print(f"[restore] safety tar 加密失败：{exc}")
+        return 2
     print(f"[restore] 1) safety tar：{safety_path}（{len(included)} 个文件）")
     # 2) 解包覆盖 + 镜像删除
     removed = extract_and_mirror(files)

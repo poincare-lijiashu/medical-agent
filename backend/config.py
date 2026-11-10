@@ -104,6 +104,11 @@ class Settings(BaseSettings):
     pg_password: str = ""
     pg_database: str = "eduagent_medical"
     pg_async_dsn: str = ""
+    # 评测 04 P1-5：PG 连接 TLS。空 = 不追加 sslmode（保留旧行为/本地无 TLS 的 PG）；
+    # 生产/预发布在 Helm 设 PG_SSLMODE=verify-full（配合 PG_SSLROOTCERT 指向挂载的 CA），
+    # "prefer" 表示有 TLS 就走、没有回落明文（适合过渡期）。
+    pg_sslmode: str = ""
+    pg_sslrootcert: str = ""
 
     # 轮 B2 可选双后端：REDIS_URL 非空时限流/会话记忆/令牌撤销走 Redis（多实例共享）；
     # 空（默认）= 单机内存后端，零配置零外部依赖。Redis 不可用自动回落内存镜像，
@@ -309,8 +314,16 @@ class Settings(BaseSettings):
             return self.pg_async_dsn
         from urllib.parse import quote_plus
         pwd = quote_plus(self.pg_password or "")  # 密码含 @:/# 等特殊字符时仍可解析
-        return (f"postgresql+asyncpg://{self.pg_user}:{pwd}"
-                f"@{self.pg_host}:{self.pg_port}/{self.pg_database}")
+        url = (f"postgresql+asyncpg://{self.pg_user}:{pwd}"
+               f"@{self.pg_host}:{self.pg_port}/{self.pg_database}")
+        # 评测 04 P1-5：TLS 参数（asyncpg 按 libpq 风格识别 sslmode / sslrootcert）
+        from urllib.parse import urlencode
+        params = {}
+        if (self.pg_sslmode or "").strip():
+            params["sslmode"] = self.pg_sslmode.strip()
+        if (self.pg_sslrootcert or "").strip():
+            params["sslrootcert"] = self.pg_sslrootcert.strip()
+        return url + ("?" + urlencode(params) if params else "")
 
     class Config:
         env_file = _env_local
