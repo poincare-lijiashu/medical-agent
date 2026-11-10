@@ -1,8 +1,9 @@
 """admin 审计流端点（第 109 批从 admin.py 拆出，保持单文件 <600 行护栏）。
 
-只读两端点：
+只读三端点：
 - ``GET /admin/audit``：按 actor / event_type / payload.action / 日期区间过滤后分页，
   返回一页 + **过滤后**总数（前端"共 N 条"与下一页禁用都以此为准）；
+- ``GET /admin/audit/verify``（第 184 批）：顺序重算审计哈希链，定位第一条被篡改/删除的记录；
 - ``GET /admin/audit/export``：同一套过滤条件的全量 CSV（≤10,000 行，超限显式告知），
   导出本身是合规敏感操作 → 服务端留痕。
 
@@ -263,6 +264,26 @@ async def admin_audit(user: dict = Depends(require_role("admin")), audit_offset:
             "tz": _audit_tz()[1],
             "filters": {"actor": actor_f, "event": event_f, "action": action_f,
                         "from": (audit_from or "").strip(), "to": (audit_to or "").strip()}}
+
+
+@router.get("/admin/audit/verify")
+async def admin_audit_verify(user: dict = Depends(require_role("admin")), max_records: int = 0):
+    """第 184 批：审计哈希链校验（只读）。
+
+    逐文件顺序重算 sha256 链（`prev` 首尾相接，轮转跨文件同样校验），返回第一条
+    被篡改/删除记录的位置；`max_records>0` 时只校验前 N 条（大库巡检可分页）。
+    校验本身属合规敏感操作 → 服务端留痕（event=admin, action=audit_verify）。
+    留痕写在读取之后，因此本次巡检事件不会影响本次结果。
+    """
+    log = _shared.get_audit_logger()
+    limit = max_records if max_records and max_records > 0 else None
+    result = await asyncio.to_thread(log.verify_chain, limit)
+    await asyncio.to_thread(
+        log.write, event_type="admin", action="audit_verify",
+        actor=user.get("username", "admin"),
+        payload={"ok": result["ok"], "checked": result["checked"],
+                 "legacy": result["legacy"], "firstBroken": result["firstBroken"]})
+    return result
 
 
 @router.get("/admin/audit/export")

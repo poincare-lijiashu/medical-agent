@@ -160,6 +160,12 @@ export function humanizeAudit(e) {
     user_deleted: () => `删除了用户 ${p.user || '—'}`,
     department_added: () => `新增了科室 ${p.name || '—'}`,
     department_removed: () => `删除了科室 ${p.name || '—'}`,
+    /* 第 184 批：审计哈希链校验（payload: ok/checked/legacy/firstBroken） */
+    audit_verify: () => (p.ok
+      ? `校验审计链 ${p.checked ?? 0} 条，链完整`
+      : `校验审计链发现异常：${p.firstBroken?.reason || '未知'}`
+        + (p.firstBroken?.seq != null ? `（seq ${p.firstBroken.seq}）` : ''))
+      + (p.legacy ? `（历史记录 ${p.legacy} 条无哈希）` : ''),
     /* 第 109 批：审计全量导出（payload: filters/rows/truncated） */
     audit_export: () => `按过滤条件导出审计 ${p.rows ?? 0} 条`
       + (p.truncated ? '（达到 10000 行上限，已截断）' : '')

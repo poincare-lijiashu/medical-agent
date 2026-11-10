@@ -7,11 +7,17 @@
 - B2 轮转归档：主文件超 5MB 或跨天 → 重命名 audit-YYYYMMDD-HHMMSS.jsonl 并重建主文件；
   超 30 天的历史轮转文件移入 data/audit/archive/ 并 gzip 压缩（启动/轮转时清理）。
   轮转与追加在同一把锁内完成，任何轮转/归档异常仅告警，绝不阻断审计写入。
+- **第 184 批：哈希链（防篡改）**——每条记录带 `seq` / `prev` / `hash`：
+  `hash = sha256(规范化(seq, ts, event_type, actor, payload, prev))`，
+  轮转跨文件仍以 `prev` 首尾相接（头 hash 从最新文件末条恢复）。
+  `verify_chain()` 顺序重算，能定位第一条被改/被删的记录；无 hash 的历史记录计入
+  `legacy` 并从该处重新起链（升级平滑，不需要回溯改写旧日志）。
 """
 from __future__ import annotations
 
 import contextvars
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -32,6 +38,31 @@ ARCHIVE_DIR = os.path.join(AUDIT_DIR, "archive")  # B2：gzip 归档目录
 # B2 轮转/归档参数（模块级常量，测试可 monkeypatch）：主文件 5MB 或跨天轮转；历史保留 30 天
 _ROTATE_BYTES = 5 * 1024 * 1024
 _ARCHIVE_DAYS = 30
+
+# ---- 第 184 批：审计哈希链 ----
+# 参与哈希的字段固定且排序（payload 是任意 JSON，必须 sort_keys 才能稳定重算）。
+_HASH_FIELDS = ("seq", "ts", "event_type", "actor", "payload", "prev")
+
+
+def _canonical_entry(entry: dict) -> str:
+    body = {k: entry.get(k) for k in _HASH_FIELDS}
+    return json.dumps(body, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _entry_hash(entry: dict) -> str:
+    return hashlib.sha256(_canonical_entry(entry).encode("utf-8")).hexdigest()
+
+
+# 轮转文件名：audit-YYYYmmdd-HHMMSS[-n].jsonl（同秒多次轮转带递增后缀）
+_AUDIT_NAME_RE = re.compile(r"^audit-(\d{8})-(\d{6})(?:-(\d+))?\.jsonl$")
+
+
+def _rotation_sort_key(path: str) -> tuple[str, str, int]:
+    """按文件名里的时间戳排序（**不用 mtime**：同秒轮转的 mtime 可能完全相同，
+    依赖文件系统时间分辨率会导致链顺序不确定、校验误报）。"""
+    m = _AUDIT_NAME_RE.match(os.path.basename(path))
+    return (m.group(1), m.group(2), int(m.group(3) or 0)) if m else ("", "", 0)
+
 
 # 旧 2-str 调用的用户名启发式：本系统用户名（doctor01/admin01 等）为「字母开头 + 含数字」；动作词（query 等）不含数字
 _USERNAMEISH = re.compile(r"[A-Za-z][A-Za-z0-9_\-.]*\d")
@@ -92,6 +123,9 @@ class AuditLog:
         self.path = path
         self.entries = deque(maxlen=500)  # 有界缓存；权威记录落 JSONL
         self._lock = threading.Lock()  # B2：追加+轮转临界区（轮转必须在锁内做，防并发重命名竞态）
+        # 第 184 批：哈希链状态（seq 连续、prev 指向上一条 hash）；重启后从文件末条恢复
+        self._seq = 0
+        self._head = ""
         self._bootstrap()
 
     def _bootstrap(self) -> None:
@@ -119,8 +153,128 @@ class AuditLog:
                     self.entries.append(json.loads(line))
                 except Exception:  # noqa: BLE001
                     continue
+            self._restore_chain_head(tail)
         except Exception:  # noqa: BLE001
             pass
+
+    # ---- 第 184 批：哈希链维护与校验 ----
+
+    def _restore_chain_head(self, tail_lines: list[str]) -> None:
+        """重启后从最新审计文件末条恢复 (seq, head)，保证 prev 接得上、不重新起链。
+
+        主文件可能刚被轮转成空（进程在轮转后、首条写入前重启），此时回退读最新的
+        轮转文件尾部。恢复失败不阻断启动：链会重新起链，verify 会如实报告 legacy 段。
+        """
+        def _pick(lines) -> bool:
+            for line in reversed(list(lines)):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(rec, dict) and isinstance(rec.get("seq"), int) and rec.get("hash"):
+                    self._seq, self._head = rec["seq"], rec["hash"]
+                    return True
+            return False
+
+        if _pick(tail_lines):
+            return
+        try:
+            others = [p for p in self._chain_files()
+                      if os.path.abspath(p) != os.path.abspath(self.path)]
+            if not others:
+                return
+            newest = max(others, key=_rotation_sort_key)
+            with open(newest, encoding="utf-8", errors="replace") as f:
+                _pick(f.readlines()[-500:])
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _chain_files(self) -> list[str]:
+        """按写入时间排序的链文件：轮转文件（旧→新）+ 非空主文件（最新）。"""
+        d = os.path.dirname(self.path)
+        if not os.path.isdir(d):
+            return []
+        rotated = [os.path.join(d, n) for n in os.listdir(d)
+                   if n.startswith("audit-") and n.endswith(".jsonl")]
+        rotated.sort(key=_rotation_sort_key)
+        files = list(rotated)
+        try:
+            if os.path.isfile(self.path) and os.path.getsize(self.path) > 0:
+                files.append(self.path)
+        except OSError:
+            pass
+        return files
+
+    def _seal(self, entry: dict) -> None:
+        """在锁内补齐 seq/prev/hash（顺序与内容共同参与哈希）。"""
+        self._seq += 1
+        entry["seq"] = self._seq
+        entry["prev"] = self._head
+        entry["hash"] = _entry_hash(entry)
+        self._head = entry["hash"]
+
+    def verify_chain(self, max_records: int | None = None) -> dict:
+        """顺序重算哈希链，定位第一条被篡改/删除的记录（只读，不修改任何文件）。
+
+        返回：
+        - `ok`：整条链可验证通过；
+        - `checked`：参与校验的带 hash 记录数；
+        - `legacy`：升级前的无 hash 历史记录数（这些段落无法回溯验证，但从该处重新起链）；
+        - `firstBroken`：第一条异常 {file, line, seq, reason}（prev_mismatch / hash_mismatch / bad_json）；
+        - `truncated`：`max_records` 限制是否提前结束（大文件巡检可分页核查）。
+        """
+        files = self._chain_files()
+        prev_hash = ""
+        checked = legacy = 0
+        truncated = False
+        for path in files:
+            try:
+                fh = open(path, encoding="utf-8", errors="replace")
+            except OSError as e:
+                return {"ok": False, "checked": checked, "legacy": legacy, "files": len(files),
+                        "truncated": truncated,
+                        "firstBroken": {"file": os.path.basename(path), "line": 0,
+                                        "seq": None, "reason": f"open_failed: {str(e)[:80]}"}}
+            with fh:
+                for lineno, line in enumerate(fh, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:  # noqa: BLE001 —— 半行/坏行即断链
+                        return {"ok": False, "checked": checked, "legacy": legacy,
+                                "files": len(files), "truncated": truncated,
+                                "firstBroken": {"file": os.path.basename(path), "line": lineno,
+                                                "seq": None, "reason": "bad_json"}}
+                    if not isinstance(rec, dict):
+                        continue
+                    if not rec.get("hash"):
+                        # 升级前的历史记录：无法验证，视为断代点，后续从空 prev 重新起链
+                        legacy += 1
+                        prev_hash = ""
+                        continue
+                    if rec.get("prev", "") != prev_hash:
+                        return {"ok": False, "checked": checked, "legacy": legacy,
+                                "files": len(files), "truncated": truncated,
+                                "firstBroken": {"file": os.path.basename(path), "line": lineno,
+                                                "seq": rec.get("seq"), "reason": "prev_mismatch"}}
+                    if _entry_hash(rec) != rec["hash"]:
+                        return {"ok": False, "checked": checked, "legacy": legacy,
+                                "files": len(files), "truncated": truncated,
+                                "firstBroken": {"file": os.path.basename(path), "line": lineno,
+                                                "seq": rec.get("seq"), "reason": "hash_mismatch"}}
+                    prev_hash = rec["hash"]
+                    checked += 1
+                    if max_records is not None and checked >= max_records:
+                        truncated = True
+                        return {"ok": True, "checked": checked, "legacy": legacy,
+                                "files": len(files), "truncated": truncated, "firstBroken": None}
+        return {"ok": True, "checked": checked, "legacy": legacy,
+                "files": len(files), "truncated": truncated, "firstBroken": None}
 
     # ---- B2：轮转归档 ----
 
@@ -189,12 +343,13 @@ class AuditLog:
             "actor": actor,
             "payload": payload,
         }
-        self.entries.append(entry)
         with self._lock:  # B2：轮转与追加在同一临界区内，防并发写轮转竞态
             self._rotate_if_needed()
+            self._seal(entry)  # 第 184 批：seq/prev/hash 必须在锁内生成（保证链顺序=落盘顺序）
             os.makedirs(os.path.dirname(self.path), exist_ok=True)
             with open(self.path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        self.entries.append(entry)
         # 评测 02 P0-3（A3）：PG 审计镜像的**唯一挂钩点**。JSONL 是权威记录，PG 同步
         # best-effort；没有池/离线时 mirror_audit_sync 直接 no-op，失败只告警。
         # 这样新增审计点无需各自记得 mirror_audit，PG/JSONL 覆盖率天然 1:1。

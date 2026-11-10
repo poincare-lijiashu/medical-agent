@@ -48,6 +48,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
   "返回"不还原上一位患者数据）；**豁免** `/medical/drug/dict`（保留 ETag/304 省 116KB）
   与 `/medical/config`（非 PHI 高频配置）。`/healthz`、静态资源不强制。
 
+## 审计完整性（第 184 批）
+
+- 审计 JSONL 每条记录带 `seq` / `prev` / `hash`（sha256，覆盖内容 + 前序 hash），
+  轮转跨文件仍首尾相接；进程重启从最新文件末条恢复链头，**不重新起链**。
+- 管理员可随时校验：`GET /api/v1/medical/admin/audit/verify`（可选 `max_records` 分批），
+  返回 `ok` / `checked` / `legacy` / `firstBroken`（文件、行号、seq、原因）；
+  校验本身作为合规敏感操作写入审计（`event=admin, action=audit_verify`）。
+- 被改一行报 `hash_mismatch`；删中间一行报 `prev_mismatch`；
+  升级前的无哈希历史记录计入 `legacy`，从该处重新起链（无需回溯改写旧日志）。
+- 校验只读：不修改任何审计文件；大库建议用 `max_records` 分批巡检。
+
 ## 静态加密（评测 04 P1-5）
 
 - **备份归档加密（第 177 批，已实现）**：`scripts/backup.py` 在配置

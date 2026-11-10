@@ -104,6 +104,8 @@ def test_qc_cannot_access_admin_endpoints(monkeypatch, tmp_path):
     qc = _login(c, "qc01", "Med@2026")["access_token"]
     assert c.get("/api/v1/medical/admin/data", headers=_h(qc)).status_code == 403
     assert c.get("/api/v1/medical/admin/llm/providers", headers=_h(qc)).status_code == 403
+    # 第 184 批：审计哈希链校验同属 admin 能力，质控角色不得调用
+    assert c.get("/api/v1/medical/admin/audit/verify", headers=_h(qc)).status_code == 403
     assert c.post("/api/v1/medical/admin/users", headers=_h(qc),
                   json={"username": "x1", "password": "Str0ngPass!", "role": "doctor"}).status_code == 403
 

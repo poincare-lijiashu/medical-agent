@@ -17,7 +17,8 @@ def _rotated_files(tmp_path):
 
 
 def test_rotate_on_size_threshold(monkeypatch, tmp_path):
-    monkeypatch.setattr(ma, "_ROTATE_BYTES", 256)
+    # 阈值需大于单条记录（第 184 批加哈希链后单条约 280B，原 256 已小于一条）
+    monkeypatch.setattr(ma, "_ROTATE_BYTES", 1024)
     log = _new_log(tmp_path)
     for i in range(20):
         log.write(event_type="t", action="a", actor="u", payload={"i": i})
@@ -25,7 +26,8 @@ def test_rotate_on_size_threshold(monkeypatch, tmp_path):
     assert rotated, "超阈值应触发轮转并产生 audit-YYYYMMDD-HHMMSS.jsonl"
     # 主文件被重建且当前小于阈值；轮转文件保留了历史内容
     assert (tmp_path / "audit.jsonl").is_file()
-    assert os.path.getsize(tmp_path / "audit.jsonl") < 256
+    assert os.path.getsize(tmp_path / "audit.jsonl") < 1024 + 400, \
+        "轮转在写入前判定，主文件最多超出阈值一条记录（约 280B）"
     total_lines = 0
     for name in rotated:
         with open(tmp_path / name, encoding="utf-8") as f:

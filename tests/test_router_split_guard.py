@@ -6,7 +6,7 @@
    「backend.api.v1.medical.shared.get_audit_logger」静默失效（2026-10-30 W4.3
    首跑 54 红的根因）。只允许 `from … import shared` 后经模块属性调用
    （请求时解析模块全局，patch 才能生效）。shared.py 内部定义/调用不受限。
-③ 路由快照锁：68 个 (method, path) 的**注册顺序**固定——拆分/合并/新增端点遗漏
+③ 路由快照锁：69 个 (method, path) 的**注册顺序**固定——拆分/合并/新增端点遗漏
    include 会立即红；有意变更路由时更新本快照（评审 diff 可见）。
 """
 from __future__ import annotations
@@ -32,6 +32,7 @@ ROUTE_SNAPSHOT: list[tuple[str, str]] = [
     ("POST", "/admin/departments"),
     ("DELETE", "/admin/departments/{name}"),
     ("GET", "/admin/audit"),
+    ("GET", "/admin/audit/verify"),
     ("GET", "/admin/audit/export"),
     ("GET", "/admin/audit/facets"),
     ("GET", "/admin/data"),
@@ -143,7 +144,7 @@ def test_no_from_import_of_audit_accessor():
 
 
 def test_route_snapshot_order_locked():
-    """③ 路由快照锁：68 端点的 (method, path) 与注册顺序均不可变。"""
+    """③ 路由快照锁：69 端点的 (method, path) 与注册顺序均不可变。"""
     actual = []
     for r in mr.router.routes:
         methods = sorted(m for m in getattr(r, "methods", ()) or ()

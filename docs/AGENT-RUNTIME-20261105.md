@@ -7642,3 +7642,45 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 - 登录页在控制台内是独立路由（`/console/login`），与 AI 工作台（`/login`）尚未做单点互跳；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 187. 2026-11-10 审计防篡改：哈希链 + 校验端点（第 184 批）
+
+**问题**
+
+- 审计此前只有「没有 delete/update 接口」这一层保证：有人直接改 JSONL 一行、删一行，
+  系统完全无感——这在医疗合规场景不算"不可篡改"，只能算"我们不主动改"；
+- 主流商业系统要求审计**可证明完整**（tamper-evident），并能在争议时定位到第一条异常记录。
+
+**已做**
+
+1. **哈希链**：每条记录新增 `seq` / `prev` / `hash`
+   （`hash = sha256(规范化(seq, ts, event_type, actor, payload, prev))`，字段排序 + 紧凑分隔符），
+   `prev` 指向上一条 hash；`seq`/`prev`/`hash` 在写锁内生成，**链顺序 = 落盘顺序**。
+2. **跨轮转与重启连续**：轮转不重置链（`prev` 跨文件首尾相接）；进程重启从最新文件末条
+   恢复 `(seq, head)`，主文件刚轮转为空时回退读最新轮转文件尾部。
+   轮转文件按**文件名时间戳**排序（同秒多次轮转带 `-n` 后缀），不用 mtime——
+   同秒文件 mtime 相同会导致遍历顺序不确定、校验误报（全量跑时实测踩到）。
+3. **`verify_chain(max_records=None)`**：顺序重算，返回 `ok / checked / legacy / files /
+   truncated / firstBroken{file,line,seq,reason}`；改内容报 `hash_mismatch`，删中间记录报
+   `prev_mismatch`；只读，不改写任何文件；大库可分页（`truncated`）。
+4. **升级平滑**：无 hash 的历史记录计入 `legacy`，从该处重新起链，不回溯改写旧日志。
+5. **端点** `GET /api/v1/medical/admin/audit/verify`（admin，可带 `max_records`）：
+   校验本身作为合规敏感操作写入审计（`action=audit_verify`），前端 humanize 文案同步补齐。
+6. **回归锁 `tests/test_audit_hash_chain.py`（8 条）**：字段与链形状、篡改内容、删除中段、
+   重启续链、轮转跨文件、legacy 容忍、只读性、分页截断；路由快照 68→69；
+   质控角色调用校验端点 403；轮转阈值测试按"单条记录变大"修正断言。
+
+**验证**
+
+```
+定向：pytest -k "audit or qc_role" → 149 passed（含 8 条新锁；轮转用例连续 5 次稳定）
+全量（不含 e2e）→ 1765 passed / 1 skipped
+前端：frontend-vue 重新构建 dist（humanize 文案随产物入库）
+```
+
+**遗留**
+
+- 链只覆盖 JSONL 权威记录；PG `audit_log` 是只读镜像（可重建），未加链；
+- 已 gzip 归档（>30 天）的文件不参与 `verify_chain`，归档前建议先跑一次校验；
+- 前端暂无「一键校验」按钮（接口与文案已就绪，AI 工作台数据面板可下一批接入）；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+
