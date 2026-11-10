@@ -7430,3 +7430,48 @@ Java：GatewayRouteConfigTest → 14 passed
 - `utils/format.ts` 的日期与数字仍固定 `zh-CN`，未随语言切换；
 - 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
 
+## 182. 2026-11-10 评测 04 P1-5 收尾：LLM 供应商密钥字段级加密（第 179 批）
+
+**问题**
+
+- `llm_providers.api_key` 此前是明文（PG jsonb + `data/llm_providers.json`）：拿到一份备库或
+  运维机上的一份 JSON，就能直接消耗医院模型额度、把病历内容发往第三方；卷加密与备份加密
+  都覆盖不到「运维用 psql 连库看一眼」这条路径；
+- §180 遗留项已明确列出该字段未加密，评测 04 也把它列为静态加密缺口。
+
+**已做**
+
+1. **`backend/core/field_crypto.py`**：AES-256-GCM 字段级信封加密，格式
+   `enc:v1:<base64(nonce|密文|tag)>`；AAD 绑定用途（`medassist.llm_provider.api_key`），
+   防止跨字段搬用密文；随机 nonce → 同一明文每次密文不同（不暴露"两个 provider 同 key"）。
+2. **密钥 `SECRETS_ENCRYPTION_KEY`**（base64 32 字节，`lru_cache` 按密钥值缓存）。三档策略：
+   生产类环境（production/prod/staging）未配密钥 → **写入 fail-closed**；读到密文但密钥
+   缺失/错误 → 读取直接失败（绝不把密文当 key 调模型）；开发/测试未配 → 保持明文并告警一次。
+3. **存取边界透明加解密**：`llm_config._load_raw/_save_raw` 套一层 `open_providers/seal_providers`
+   （深拷贝，不污染调用方配置）——PG 与 JSON 兜底同一口径，模块内部与所有业务调用方拿到的
+   仍是明文，管理端接口仍返回脱敏值。
+4. **存量明文平滑迁移**：读路径原样放行，任意一次保存（增删/激活）即转密文；
+   OPERATIONS 给出一键全量转密文命令，无需独立迁移脚本。
+5. **配置与文档接线**：`.env.example` 增 `SECRETS_ENCRYPTION_KEY`（含生产 fail-closed 说明）、
+   `docs/OPERATIONS.md`「静态加密」新增小节（含轮换）、`deploy/README.md` 的 ai-core Secret 清单补齐。
+6. **回归锁 `tests/test_field_crypto.py`（15 条）**：往返/随机 nonce/错密钥/篡改/非法密钥格式、
+   历史明文兼容、开发明文 vs 生产拒绝、密文缺密钥必失败、映射不改入参、`llm_config` 落库是
+   密文而读回是明文、存量明文自动升级、缺密钥读密文 fail-closed。
+
+**验证**
+
+```
+定向：tests/test_field_crypto.py → 15 passed
+回归：test_llm_config + test_llm_hot_reload + test_llm_extra_params + test_pg_repo
+      + test_agent_bots + test_consult → 201 passed
+全量（不含 e2e）→ 1733 passed / 1 skipped
+```
+
+**遗留**
+
+- 密钥轮换依赖「旧密钥版本仍可读」，尚未实现多版本密钥环（`keys-json` 形态），
+  大规模轮换需一次停写窗口；
+- Java 服务 JDBC 连接仍未加 `sslmode`（本批仍只覆盖 Python 侧）；
+- K8s 卷加密（StorageClass + KMS）属基础设施交付；
+- 下一步：长列表虚拟滚动（医嘱工作台 / 病案首页 / 药房等大表格）。
+

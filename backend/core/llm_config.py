@@ -7,6 +7,8 @@ data 内嵌 _seq 还原 providers 顺序）；PG 不可用/异常/空表 → dat
 provider：{"id","api_format","base_url","model_id","display_name","api_key"}
 base_url 存原始值（不以 / 结尾）；openai 的 /chat/completions 语义由调用方处理
 （httpx 直连时拼接，langchain ChatOpenAI 由 SDK 自动追加）。
+第 179 批：`api_key` 在存储边界做字段级 AES-256-GCM 加密（见 field_crypto），
+模块内部始终是明文，落 PG/JSON 时才是密文。
 """
 from __future__ import annotations
 
@@ -20,7 +22,7 @@ import uuid
 
 import httpx
 
-from backend.core import pg_store
+from backend.core import field_crypto, pg_store
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LLM_CONFIG_FILE = os.path.join(BASE_DIR, "data", "llm_providers.json")
@@ -55,12 +57,15 @@ def _load_raw_json() -> dict:
 
 def _load_raw() -> dict:
     # B1 数据真源化：PG 池可用 → PG 真源；不可用/异常/空表 → JSON（现状行为完全等价）
-    return pg_store.load_llm_providers(LLM_CONFIG_FILE, _load_raw_json)
+    # 第 179 批：存储边界透明解密（历史明文原样返回，便于平滑迁移）
+    return field_crypto.open_providers(
+        pg_store.load_llm_providers(LLM_CONFIG_FILE, _load_raw_json))
 
 
 def _save_raw(cfg: dict) -> None:
     # B1：JSON 原子写兜底 + PG 全量同步（best-effort）；路径取本模块常量（测试 monkeypatch 生效）
-    pg_store.save_llm_providers(cfg, LLM_CONFIG_FILE)
+    # 第 179 批：落库前逐个加密 api_key（深拷贝，不污染调用方持有的配置对象）
+    pg_store.save_llm_providers(field_crypto.seal_providers(cfg), LLM_CONFIG_FILE)
 
 
 def load_config() -> dict:

@@ -61,8 +61,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - **PG 连接 TLS（第 177 批，已实现）**：`PG_SSLMODE`（空 = 不追加，保持旧行为；
   staging/prod 默认 `verify-full`，dev 用 `prefer`）+ 可选 `PG_SSLROOTCERT`。
   开启 `verify-full` 前需在 PG 侧启用 TLS、把 CA 挂进容器；建议先用 `prefer` 验证连通再切。
+- **LLM 供应商密钥字段级加密（第 179 批，已实现）**：`llm_providers.api_key`
+  在**存储边界**用 AES-256-GCM 加密，落库形态为 `enc:v1:<base64(nonce|密文|tag)>`；
+  PG 表与 `data/llm_providers.json` 同一口径。密钥 `SECRETS_ENCRYPTION_KEY`
+  （base64 32 字节，Secret 注入；`openssl rand -base64 32` 生成）。
+  - 模块内部（`llm_config.load_config()` / `active_provider()`）始终拿到明文，
+    业务代码无需改动；接口返回仍是脱敏后的 `sk-abc***xyzw`；
+  - 存量明文 provider 可直接读取，**任意一次保存（增删/激活）即自动转为密文**；
+    需要全量转密文时执行一次：
+    `python -c "from backend.core.llm_config import load_config, save_config; save_config(load_config())"`
+  - fail-closed：生产类环境未配密钥 → 保存密钥直接失败；读到密文但密钥缺失/错误 →
+    读取直接失败（绝不把密文当 key 调模型），日志与异常均提示密钥问题；
+  - 本地开发可不配（保持旧行为，仅告警一次）；
+  - 轮换：新密钥写入 Secret 后，旧数据用旧密钥版本解密、下次保存自动转新密钥。
 - **尚未覆盖**（基础设施/后续批次）：K8s 卷加密（StorageClass + KMS）、
-  `llm_providers` 中 `api_key` 的字段级加密、Java 服务 JDBC 连接的 sslmode。
+  Java 服务 JDBC 连接的 sslmode。
 
 ## 模型与供应商
 - 全局 chat/vision 模型由管理端「LLM 供应商」激活的 provider 决定（PG `llm_providers`）；
