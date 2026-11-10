@@ -89,6 +89,12 @@ const router = createRouter({
         { path: 'emergency', name: 'emergency', component: () => import('@/views/EmergencyView.vue') },
         { path: 'consents', name: 'consents', component: () => import('@/views/ConsentsView.vue') },
         { path: 'orders', name: 'orders', component: () => import('@/views/OrdersWorkbenchView.vue') },
+        {
+          // 第 202 批：AI 开药工作台（仅医生）
+          path: 'rx',
+          name: 'ai-rx',
+          component: () => import('@/views/AiRxView.vue'),
+        },
         { path: 'preop', name: 'preop', component: () => import('@/views/PreopVisitView.vue') },
         {
           path: 'consultation',

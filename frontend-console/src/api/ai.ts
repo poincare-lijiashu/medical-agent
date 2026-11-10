@@ -158,6 +158,74 @@ export function aiRxReview(id: string, action: 'approve' | 'reject', opinion: st
   return aiPost<AiPrescription>(`/medical/prescriptions/${encodeURIComponent(id)}/review`, { action, opinion })
 }
 
+/* ------------------------------------------------------------------ *
+ * 开药工作台（第 202 批，医生侧）
+ *
+ * 链路：病例摘要 → AI 字典约束推荐（默认全选）→ 相互作用硬校验（高危阻断需理由）
+ * → 可自定义加药（字典外必须留 ≥5 字理由，交药剂科重点审核）→ 提交 / 改写重提。
+ * 药剂科审核侧已在审核中心「开药待审」；这里只做医生自己的处方。
+ * ------------------------------------------------------------------ */
+
+export interface AiRxSuggestion {
+  name: string
+  dose?: string
+  freq?: string
+  reason?: string
+}
+
+export interface AiRxConflict {
+  pair?: string[]
+  severity?: string
+  note?: string
+}
+
+export interface AiRxWarning {
+  pair?: string[]
+  note?: string
+}
+
+export interface AiRxSuggestResult {
+  suggestions?: AiRxSuggestion[]
+  /** 推荐组合含高危/禁忌联用：不阻断生成，但提交必须填理由 */
+  blocked?: boolean
+  conflicts?: AiRxConflict[]
+  warnings?: AiRxWarning[]
+  disclaimer?: string
+}
+
+export interface AiRxDrugInput {
+  name: string
+  dose?: string
+  freq?: string
+  note?: string
+}
+
+export interface AiRxSubmitBody {
+  case_text: string
+  drugs: AiRxDrugInput[]
+  contraindication_reason?: string
+}
+
+export function aiRxSuggest(caseText: string): Promise<AiRxSuggestResult> {
+  return aiPost<AiRxSuggestResult>('/medical/prescriptions/suggest', { case_text: caseText })
+}
+
+export function aiRxCreate(body: AiRxSubmitBody): Promise<AiPrescription> {
+  return aiPost<AiPrescription>('/medical/prescriptions', body)
+}
+
+/** 被驳回处方改写：修改后自动重新送审（不产生新处方）。 */
+export function aiRxRewrite(id: string, body: AiRxSubmitBody): Promise<AiPrescription> {
+  return aiPost<AiPrescription>(`/medical/prescriptions/${encodeURIComponent(id)}/rewrite`, body)
+}
+
+/** 我的处方（服务端分页 + 关键字：病例摘要 / 药品名 / 科室）。 */
+export function aiRxMine(
+  query: { limit?: number; offset?: number; q?: string } = {},
+): Promise<AiRxPage> {
+  return aiGet<AiRxPage>('/medical/prescriptions/mine', { ...query })
+}
+
 /** 会诊协助收件箱（doctor/pharmacist：本科室受邀且进行中的会诊）。 */
 export interface AiConsultOpinion {
   doctor?: string

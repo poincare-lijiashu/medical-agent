@@ -172,6 +172,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:visit:read'],
   },
   {
+    // 第 202 批：AI 开药工作台（医生侧；药剂科审核已在审核中心「开药待审」）
+    name: 'ai-rx',
+    path: '/rx',
+    title: 'AI 开药',
+    hint: 'AI 字典约束推荐 · 相互作用硬校验 · 处方直送药剂科 · 我的处方与重写',
+    icon: 'pill',
+    group: '临床诊疗',
+    roles: ['DOCTOR'],
+  },
+  {
     name: 'consultation',
     path: '/consultation',
     title: '会诊工作台',
