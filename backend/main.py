@@ -302,10 +302,11 @@ async def well_known_agent_card(request: Request):
 async def _observability(request: Request, call_next):
     t0 = time.perf_counter()
     response = await call_next(request)
-    dt = (time.perf_counter() - t0) * 1000.0
+    dt_s = time.perf_counter() - t0
     route = getattr(request.scope.get("route"), "path", "unmatched")  # 用路由模板，防随机路径高基数
-    observability.inc("http_requests_total")
-    observability.observe_ms(route, dt)
+    # 评测 06 P1-5：状态码作为标签（能算 5xx 比例）+ 秒级 histogram（能算 P95/P99）
+    observability.inc_http(route, request.method, response.status_code)
+    observability.observe_seconds(route, dt_s)
     response.headers["X-Request-Id"] = uuid.uuid4().hex[:12]
     return response
 

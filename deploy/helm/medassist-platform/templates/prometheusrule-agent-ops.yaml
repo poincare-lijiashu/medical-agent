@@ -323,4 +323,34 @@ spec:
           annotations:
             summary: "PG 写 P95 超过 1s：{{ "{{" }} $labels.domain {{ "}}" }}/{{ "{{" }} $labels.op {{ "}}" }}"
             description: "近 10 分钟 P95={{ "{{" }} $value {{ "}}" }}s；请检查 PG 负载、锁等待、磁盘，以及该写点是否在批量操作。"
+
+        # 第 176 批（评测 06 P1-5）：AI 中台 HTTP 层 SLO 基线（状态码比例 + P99）。
+        - alert: MedAssistAiCore5xxRateHigh
+          expr: |
+            sum(rate(medassist_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(medassist_http_requests_total[5m])), 0.001) > 0.02
+            and
+            sum(rate(medassist_http_requests_total[5m])) > 0.05
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "AI 中台 5xx 比例超过 2%"
+            description: "近 5 分钟 5xx 占比 {{ "{{" }} $value {{ "}}" }}；按 route/status 标签定位接口，再查日志与依赖（PG / LLM / 向量库）。"
+
+        - alert: MedAssistAiCoreLatencyP99High
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (rate(medassist_http_request_duration_seconds_bucket[10m]))
+            ) > 5
+            and
+            sum(rate(medassist_http_request_duration_seconds_count[10m])) > 0.05
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "AI 中台 HTTP P99 超过 5s"
+            description: "近 10 分钟 P99={{ "{{" }} $value {{ "}}" }}s；先看 route 标签的慢接口，再区分模型调用与 PG/向量库耗时。"
 {{- end }}

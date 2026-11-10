@@ -52,7 +52,8 @@ def test_helm_prometheus_rule_matches_native_rules():
     # + 第 49 批存储 stale / 非 PG 模式 2 条 + 第 67 批 Redis 降级 1 条
     # + 第 68 批向量库不可达/超时/降级 3 条
     # + 第 93 批 PG 查询失败/平均耗时 2 条（第 94 批升级为 P95，第 95 批写失败、第 96 批写 P95）
-    assert len(native) == 25
+    # + 第 176 批 AI 中台 HTTP 5xx 比例 / P99 2 条（评测 06 P1-5）
+    assert len(native) == 27
 
 
 def test_alert_windows_do_not_double_stack_with_for():
@@ -106,17 +107,22 @@ def test_alert_delivery_wired_in_local_stack():
 def test_alert_rules_only_reference_scrape_endpoint_metrics():
     """告警规则引用的指标名必须与 /metrics 导出的族名一致（M-14 的静态侧门禁）。"""
     from backend.agents import consult_metrics, skill_trends
-    from backend.core import medical_kb, pg_store, stores
+    from backend.core import medical_kb, observability, pg_store, stores
     # 计数器在零样本时不会出现在导出里，这里先制造一条合法样本再比对
     consult_metrics.record("drug", "sync", "ok", 1.0, ["drug-check"])
+    # 第 176 批：HTTP 层指标（状态码 + 直方图）同样纳入本门禁
+    observability.reset()
+    observability.inc_http("/probe", "GET", 200)
+    observability.observe_seconds("/probe", 0.01)
     # stale_domains 只在有 stale 域时才有样本行；加一个探针域让静态门禁能覆盖它
     pg_store._repo_pg_stale.add("probe.json")
     try:
         exported = (consult_metrics.prometheus_text() + skill_trends.prometheus_text()
                     + pg_store.prometheus_text() + stores.prometheus_text()
-                    + medical_kb.prometheus_text())
+                    + medical_kb.prometheus_text() + observability.exposition())
     finally:
         pg_store._repo_pg_stale.discard("probe.json")
+        observability.reset()
         consult_metrics.reset()
     names = set(re.findall(r"^([a-z][a-z0-9_]*)(?:\{| )", exported, re.M))
     referenced = set(re.findall(r"\bmedassist_[a-z0-9_]+\b", _read(RULES)))

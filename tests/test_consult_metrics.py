@@ -333,7 +333,7 @@ def test_metrics_endpoint_includes_consult_metrics(monkeypatch, tmp_path):
     assert "medassist_agent_consult_requests_total" in r.text
     assert "medassist_agent_skill_usage_total" in r.text
     assert 'skill="drug-check"' in r.text
-    assert "medassist_counter_total" in r.text  # 既有指标仍保留
+    assert "medassist_http_requests_total" in r.text  # HTTP 层指标（第 176 批改名后）仍保留
 
 
 def test_skill_label_overflow_is_observable(monkeypatch):

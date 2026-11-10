@@ -7301,3 +7301,41 @@ Java：GatewayRouteConfigTest → 14 passed
 - `/actuator` 刻意不纳入 Ingress（网关探针白名单需要，探针直连 Pod，不经入口）；
 - 下一步：评测 06 P1-5（指标命名 / SLO）、04 P1-5（静态加密方案）、
   03 前端 i18n 与长列表虚拟滚动。
+
+## 179. 2026-11-10 评测 06 P1-5：HTTP 指标规范化 + 5xx/P99 告警基线（第 176 批）
+
+**问题**
+
+- `/metrics` 的 HTTP 层只有 `medassist_counter_total{name="http_requests_total"}`（**标签当名字**，
+  `rate()` 必须先 `sum by (name)`）与 `medassist_latency_ms_sum/_count`（无 `_bucket`，
+  **算不出 P95/P99**）；中间件只记总量、**不记状态码**——排障时无法回答"AI 中台 5xx 有多少"。
+
+**已做**
+
+1. **重写 `backend/core/observability.py`**（标准 Prometheus 语义）：
+   - `medassist_http_requests_total{route,method,status}`：一个指标一个名字，状态码/方法是标签；
+   - `medassist_http_request_duration_seconds_{bucket,sum,count}`：标准 histogram，
+     桶 5ms–30s（覆盖 LLM 长请求），累计输出可 `histogram_quantile` 直接算 P95/P99；
+   - 单位统一为秒（与 consult 指标一致）；`route` 取路由模板，未匹配归 `unmatched` 防高基数；
+   - 删除 `inc()` / `observe_ms()` 旧接口（仓内唯一调用点是中间件，已同步）。
+2. **`backend/main.py` 中间件**：记录 `status_code` 与秒级耗时（不再只 inc 总量）。
+3. **SLO 基线告警 2 条**（原生 rules + Helm PrometheusRule 同步，25→27 条）：
+   `MedAssistAiCore5xxRateHigh`（5xx > 2%，critical）、
+   `MedAssistAiCoreLatencyP99High`（P99 > 5s，warning）；都带最小 QPS 门限防低流量误报。
+4. **回归锁**：`test_observability` 新增直方图累计/溢出用例（+1）；`test_deploy_observability`
+   把 observability 导出纳入「规则只能引用已导出指标」门禁（M-14），规则数 25→27；
+   `test_consult_metrics` 同步新指标名。
+5. **文档**：`docs/OPERATIONS.md` 更新 HTTP 指标名与规则数（21→27，修掉评测 P3-5 的计数漂移）。
+
+**验证**
+
+```
+定向：test_observability + test_deploy_observability + test_consult_metrics → 35 passed
+全量（不含 e2e）→ 1701 passed / 1 skipped
+```
+
+**遗留**
+
+- Grafana 面板未展示新 HTTP 指标（可加"AI 中台 5xx 比例 / P99"两个图，属展示层）；
+- 新告警沿用现有交付方式（无 runbook 链接）；告警 runbook 索引属评测 06 P3 项；
+- 下一步：评测 04 P1-5（静态加密方案）、03 前端 i18n 与长列表虚拟滚动。
