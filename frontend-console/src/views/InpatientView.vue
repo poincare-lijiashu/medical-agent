@@ -504,6 +504,7 @@ import { toast } from '@/stores/toast'
 import { ageOf, dateTime, genderLabel, money } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
+import { recordPrint } from '@/utils/printAudit'
 
 const role = computed(() => session.roleLabel.value)
 const loading = ref(false)
@@ -849,7 +850,17 @@ async function printFinanceSummary() {
         .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
       `,
     })
-    if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+    if (!ok) {
+      toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+      return
+    }
+    recordPrint({
+      docType: 'inpatientFinance',
+      docNo: f.admissionNo,
+      targetType: 'ADMISSION',
+      targetId: f.admissionId,
+      patientNo: f.patientNo,
+    })
   } catch (e) {
     toast.error('费用明细读取失败', errorText(e))
   } finally {
@@ -892,7 +903,17 @@ async function printWristband(a: AdmissionView) {
                    display: flex; align-items: center; justify-content: center; font-size: 11px; }
       `,
     })
-    if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+    if (!ok) {
+      toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+      return
+    }
+    recordPrint({
+      docType: 'wristband',
+      docNo: a.admissionNo,
+      targetType: 'ADMISSION',
+      targetId: a.id,
+      patientNo: p.patientNo,
+    })
   } catch (e) {
     toast.error('患者信息读取失败', errorText(e))
   } finally {

@@ -675,6 +675,7 @@ import { toast } from '@/stores/toast'
 import { date, dateTime, money, todayIso } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
+import { recordPrint } from '@/utils/printAudit'
 
 const STATUS_TABS = [
   { value: 'PENDING_REVIEW', label: '待审核' },
@@ -1160,7 +1161,17 @@ function printPrescription() {
       .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
     `,
   })
-  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+  if (!ok) {
+    toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+    return
+  }
+  recordPrint({
+    docType: 'prescription',
+    docNo: p.prescriptionNo,
+    targetType: 'PRESCRIPTION',
+    targetId: p.id,
+    patientNo: p.patientNo,
+  })
 }
 
 onMounted(() => {

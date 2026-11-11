@@ -78,3 +78,15 @@ def test_views_print_through_channel():
         text = (SRC / "views" / name).read_text(encoding="utf-8")
         assert "printHtml(" in text, f"{name} 应通过 printHtml 打印"
         assert not re.search(r"\.print\(\)", text), f"{name} 不应再直接调用 window.print()"
+        # 第 230 批：打印成功必须留痕（失败静默，不阻断已出纸的打印）
+        assert "recordPrint(" in text, f"{name} 打印后必须调用 recordPrint 留痕"
+
+
+def test_print_audit_is_silent_and_centralized():
+    text = (SRC / "utils" / "printAudit.ts").read_text(encoding="utf-8")
+    assert "post('/clinical/print-events'" in text, "打印留痕必须走 Java /clinical/print-events"
+    assert ".catch(" in text, "留痕失败必须静默，不能把已完成的打印变成报错"
+    assert "toast" not in text, "打印留痕工具不得耦合 toast（失败不提示用户）"
+    # 单据类型集中定义，禁止各页面各写一套大小写口径
+    for doc_type in ("RECEIPT", "CONSENT", "PRESCRIPTION", "PIVAS_CARD", "INPATIENT_FINANCE", "WRISTBAND"):
+        assert doc_type in text, f"打印留痕缺少单据类型 {doc_type}"

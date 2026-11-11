@@ -9698,6 +9698,49 @@ typecheck → 通过；build → 通过（入口 92.8KB gzip，预算内）
 - 版式为 A4 纸，不是腕带打印机（如 Zebra 腕带）的专用尺寸；
 - 腕带补打次数未留痕（与打印留痕同一缺口）。
 
+## 230. 2026-11-11 单据打印留痕（第 230 批）
+
+**问题**
+
+- 六类单据都能打印，但系统不知道“谁在什么时间打印了哪张单”：
+  补打次数、冒打核查、打印后遗失补证，全靠人工回忆；
+- 打印是**已经出纸**的动作，留痕如果失败就弹错，会把“打印成功”变成“界面报错”，
+  现场会直接不信任系统；反过来，留痕缺失又让审计链断在打印这一步。
+
+**本批做了什么（Java 侧审计，按“按你的来”的默认取向）**
+
+1. **库表** `clinical_svc.print_event`（`V60`）：`doc_type / doc_no / target_type / target_id /
+   patient_no / actor / campus_id / printed_at`，追加式、无删除接口；
+   三个索引：时间倒序、按对象、按单号。不建外键——单据可能跨服务，留痕不能因此写不进去。
+2. **接口** `POST /clinical/print-events`（`clinical:print:record`）、
+   `GET /clinical/print-events`（`clinical:print:read`）：
+   写入校验类型/单号非空与长度；查询带 `LIMIT`（默认 50、上限 200）并按院区收敛，
+   跨院区账号才能看到 `campus_id IS NULL` 的流水。
+   记录动作**不再叠加业务权限**——能不能打印已由各入口判定，避免已出纸却 403。
+3. **权限种子**（`auth/V79`）：`record` 授予 ADMIN/DOCTOR/REGISTRAR/NURSE/NURSE_MANAGER/
+   PHARMACIST/TECHNICIAN/QC；`read` 只给 ADMIN/QC。
+4. **前端统一上报** `utils/printAudit.ts`：`recordPrint()` 走 `post('/clinical/print-events')`，
+   **失败静默**（不 toast、不阻塞），单据类型集中常量；六个打印入口在打印成功后各调一次
+   （票据/同意书/处方笺/输液卡/费用汇总单/腕带），带上单号与对象主键。
+5. **验证**：`mvn -pl clinical -am compile` 通过；回归锁新增
+   “每个打印视图必须调用 recordPrint”“printAudit 必须静默且类型集中”。
+
+**验证**
+
+```
+Java：mvn -pl clinical -am -DskipTests compile → 通过
+定向：print + permission + java contract → 16 passed（+1 条新锁）
+前端：npm run typecheck → 通过；npm run build → 通过（入口 92.85 KB gzip）
+全量：pytest --ignore=tests/e2e → 1875 passed / 1 skipped
+```
+
+**遗留**
+
+- 还没有“打印历史”页面：质控可按单号/对象查接口，但没有可视化入口；
+- 留痕由前端上报，浏览器直接关窗/断网时可能丢一条（服务端无法感知出纸）；
+  要做到强一致需要打印代理或打印服务端渲染，不在本批范围；
+- `doc_type` 未在库里做枚举约束，靠前端常量收口；新增单据类型需同步 `printAudit.ts`。
+
 
 
 

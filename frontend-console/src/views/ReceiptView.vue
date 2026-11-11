@@ -339,6 +339,7 @@ import { toast } from '@/stores/toast'
 import { dateTime, money, todayIso } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
+import { recordPrint } from '@/utils/printAudit'
 
 const role = session.roleLabel
 const canIssue = computed(() => hasPermission('clinical:receipt:issue'))
@@ -607,7 +608,11 @@ function printReceipt(r: ChargeReceipt) {
       .status { display: inline-block; padding: 2px 8px; border: 1px solid #999; border-radius: 10px; font-size: 12px; }
     `,
   })
-  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+  if (!ok) {
+    toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+    return
+  }
+  recordPrint({ docType: 'receipt', docNo: r.receiptNo, targetType: 'RECEIPT', targetId: r.id })
 }
 </script>
 

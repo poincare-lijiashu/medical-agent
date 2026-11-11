@@ -374,6 +374,7 @@ import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
+import { recordPrint } from '@/utils/printAudit'
 
 const role = session.roleLabel
 const canWrite = computed(() => hasPermission('emr:consent:write'))
@@ -605,7 +606,17 @@ function printConsent(c: ConsentRecord) {
       .foot { margin-top: 28px; font-size: 11px; border-top: 1px solid #ddd; padding-top: 8px; word-break: break-all; }
     `,
   })
-  if (!ok) toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+  if (!ok) {
+    toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+    return
+  }
+  recordPrint({
+    docType: 'consent',
+    docNo: c.consentNo,
+    targetType: 'CONSENT',
+    targetId: c.id,
+    patientNo: c.patientNo,
+  })
 }
 
 /* ------------------------------ 模板 ------------------------------ */
