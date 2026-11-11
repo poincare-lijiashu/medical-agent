@@ -250,6 +250,10 @@ public class InpatientService {
      *
      * <p>出院条件：无有金额的未结单 + 无未计费临时医嘱 + 当日有效长嘱已计费
      * （REFUSED / OMITTED 的长嘱不计入缺口）。
+     *
+     * <p>出院时**自动停止**全部未停长期医嘱（stop_date = 出院日）：长嘱不会随就诊结束失效，
+     * 留着的后果是"人已出院、医嘱仍有效"，后续补费/带药口径都会错。停嘱必须放在门禁之后，
+     * 先停会让"当日应计未计"从缺口里消失，等于漏收费。
      */
     @Transactional
     public AdmissionView discharge(UUID admissionId, String actor) {
@@ -304,12 +308,15 @@ public class InpatientService {
         if (!repo.updateVisitStatus(visit.id(), Visit.IN_TREATMENT, Visit.FINISHED, visit.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "就诊状态已变化，出院未完成");
         }
+        // 门禁全部通过后才停嘱：放在前面会让当日未计费长嘱从缺口里消失（漏收费）。
+        int autoStopped = repo.stopUnstoppedLongOrders(a.visitId(), today, actor, "出院自动停嘱");
 
         Charge latest = repo.findLatestCharge(a.visitId()).orElse(null);
         audit(actor, "DISCHARGE", "ADMISSION", a.id().toString(), Map.of(
                 "admissionNo", a.admissionNo(), "visitNo", visit.visitNo(),
                 "chargeNo", latest == null ? "" : latest.chargeNo(),
-                "totalAmount", latest == null ? BigDecimal.ZERO : latest.totalAmount()));
+                "totalAmount", latest == null ? BigDecimal.ZERO : latest.totalAmount(),
+                "autoStoppedOrders", autoStopped));
         return toView(repo.findAdmission(a.id()).orElseThrow());
     }
 

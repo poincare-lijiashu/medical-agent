@@ -471,7 +471,8 @@
           体检未加载（{{ checkError || '网络异常' }}）。仍可直接出院，服务端会再次校验。
         </p>
         <p class="hint" style="line-height: 1.7">
-          体检与出院门禁同一口径；阻断项必须处理完才能出院。出院会释放床位并把就诊状态置为已结束。
+          体检与出院门禁同一口径；阻断项必须处理完才能出院。出院会释放床位、结束就诊，
+          并把未停长期医嘱按出院日自动停止。
         </p>
       </div>
       <template #footer>
@@ -1005,7 +1006,7 @@ async function submitDischarge() {
   try {
     const updated = await clinicalApi.dischargeAdmission(dischargeTarget.value.id)
     dischargeOpen.value = false
-    toast.ok('出院已办理', `${updated.admissionNo} · 床位已释放`)
+    toast.ok('出院已办理', `${updated.admissionNo} · 床位已释放，未停长期医嘱已自动停止`)
     await reloadWard()
   } catch (e) {
     toast.error('出院失败', errorText(e))

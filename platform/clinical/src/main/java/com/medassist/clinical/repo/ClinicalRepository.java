@@ -769,6 +769,26 @@ public class ClinicalRepository {
     }
 
     /**
+     * 出院自动停嘱：把该就诊全部未停长期医嘱按出院日停止，返回停止条数。
+     *
+     * <p>为什么批量而不是逐条：出院事务已持有 visit 行锁，这里的 WHERE 与
+     * {@link #stopLongOrder} 完全一致（只动 PLACED + 未停），并发下不会重复停；
+     * 一次 UPDATE 避免几十条长嘱产生几十次往返。
+     */
+    public int stopUnstoppedLongOrders(UUID visitId, LocalDate stopDate, String operator, String reason) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.visit_order
+                           SET stop_date = :stopDate, stopped_by = :operator, stop_reason = :reason,
+                               version = version + 1, updated_at = now()
+                         WHERE visit_id = :visitId AND order_mode = 'LONG' AND status = 'PLACED'
+                           AND stop_date IS NULL
+                        """)
+                .param("stopDate", stopDate).param("operator", operator)
+                .param("reason", reason).param("visitId", visitId)
+                .update();
+    }
+
+    /**
      * 未停止的长期医嘱（{@code stop_date IS NULL} 且仍为 PLACED）：出院体检用。
      *
      * <p>与 {@link #listBillableLongOrders} 的区别：不按 start_date 过滤——明天才起效、

@@ -28,6 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -292,5 +293,30 @@ class InpatientServiceTest {
         assertThat(v.status()).isEqualTo(Admission.DISCHARGED);
         verify(repo).freeBed(bedId, 7L);
         verify(repo).updateVisitStatus(visitId, Visit.IN_TREATMENT, Visit.FINISHED, 1L);
+        // 出院自动停嘱：长嘱不会随就诊结束失效，必须显式停
+        verify(repo).stopUnstoppedLongOrders(eq(visitId), any(LocalDate.class), eq("doctor01"),
+                eq("出院自动停嘱"));
+    }
+
+    @Test
+    @DisplayName("出院门禁失败时不停嘱：否则当日未计费长嘱会从缺口消失，导致漏收费")
+    void dischargeDoesNotStopOrdersWhenGateFails() {
+        UUID admissionId = UUID.randomUUID();
+        UUID visitId = UUID.randomUUID();
+        Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 4L);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.lockVisit(visitId)).thenReturn(Optional.of(
+                new Visit(visitId, "V1", patientId, "P1", deptId, "doctor01", null,
+                        "INPATIENT", Visit.IN_TREATMENT, LocalDate.now(), 1L)));
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.hasUnsettledCharge(visitId)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.discharge(admissionId, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CHARGE_STATUS_INVALID);
+
+        verify(repo, never()).stopUnstoppedLongOrders(any(), any(), anyString(), anyString());
     }
 }

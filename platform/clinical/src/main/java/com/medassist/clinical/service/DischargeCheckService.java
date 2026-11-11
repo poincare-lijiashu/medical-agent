@@ -162,7 +162,7 @@ public class DischargeCheckService {
         return new DischargeCheckItem(CODE_UNSTOPPED_LONG_ORDER, "ORDER", SEVERITY_WARNING,
                 RESULT_FAIL, "长期医嘱停止",
                 "仍有 " + unstopped.size() + " 条长期医嘱未停止（" + preview + more + "）",
-                "建议先在医嘱工作台停止长期医嘱，避免出院后留下仍有效的医嘱",
+                "出院时系统会按出院日自动停止；如需更早的停嘱时间，请先在医嘱工作台停嘱",
                 unstopped.size(), null);
     }
 
