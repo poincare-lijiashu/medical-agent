@@ -95,6 +95,10 @@ ingress:
     - secretName: medassist-staging-tls
       hosts: [medassist-staging.hospital.local]
 
+fhir:
+  # FHIR Bundle 的 fullUrl/self 必须是对外可回查地址（见 deployment-fhir.yaml）
+  baseUrl: https://medassist-staging.hospital.local/api/v2/fhir
+
 auth:
   replicaCount: 2
   image: {repository: platform-auth, tag: "0.1.0", pullPolicy: IfNotPresent}

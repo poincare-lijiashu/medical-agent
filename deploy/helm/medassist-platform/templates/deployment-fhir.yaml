@@ -1,0 +1,114 @@
+{{- if .Values.fhir.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "fhir") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "fhir") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "fhir") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "fhir") | nindent 4 }}
+spec:
+  {{- if not .Values.fhir.autoscaling.enabled }}
+  replicas: {{ .Values.fhir.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.fhir.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "fhir") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "fhir") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "fhir") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.fhir.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: fhir
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.fhir.image) }}
+          imagePullPolicy: {{ .Values.fhir.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.fhir.service.port }}
+              protocol: TCP
+          env:
+            # FHIR 是只读投影服务：不签发/校验 JWT（网关已认证），不直连其他业务服务。
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "fhir" "jwt" false "empi" false) | nindent 12 }}
+            {{- if .Values.fhir.baseUrl }}
+            - name: FHIR_BASE_URL
+              value: {{ .Values.fhir.baseUrl | quote }}
+            {{- end }}
+            {{- with .Values.fhir.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.fhir.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.fhir.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.fhir.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.fhir.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.fhir.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.fhir.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.fhir.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.fhir.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.fhir.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.fhir.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.fhir.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.fhir.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.fhir.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "fhir") | nindent 6 }}
+{{- end }}

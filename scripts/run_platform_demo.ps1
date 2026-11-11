@@ -37,6 +37,7 @@ $services = @(
     @{ name = "insurance"; port = 8087 },
     @{ name = "kb";        port = 8088 },
     @{ name = "material";  port = 8089 },
+    @{ name = "fhir";      port = 8090 },
     @{ name = "gateway";   port = 8080 }
 )
 
@@ -77,6 +78,9 @@ if ($Stop) {
 # ---------- 运行环境 ----------
 $env:MEDASSIST_ENV = "dev"                 # 必须显式声明：缺省按生产处理会拒绝启动
 $env:JWT_ISSUER = "medassist-auth"
+# FHIR Bundle 的 fullUrl/self 必须是**对外**地址：经网关时服务端看到的 Host 是内网地址，
+# 不配置会把链接写成 127.0.0.1:8090（对端拿到后无法回查）。
+$env:FHIR_BASE_URL = "http://127.0.0.1:8080/api/v2/fhir"
 
 # 密钥治理（第 129 批）：本脚本**不再内置任何演示密钥字面量**。
 # 两个值都必须来自 .env.local（或当前进程环境变量），缺失即 fail-fast——

@@ -31,6 +31,13 @@
     <maven-compiler-plugin.version>3.13.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
     <jacoco.version>0.8.12</jacoco.version>
+
+    <!--
+      HAPI FHIR R4（8.12.1，2026-11 经 repo1.maven.org maven-metadata.xml 核实）。
+      只引入 structures（资源模型 + JSON/XML 序列化），不引入 hapi-fhir-server：
+      后者基于 JAX-RS，与 Spring MVC 的鉴权/审计/错误壳需要重写适配，收益低于成本。
+    -->
+    <hapi-fhir.version>8.12.1</hapi-fhir.version>
   </properties>
 
   <modules>
@@ -45,6 +52,7 @@
     <module>emr</module>
     <module>insurance</module>
     <module>kb</module>
+    <module>fhir</module>
   </modules>
 
   <dependencyManagement>

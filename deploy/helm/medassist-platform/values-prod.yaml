@@ -266,6 +266,10 @@ ingress:
     - secretName: medassist-prod-tls
       hosts: [medassist.hospital.local]
 
+fhir:
+  # FHIR Bundle 的 fullUrl/self 必须是对外可回查地址（见 deployment-fhir.yaml）
+  baseUrl: https://medassist.hospital.local/api/v2/fhir
+
 serviceMonitor:
   enabled: true
   interval: 30s

@@ -11203,3 +11203,78 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 
 
 
+
+## 259. 2026-11-11 FHIR R4 开放层（第 259 批）
+
+**问题**
+
+- 互联互通/第三方接入此前只有 HL7 台账与平台私有 JSON 壳，没有标准资源层：
+  区域平台、医共体、科研系统每接一家都要单独适配一次；
+- 没有 CapabilityStatement，对端无法自助发现"支持哪些资源、哪些检索参数"；
+- PHI 读取缺少 FHIR 维度的统一脱敏口径与访问审计。
+
+**本批做了什么**
+
+1. **新模块 `platform-fhir`（8090）**：HAPI FHIR 8.12.1 只引 structures（资源模型 + JSON/XML 序列化），
+   不引 JAX-RS 服务端；鉴权、审计、错误壳继续走 Spring MVC。
+2. **网关路由 `/api/v2/fhir/**` 不剥前缀**：FHIR 的 `Bundle.fullUrl/self` 是对端回查地址，
+   路径被改写就会返回不存在的链接；服务同时映射 `/fhir/**`（直连）与 `/api/v2/fhir/**`（网关）。
+3. **资源映射（只读）**：
+   - `Patient` ← EMPI + 跨系统标识；合并档案 `active=false` + `link(replaced-by)`；
+   - `Encounter` ← 就诊 + 住院登记；门诊 `AMB` / 急诊 `EMER` / 住院 `IMP`，状态由两套状态机联合推导；
+   - `Observation` ← 结构化危急值指标（数值/单位、参考范围、`interpretation`）；
+   - `MedicationRequest` ← 处方明细，状态由处方状态机映射（PENDING_REVIEW/APPROVED=active 等）。
+4. **检索与协议**：`_id`、`_count`（默认 20 / 上限 100）、`_offset`（上限 10000）、`_format=json|xml`；
+   `date` 支持 `ge/gt/le/lt/eq`（仅日期精度）；非法 UUID/日期/状态/上限一律 400 `OperationOutcome`；
+   未实现资源 404 `not-supported`，写方法 405。
+5. **CapabilityStatement**：只声明已实现的 4 个资源与 read/search-type，避免"声明了但 404"。
+6. **权限（auth V82）**：`fhir:read`、`fhir:read_phi`，仅授予 ADMIN 与 INTEGRATION；
+   无 `fhir:read_phi` 时姓名/患者号掩码、出生日期只到年、跨系统标识不下发。
+7. **院区收敛**：`X-Campus` 缺失按主院区、`*` 显式全院区、非法值整体拒绝；
+   Encounter/Observation/MedicationRequest 的检索与按 id 读取都带院区条件。
+8. **访问审计**：`fhir_svc.access_log` 追加式（库级触发器拒绝 UPDATE/DELETE），
+   记录操作人/动作/资源/参数名摘要/结果/客户端 IP/trace；**参数值不落库**；
+   审计写失败时请求失败（fail-closed），不出现"读了 PHI 但没痕迹"。
+9. **指标与部署**：`medassist_fhir_requests_total{resource,outcome}`；
+   `run_platform_demo.ps1` 增加 fhir 与 `FHIR_BASE_URL`；Helm 增加 deployment/service/
+   migrate Job/HPA/PDB/NetworkPolicy 与网关 `PLATFORM_FHIR_URI`，staging/prod 配置对外 `baseUrl`。
+
+**验证**
+
+```
+真实库：flyway fhir V1 / auth V82 success
+        数据量 patient=731 visit=794 admission=256 critical=22 rx_item=270
+服务：8090 readiness UP；/fhir/metadata 200（fhirVersion 4.0.1，4 个资源）
+     Patient 731 / Encounter 718 / Observation 22 / MedicationRequest 234（主院区收敛后）
+     单资源读取、identifier/name/patient/status/date 过滤、category 非 laboratory 返回 0
+     无权限 403 forbidden；缺 X-Actor 403；非法 UUID/日期/_count 400 invalid
+     ImagingStudy 404 not-supported（_format=xml 时返回 application/fhir+xml）
+网关：admin01 登录 → GET /api/v2/fhir/Patient?_count=1 200，
+     fullUrl=http://127.0.0.1:8080/api/v2/fhir/Patient/...（对外地址正确）
+审计：fhir_svc.access_log 有 SEARCH/READ/METADATA 记录，query_summary 只含参数名
+后端：mvn -pl fhir -am test → 23 passed（映射 8 / 参数 6 / 控制器 9）
+     GatewayRouteConfigTest（11 条平台路由超时校验）→ 通过
+迁移安全检查：scanned=251 new=0，PASS
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **只读**：FHIR 写入会绕过审批、库存、收费与医保规则，本期一律不开放写；
+  需要写入时按域设计命令语义，而不是给 FHIR 开一个后门。
+- **不用 hapi-fhir-server**：JAX-RS 服务端的鉴权/审计/错误壳要整体重写，
+  收益低于直接用 Spring MVC 承载；只借它的资源模型与序列化，保标准、保可控。
+- **网关不剥前缀**：与其他模块路由风格不同，但这是"返回链接可用"的前提；
+  已在网关注释与 README 明示，避免后人按惯例改成 StripPrefix。
+- **Observation 只映射有结构化证据的数据**：不把报告文本拆成假 LOINC/数值；
+  映射边界写进 `platform/README.md`，避免被当成"已全量支持检验结果"。
+- **审计 fail-closed**：宁可本次读取失败，也不要留下无法追责的 PHI 访问。
+
+**遗留**
+
+- LIS ORU 的完整 OBX 明细尚未结构化落库（当前 Observation 只覆盖危急值指标），
+  需要新增结果明细表后扩展；
+- LOINC/SNOMED/ICD 术语映射未建立（属主数据治理 W4.2）；
+- `_include`/`_revinclude`、`_sort`、`_summary`、条件更新与批量 Bundle 未实现；
+- FHIR 写接口（ServiceRequest/DiagnosticReport/Procedure）未开放；
+- Patient 不按院区过滤（EMPI 跨院区共享），区域平台侧仍需按授权策略再收敛。

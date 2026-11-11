@@ -31,6 +31,9 @@
 | `platform-tech` | 8085 | 医技域：检查/检验申请、标本流转、报告与修订、危急值闭环 | 已交付（N3 第一批） |
 | `platform-emr` | 8086 | 病历域：结构化模板、质控（含书写时限）、三级签名、归档签署策略、修订留痕、病案修改审批、CDR 检索、打印视图 | 已交付（N4 两批） |
 | `platform-insurance` | 8087 | 医保域：医保目录、院内项目映射、参保登记、结算清单（测算/确认复核/作废冲正/对账） | 已交付（N5 两批） |
+| `platform-kb` | 8088 | 知识库：知识空间、文档解析与切片、企业检索 | 已交付 |
+| `platform-material` | 8089 | 物资耗材：目录、批次库存、出库、高值追溯与召回 | 已交付 |
+| `platform-fhir` | 8090 | FHIR R4 只读开放层：Patient / Encounter / Observation / MedicationRequest + CapabilityStatement | 已交付（§259） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -43,11 +46,46 @@
 /api/v2/tech/**         → http://127.0.0.1:8085   （StripPrefix=2，控制器自带 /tech 前缀）
 /api/v2/emr/**          → http://127.0.0.1:8086   （StripPrefix=2，控制器自带 /emr 前缀）
 /api/v2/insurance/**    → http://127.0.0.1:8087   （StripPrefix=2，控制器自带 /insurance 前缀）
+/api/v2/kb/**           → http://127.0.0.1:8088   （StripPrefix=2，控制器自带 /kb 前缀）
+/api/v2/material/**     → http://127.0.0.1:8089   （StripPrefix=2，控制器自带 /material 前缀）
+/api/v2/fhir/**         → http://127.0.0.1:8090   （**不剥前缀**：Bundle 链接必须是对端可回查的路径）
 ```
 
 路由目标可用环境变量覆盖：`AI_CORE_URI` / `PLATFORM_AUTH_URI` / `PLATFORM_EMPI_URI` /
 `PLATFORM_CLINICAL_URI` / `PLATFORM_PHARMACY_URI` / `PLATFORM_TECH_URI` / `PLATFORM_EMR_URI` /
-`PLATFORM_INSURANCE_URI`。
+`PLATFORM_INSURANCE_URI` / `PLATFORM_KB_URI` / `PLATFORM_MATERIAL_URI` / `PLATFORM_FHIR_URI`。
+
+## FHIR R4 开放层（§259）
+
+只读投影，不复制业务数据：写入仍走各业务域的命令接口（审批、库存、收费、医保规则不可绕过）。
+
+| FHIR R4 | 来源 | 说明 |
+|---|---|---|
+| `CapabilityStatement` | `GET /fhir/metadata` | 只声明**已实现**的 read / search-type 与参数 |
+| `Patient` | `empi_svc.patient` + `patient_crosswalk` | 合并档案返回 `active=false` + `link(replaced-by)` |
+| `Encounter` | `clinical_svc.visit` + `admission`/`ward`/`bed` | 门诊 `AMB`、急诊 `EMER`、住院 `IMP`；状态由就诊与住院状态机联合推导 |
+| `Observation` | `tech_svc.critical_value`（结构化指标） | 含数值/单位、参考范围、危急程度 `interpretation` |
+| `MedicationRequest` | `pharmacy_svc.prescription` + `prescription_item` | 一条明细一个资源；状态由处方状态机映射 |
+
+**检索**：`_id`、`_count`（默认 20，上限 100）、`_offset`（上限 10000）、`_format=json|xml`。
+`Patient` 另支持 `identifier`（`urn:medassist:patient-no` 或 `crosswalk 系统|值`）、`name`、`active`；
+`Encounter`/`Observation`/`MedicationRequest` 支持 `patient`、`status`、`date`（`yyyy-MM-dd`，
+可带 `ge/gt/le/lt/eq` 前缀）；`Observation` 另支持 `category=laboratory`。
+
+**权限与数据范围**：需要 `fhir:read`；患者明文标识（姓名/出生日期/患者号/跨系统标识）另需
+`fhir:read_phi`；二者默认只授予 `ADMIN` 与 `INTEGRATION`。数据按 `X-Campus` 收敛：缺失按主院区，
+`*` 为显式全院区，非法值整体拒绝。每次读取写 `fhir_svc.access_log`（只追加，库级触发器拒绝改删），
+审计写失败时请求失败——不出现"读了 PHI 但没痕迹"。
+
+**部署要点**：本服务只执行 SELECT（唯一写入是审计表）。生产建议指向只读副本，并使用仅授予
+`SELECT`（`fhir_svc.access_log` 另需 `INSERT`）的账号。`FHIR_BASE_URL` 必须配置为对外地址
+（如 `https://his.example.com/api/v2/fhir`），否则经网关返回的 `fullUrl` 会是内网地址。
+
+**已知映射边界（诚实记录，不用假数据补齐）**：
+- `Observation` 目前只覆盖**结构化危急值指标**；LIS ORU 的完整 OBX 明细仍以报告文本落库，
+  待检验结果明细结构化后扩展；
+- 本地编码统一用 `urn:medassist:*`，未建立 LOINC/SNOMED/ICD 映射（属主数据治理 W4.2）；
+- 不提供 `Practitioner`/`Location` 资源，就诊参与人与位置只给 `display`，避免悬空引用。
 
 ## 构建与运行
 

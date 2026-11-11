@@ -97,6 +97,10 @@ spec:
             - name: PLATFORM_KB_URI
               value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "kb")) .Values.kb.service.port | quote }}
             {{- end }}
+            {{- if .Values.fhir.enabled }}
+            - name: PLATFORM_FHIR_URI
+              value: {{ printf "http://%s:%v" (include "medassist.componentName" (dict "root" $ "component" "fhir")) .Values.fhir.service.port | quote }}
+            {{- end }}
             {{- with .Values.gateway.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

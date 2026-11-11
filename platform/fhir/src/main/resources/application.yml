@@ -1,0 +1,72 @@
+server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
+  port: 8090
+  # 优雅停机：滚动/灰度期在途的 FHIR 查询处理完再退出
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-fhir
+
+  datasource:
+    # 只读投影服务：与业务服务共用同一 PostgreSQL，但本服务**只执行 SELECT**
+    # （唯一写入是 fhir_svc.access_log 审计表）。生产建议指向只读副本，
+    # 并用只读账号 + 仅授予 SELECT 的权限收敛（见 platform/README.md「FHIR 开放层」）。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: fhir-pool
+      maximum-pool-size: 6
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: fhir_svc
+    default-schema: fhir_svc
+    locations: classpath:db/migration/fhir
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+medassist:
+  fhir:
+    # 分页上限：FHIR 客户端可以请求更大的 _count，但服务端必须截断，
+    # 否则一次查询可以把整院患者拉走（既打爆内存，也不符合最小必要原则）。
+    default-page-size: ${FHIR_DEFAULT_PAGE_SIZE:20}
+    max-page-size: ${FHIR_MAX_PAGE_SIZE:100}
+    # _offset 上限：防止深度翻页把数据库拖死；超出直接 400，而不是静默返回空。
+    max-offset: ${FHIR_MAX_OFFSET:10000}
+    # Bundle.fullUrl 前缀。留空则按当前请求推断（经网关时自动带上 /api/v2/fhir）。
+    base-url: ${FHIR_BASE_URL:}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: INFO

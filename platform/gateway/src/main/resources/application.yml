@@ -144,6 +144,17 @@ spring:
               metadata:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 response-timeout: ${GATEWAY_KB_RESPONSE_TIMEOUT_MS:60000}
+            # FHIR R4 开放层（Patient/Encounter/Observation/MedicationRequest，只读）
+            # 注意：**不剥前缀**。FHIR 的 Bundle.fullUrl/self 是对端回查地址，
+            # 路径一旦在网关被改写，返回的链接就指向不存在的路径；
+            # 服务端同时映射 /fhir/**（直连）与 /api/v2/fhir/**（经网关）。
+            - id: platform-fhir-v2
+              uri: ${PLATFORM_FHIR_URI:http://127.0.0.1:8090}
+              predicates:
+                - Path=/api/v2/fhir/**
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
