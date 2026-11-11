@@ -86,11 +86,12 @@ public class PrintEventController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Integer threshold,
             @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) Integer overdueDays,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.anomalies(CampusFilters.csv(scope.campusFilter()),
-                from, to, threshold, limit));
+                from, to, threshold, limit, overdueDays));
     }
 
     /**
@@ -104,11 +105,12 @@ public class PrintEventController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestParam(required = false) Integer threshold,
+            @RequestParam(required = false) Integer overdueDays,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.anomalySummary(CampusFilters.csv(scope.campusFilter()),
-                from, to, threshold));
+                from, to, threshold, overdueDays));
     }
 
     /**

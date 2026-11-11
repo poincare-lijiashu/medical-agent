@@ -53,18 +53,28 @@ public final class PrintModel {
      * <p>第 239 批追加 {@code review} 与 {@code pending}：异常必须有人签字。
      * `pending` = 从未处置，或最近一次处置早于最后一次补打（处置后又出纸，
      * 旧结论不能继续免责）；这类才进全局待办。
+     *
+     * <p>第 241 批追加 {@code ageDays} 与 {@code overdue}：`ageDays` 是自最后一次出纸
+     * 起的天数（含当天为 0），`overdue` 表示待核查且已超过院内时限（默认 7 天）。
+     * 超期由服务端判定，避免各端按本地时区/本地时钟各算一套。
      */
     public record PrintAnomaly(String docType, String docNo, String patientNo, long prints,
                                long actors, long unexplained,
                                OffsetDateTime firstAt, OffsetDateTime lastAt,
-                               Review review, boolean pending) {
+                               Review review, boolean pending, long ageDays, boolean overdue) {
     }
 
     /** 最近一次核查处置（第 239 批）；从未处置时整段为 null。 */
     public record Review(String verdict, String note, String actor, OffsetDateTime reviewedAt) {
     }
 
-    /** 待核查统计（第 239 批）：全局待办角标只认这一个数。 */
-    public record PrintAnomalySummary(long pending, long total) {
+    /**
+     * 待核查统计（第 239/241 批）：全局待办角标只认这一个数。
+     *
+     * <p>`overdue` 是 `pending` 的子集：既是“还没人签字”，又已经超过院内时限。
+     * 角标显示 pending，超期用于在待办里加一句提醒，不另开一条待办——
+     * 两行指向同一个页面，只会让人以为有两件事。
+     */
+    public record PrintAnomalySummary(long pending, long total, long overdue) {
     }
 }

@@ -331,4 +331,66 @@ def test_reprint_reason_is_shared_within_one_batch():
     assert "recentReason === " not in text  # 防回退成对象字面量比较
 
 
+# ---------------------------------------------------------------- 第 241 批：超期升级与统一审计
+
+
+def test_anomaly_review_writes_unified_audit():
+    """处置是对质控结论的变更，必须进统一审计流水，不能只躺在专用表。"""
+    repo = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "repo" / "PrintEventRepository.java"
+    )
+    assert "clinical_svc.clinical_change_log" in repo, "核查处置必须写统一审计表"
+    assert "PRINT_ANOMALY_REVIEW" in repo, "审计 action 必须稳定可查"
+    # 用户输入的说明不能手工拼 JSON
+    assert "jsonb_build_object" in repo, "审计 detail 必须在库内拼 JSON，避免引号/注入"
+
+    service = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "service" / "PrintEventService.java"
+    )
+    assert "logReview(" in service, "处置必须同时写审计（缺一不可）"
+
+    audit = _read(
+        REPO / "platform" / "auth" / "src" / "main" / "java" / "com" / "medassist" / "auth" / "repo"
+        / "AuditRepository.java"
+    )
+    assert "clinical_svc.clinical_change_log" in audit, "clinical 审计表必须仍在统一审计源里"
+
+
+def test_anomaly_overdue_is_server_judged():
+    """超期必须服务端判定，否则各端本地时钟/时区会各算一套。"""
+    service = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "service" / "PrintEventService.java"
+    )
+    assert "DEFAULT_OVERDUE_DAYS" in service, "超期时限必须有明确默认值"
+    assert "clampOverdueDays(" in service, "超期天数必须收敛（0 会让当天出纸立刻超期）"
+
+    repo = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "repo" / "PrintEventRepository.java"
+    )
+    assert "age_days" in repo, "必须给出“放了几天”供界面展示"
+    assert "AS overdue" in repo, "统计里必须单独给出超期数"
+
+    types = _read(SRC / "api" / "types.ts")
+    assert "overdue: boolean" in types and "ageDays: number" in types, "异常类型缺少超期字段"
+    assert "overdue: number" in types, "统计类型缺少超期数"
+
+
+def test_overdue_surfaces_without_a_second_todo():
+    """超期只加提醒，不新开待办；否则用户会以为有两件事。"""
+    todos = _read(SRC / "todos.ts")
+    assert "printAnomalyOverdue" in todos, "待办必须给出超期提示"
+    assert "note:" in todos, "待办项必须支持附加提醒"
+    shell = _read(SRC / "layouts" / "AppShell.vue")
+    assert "item.note" in shell, "壳层必须渲染待办附注"
+    assert "todo-item-note" in shell, "超期提示需要独立样式（块级小字）"
+
+    zh, en = _read(SRC / "i18n" / "zh-CN.ts"), _read(SRC / "i18n" / "en.ts")
+    assert "'todo.printAnomalyOverdue'" in zh and "'todo.printAnomalyOverdue'" in en
+
+    view = _read(SRC / "views" / "PrintHistoryView.vue")
+    assert "overdueCount" in view, "异常区必须显示超期条数"
+    assert "a.ageDays" in view, "超期行必须说明已放多少天"
+
+
+
 

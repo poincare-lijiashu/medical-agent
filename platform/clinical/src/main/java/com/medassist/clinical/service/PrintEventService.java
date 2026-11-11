@@ -47,6 +47,8 @@ public class PrintEventService {
     private static final String VERDICT_NEEDS_ACTION = "NEEDS_ACTION";
     /** 待核查角标的默认统计窗口（天）：角标轮询不能每次全表聚合。 */
     private static final int DEFAULT_ANOMALY_DAYS = 30;
+    /** 超期未核查时限（天）：再过多久就要升级提醒。 */
+    private static final int DEFAULT_OVERDUE_DAYS = 7;
     private static final int DEFAULT_LIMIT = 50;
     /** 单页上限：与前端“最近 200 条”对齐，防止一次拉全表。 */
     private static final int MAX_LIMIT = 200;
@@ -110,24 +112,26 @@ public class PrintEventService {
      * 避免有人把阈值调到 1 万后“查询成功但没有异常”的假安全感。
      */
     public List<PrintAnomaly> anomalies(String campusCsv, LocalDate from, LocalDate to,
-                                        Integer threshold, Integer limit) {
+                                        Integer threshold, Integer limit, Integer overdueDays) {
         if (from != null && to != null && from.isAfter(to)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始日期不能晚于结束日期");
         }
         int th = threshold == null ? 3 : Math.max(2, Math.min(threshold, 50));
         OffsetDateTime[] win = window(from, to);
-        return repo.listAnomalies(campusCsv, win[0], win[1], th, clampLimit(limit));
+        return repo.listAnomalies(campusCsv, win[0], win[1], th, clampLimit(limit),
+                clampOverdueDays(overdueDays));
     }
 
     /**
-     * 待核查统计（第 239 批）：全局待办角标只认这个数。
+     * 待核查统计（第 239/241 批）：全局待办角标只认这个数。
      *
      * <p>为什么默认只算最近 30 天：打印流水随业务量线性增长，
      * 角标每 60 秒轮询一次，若每次都全表聚合，等于给自己造一个慢查询。
      * 30 天覆盖“当月质控回头看”的常规节奏；历史账仍可在留痕页自定义区间查。
      */
     public PrintModel.PrintAnomalySummary anomalySummary(String campusCsv, LocalDate from,
-                                                         LocalDate to, Integer threshold) {
+                                                         LocalDate to, Integer threshold,
+                                                         Integer overdueDays) {
         LocalDate end = to;
         LocalDate start = from != null
                 ? from
@@ -138,7 +142,15 @@ public class PrintEventService {
         }
         int th = threshold == null ? 3 : Math.max(2, Math.min(threshold, 50));
         OffsetDateTime[] win = window(start, end);
-        return repo.anomalySummary(campusCsv, win[0], win[1], th);
+        return repo.anomalySummary(campusCsv, win[0], win[1], th, clampOverdueDays(overdueDays));
+    }
+
+    /** 超期天数收敛到 1–90：0 会让“当天出纸”立刻变超期，过大则提醒名存实亡。 */
+    private static int clampOverdueDays(Integer days) {
+        if (days == null) {
+            return DEFAULT_OVERDUE_DAYS;
+        }
+        return Math.max(1, Math.min(days, 90));
     }
 
     /**
@@ -147,7 +159,11 @@ public class PrintEventService {
      * <p>追加式：同一单号再次被处置会新增一行，最新一条为当前结论。
      * `NEEDS_ACTION` 必须写说明——只勾“需整改”不写要改什么，等于把问题又推回给下一个人；
      * `REASONABLE` 允许不写（核实为卡纸重打这类无需解释的情形）。
+     *
+     * <p>同时写统一审计流水（第 241 批）：处置属于对质控结论的变更，
+     * 必须能在统一审计页按人/按时间查得到，而不是只躺在专用表里。
      */
+    @org.springframework.transaction.annotation.Transactional
     public PrintModel.Review review(String docType, String docNo, String verdict, String note,
                                     String actor) {
         String type = requireText(docType, "单据类型", MAX_DOC_TYPE);
@@ -170,6 +186,7 @@ public class PrintEventService {
         String by = who == null || who.isBlank() ? "system" : who;
         OffsetDateTime now = OffsetDateTime.now();
         repo.insertReview(UUID.randomUUID(), type, no, v, text, by, now);
+        repo.logReview(type, no, v, text, by);
         return new PrintModel.Review(v, text, by, now);
     }
 

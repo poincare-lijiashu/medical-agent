@@ -54,6 +54,7 @@ const messages = {
   'todo.consults': '会诊待我填',
   'todo.rxRejected': '处方被驳回',
   'todo.printAnomaly': '补打异常待核查',
+  'todo.printAnomalyOverdue': '其中 {n} 条超 7 天未核查',
 
   /* ---------- 空闲超时 ---------- */
   'idle.title': '会话即将结束',

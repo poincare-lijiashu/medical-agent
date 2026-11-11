@@ -656,12 +656,17 @@ export interface PrintAnomaly {
   review: PrintAnomalyReview | null
   /** 未处置，或处置后又被补打——只有 pending 的才进全局待办。 */
   pending: boolean
+  /** 自最后一次出纸起的天数（当天为 0），用于展示“放了多久”。 */
+  ageDays: number
+  /** 待核查且超过院内时限（服务端判定，避免各端本地时钟各算一套）。 */
+  overdue: boolean
 }
 
-/** 待核查统计（第 239 批）：全局待办角标只认 pending。 */
+/** 待核查统计（第 239/241 批）：全局待办角标只认 pending，overdue 是其子集。 */
 export interface PrintAnomalySummary {
   pending: number
   total: number
+  overdue: number
 }
 
 /** 收费票据：金额/支付方式为开票快照；重打累计次数，作废留原因。 */

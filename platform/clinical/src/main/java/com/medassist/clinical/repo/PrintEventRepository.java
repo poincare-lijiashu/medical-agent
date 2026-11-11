@@ -163,10 +163,12 @@ public class PrintEventRepository {
      * “未处置 或 处置早于最后一次出纸”判定，SQL 只负责取数。
      */
     public List<PrintAnomaly> listAnomalies(String campusCsv, OffsetDateTime fromTs,
-                                            OffsetDateTime toTs, int threshold, int limit) {
+                                            OffsetDateTime toTs, int threshold, int limit,
+                                            int overdueDays) {
         return jdbc.sql(AGGREGATE_CTE + """
                         SELECT a.doc_type, a.doc_no, a.patient_no, a.prints, a.actors, a.unexplained,
                                a.first_at, a.last_at,
+                               floor(extract(epoch FROM (now() - a.last_at)) / 86400)::int AS age_days,
                                l.verdict, l.note AS review_note, l.actor AS review_actor,
                                l.reviewed_at
                           FROM agg a
@@ -187,6 +189,8 @@ public class PrintEventRepository {
                             rs.getString("review_note"),
                             rs.getString("review_actor"),
                             reviewedAt);
+                    boolean pending = reviewedAt == null || reviewedAt.isBefore(lastAt);
+                    int ageDays = rs.getInt("age_days");
                     return new PrintAnomaly(
                             rs.getString("doc_type"),
                             rs.getString("doc_no"),
@@ -197,19 +201,26 @@ public class PrintEventRepository {
                             rs.getObject("first_at", OffsetDateTime.class),
                             lastAt,
                             review,
-                            reviewedAt == null || reviewedAt.isBefore(lastAt));
+                            pending,
+                            ageDays,
+                            pending && ageDays >= overdueDays);
                 })
                 .list();
     }
 
-    /** 待核查统计（第 239 批）：全局待办只消费 pending 一个数。 */
+    /** 待核查统计（第 239/241 批）：pending 与其中已超期的 overdue。 */
     public PrintAnomalySummary anomalySummary(String campusCsv, OffsetDateTime fromTs,
-                                              OffsetDateTime toTs, int threshold) {
+                                              OffsetDateTime toTs, int threshold, int overdueDays) {
         return jdbc.sql(AGGREGATE_CTE + """
                         SELECT count(*) AS total,
                                count(*) FILTER (
                                    WHERE l.reviewed_at IS NULL OR l.reviewed_at < a.last_at
-                               ) AS pending
+                               ) AS pending,
+                               count(*) FILTER (
+                                   WHERE (l.reviewed_at IS NULL OR l.reviewed_at < a.last_at)
+                                     AND a.last_at < now()
+                                         - CAST(:overdueDays AS integer) * interval '1 day'
+                               ) AS overdue
                           FROM agg a
                           LEFT JOIN latest l ON l.doc_type = a.doc_type AND l.doc_no = a.doc_no
                         """)
@@ -217,7 +228,9 @@ public class PrintEventRepository {
                 .param("fromTs", fromTs)
                 .param("toTs", toTs)
                 .param("threshold", threshold)
-                .query((rs, i) -> new PrintAnomalySummary(rs.getLong("pending"), rs.getLong("total")))
+                .param("overdueDays", overdueDays)
+                .query((rs, i) -> new PrintAnomalySummary(rs.getLong("pending"), rs.getLong("total"),
+                        rs.getLong("overdue")))
                 .single();
     }
 
@@ -237,6 +250,34 @@ public class PrintEventRepository {
                 .param("note", note)
                 .param("actor", actor)
                 .param("reviewedAt", reviewedAt)
+                .update();
+    }
+
+    /**
+     * 核查处置写入统一审计流水（第 241 批）。
+     *
+     * <p>专用表回答“这张单现在是什么结论”，审计流水回答“谁在什么时候改过结论”。
+     * 两者都要：只写专用表时，统一审计页看不到质控的处置动作；
+     * 只写审计时，又无法按单号快速取当前状态。
+     *
+     * <p>`detail` 用 `jsonb_build_object` 在库内拼装：`note` 是用户自由文本，
+     * 手工拼 JSON 会因引号/反斜杠产生非法 JSON 甚至注入。
+     */
+    public void logReview(String docType, String docNo, String verdict, String note, String actor) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.clinical_change_log
+                            (actor, action, target_type, target_id, detail)
+                        VALUES
+                            (:actor, 'PRINT_ANOMALY_REVIEW', 'PRINT_ANOMALY', :targetId,
+                             jsonb_build_object('docType', :docType, 'docNo', :docNo,
+                                                'verdict', :verdict, 'note', :note))
+                        """)
+                .param("actor", actor)
+                .param("targetId", docType + ":" + docNo)
+                .param("docType", docType)
+                .param("docNo", docNo)
+                .param("verdict", verdict)
+                .param("note", note)
                 .update();
     }
 

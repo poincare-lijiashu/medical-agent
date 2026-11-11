@@ -256,16 +256,21 @@ export const clinicalApi = {
     offset?: number
     limit?: number
   }) => get<PrintEventPage>('/clinical/print-events', params),
-  /** 补打异常（第 237 批）：同一单号在期间内打印次数 ≥ threshold。 */
+  /** 补打异常（第 237/241 批）：同一单号在期间内打印次数 ≥ threshold；overdue 由服务端判定。 */
   printAnomalies: (params: {
     from?: string
     to?: string
     threshold?: number
     limit?: number
+    overdueDays?: number
   }) => get<PrintAnomaly[]>('/clinical/print-events/anomalies', params),
-  /** 待核查统计（第 239 批）：全局待办角标只取 pending；缺省最近 30 天。 */
-  printAnomalySummary: (params: { from?: string; to?: string; threshold?: number }) =>
-    get<PrintAnomalySummary>('/clinical/print-events/anomalies/summary', params),
+  /** 待核查统计（第 239/241 批）：全局待办角标只取 pending，超期用于加一句提醒。 */
+  printAnomalySummary: (params: {
+    from?: string
+    to?: string
+    threshold?: number
+    overdueDays?: number
+  }) => get<PrintAnomalySummary>('/clinical/print-events/anomalies/summary', params),
   /** 核查处置（第 239 批）：给一条补打异常签字，追加式；需整改时 note 必填。 */
   printAnomalyReview: (body: {
     docType: string

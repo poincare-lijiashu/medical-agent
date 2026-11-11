@@ -21,17 +21,27 @@ export interface TodoItem {
   count: number | null
   failed: boolean
   to: string
+  /** 附加提醒（如“其中 2 条超 7 天未核查”）；不单独占一条待办。 */
+  note?: string
 }
 
 async function tally(
   key: string,
   label: string,
   to: string,
-  fetchCount: () => Promise<number>,
+  fetchCount: () => Promise<number | { count: number; note?: string }>,
 ): Promise<TodoItem> {
   try {
-    const count = await fetchCount()
-    return { key, label, to, count: Math.max(0, count), failed: false }
+    const result = await fetchCount()
+    const raw = typeof result === 'number' ? result : result.count
+    return {
+      key,
+      label,
+      to,
+      count: Math.max(0, raw),
+      failed: false,
+      note: typeof result === 'number' ? undefined : result.note,
+    }
   } catch {
     return { key, label, to, count: null, failed: true }
   }
@@ -51,10 +61,14 @@ export async function loadTodoItems(): Promise<TodoItem[]> {
 
   if (hasRole(['ADMIN', 'QC'])) {
     // 第 239 批：补打异常只有质控/管理员能核查，其他人不显示这条待办（避免“有角标点进去 403”）
+    // 第 241 批：超期不另开一条待办，只在同一行加提示——两行指向同一页面会让人以为有两件事
     jobs.push(
       tally('printAnomaly', t('todo.printAnomaly'), '/print-events?anomaly=1', async () => {
         const data = await clinicalApi.printAnomalySummary({})
-        return data.pending ?? 0
+        return {
+          count: data.pending ?? 0,
+          note: data.overdue > 0 ? t('todo.printAnomalyOverdue', { n: String(data.overdue) }) : undefined,
+        }
       }),
     )
   }

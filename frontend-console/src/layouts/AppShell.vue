@@ -86,7 +86,10 @@
             role="menuitem"
             @click="todoOpen = false"
           >
-            <span class="todo-label">{{ item.label }}</span>
+            <span class="todo-label">
+              {{ item.label }}
+              <span v-if="item.note" class="todo-item-note">{{ item.note }}</span>
+            </span>
             <span class="spacer" />
             <span v-if="item.failed" class="todo-failed">{{ t('todo.failed') }}</span>
             <span v-else class="todo-count" :class="{ 'is-zero': item.count === 0 }">{{ item.count }}</span>
@@ -748,6 +751,15 @@ function onViewportChange(e: MediaQueryListEvent) {
 .todo-count {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* 第 241 批：超期提醒挂在同一待办行下，不新开一行 */
+.todo-item-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--warning-ink);
+  line-height: 1.3;
 }
 
 .todo-count.is-zero {

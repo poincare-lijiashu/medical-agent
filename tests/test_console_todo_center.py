@@ -58,7 +58,7 @@ def test_todo_sources_are_role_gated_and_deep_linked():
 def test_todo_failure_is_not_zero():
     src = _read(TODOS)
     assert "count: null" in src and "failed: true" in src
-    assert "Math.max(0, count)" in src
+    assert "Math.max(0, raw)" in src
     shell = _read(SHELL)
     assert "item.failed" in shell and "t('todo.failed')" in shell
     assert "t('todo.failedNote')" in shell

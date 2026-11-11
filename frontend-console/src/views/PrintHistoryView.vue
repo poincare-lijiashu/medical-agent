@@ -118,6 +118,7 @@
         <div class="anomaly-head">
           <h3 class="anomaly-title">补打异常</h3>
           <span v-if="pendingCount > 0" class="badge badge--warn">待核查 {{ pendingCount }}</span>
+          <span v-if="overdueCount > 0" class="badge badge--danger">超期 {{ overdueCount }}</span>
           <span class="muted small">同一单号在当前日期区间内打印次数达到阈值；换人补打同样计入，「未说明」为其中未登记原因的补打</span>
           <span class="spacer" />
           <label class="field anomaly-threshold">
@@ -172,7 +173,10 @@
                 </td>
                 <td data-label="最近一次" class="mono">{{ dateTime(a.lastAt) }}</td>
                 <td data-label="核查">
-                  <span v-if="a.pending" class="badge badge--warn">待核查</span>
+                  <span v-if="a.pending && a.overdue" class="badge badge--danger">
+                    超期 {{ a.ageDays }} 天
+                  </span>
+                  <span v-else-if="a.pending" class="badge badge--warn">待核查</span>
                   <template v-else-if="a.review">
                     <span
                       class="badge"
@@ -304,6 +308,9 @@ const reviewSaving = ref(false)
 
 /** 待核查条数：待办角标点进来后，页面自己也要说清楚还剩几条。 */
 const pendingCount = computed(() => anomalies.value.filter((a) => a.pending).length)
+
+/** 其中已超期（服务端按最后一次出纸时间与院内时限判定，前端不重算）。 */
+const overdueCount = computed(() => anomalies.value.filter((a) => a.overdue).length)
 
 const reviewSubtitle = computed(() => {
   const t = reviewTarget.value

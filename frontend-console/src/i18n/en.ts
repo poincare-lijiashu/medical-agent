@@ -51,6 +51,7 @@ const messages: Record<MessageKey, string> = {
   'todo.consults': 'Consults awaiting my opinion',
   'todo.rxRejected': 'Rejected prescriptions',
   'todo.printAnomaly': 'Print anomalies to review',
+  'todo.printAnomalyOverdue': '{n} overdue (7+ days)',
 
   /* ---------- Idle timeout ---------- */
   'idle.title': 'Session ending soon',
