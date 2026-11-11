@@ -2,7 +2,7 @@
   PDB：保证节点维护/驱逐时在线服务至少留 1 个可用副本。
   注意：minAvailable 必须小于副本数，否则驱逐会被永久阻塞（配合 HPA 时按 minReplicas 设置）。
 */}}
-{{- range $component := list "gateway" "auth" "empi" "clinical" "pharmacy" "material" "tech" "emr" "insurance" "kb" "fhir" "masterdata" "ops" }}
+{{- range $component := list "gateway" "auth" "empi" "clinical" "pharmacy" "material" "tech" "emr" "insurance" "kb" "fhir" "masterdata" "ops" "release" }}
 {{- $svc := index $.Values $component }}
 {{- if and $svc.enabled $svc.podDisruptionBudget.enabled }}
 apiVersion: policy/v1

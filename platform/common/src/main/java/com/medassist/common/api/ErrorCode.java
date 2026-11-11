@@ -534,7 +534,30 @@ public enum ErrorCode {
     OPS_POSTMORTEM_SELF_REVIEW(52423, "复盘作者不能审批自己的复盘，请由其他负责人复核"),
     OPS_POSTMORTEM_STATUS_INVALID(52424, "当前复盘状态不允许该操作"),
     OPS_POSTMORTEM_INCOMPLETE(52425, "复盘提交前必须填写根因与至少一条纠正措施"),
-    OPS_INCIDENT_INVALID(52426, "事件内容不合法（影响服务为空或关联工单不存在）");
+    OPS_INCIDENT_INVALID(52426, "事件内容不合法（影响服务为空或关联工单不存在）"),
+
+    // ---- 版本与补丁（53xxx，§273）----
+    REL_COMPONENT_NOT_FOUND(53401, "未找到该发布组件"),
+    REL_VERSION_NOT_FOUND(53402, "未找到该组件版本"),
+    REL_VERSION_DUPLICATE(53403, "该组件已存在相同版本号"),
+    REL_TRAIN_NOT_FOUND(53404, "未找到该发布列车"),
+    REL_TRAIN_STATUS_INVALID(53405, "当前列车状态不允许该操作"),
+    REL_TRAIN_ITEM_INVALID(53406, "列车车厢不合法（组件/版本不匹配、版本未发布或已作废）"),
+    REL_COMPATIBILITY_CONFLICT(53407, "发布列车存在兼容性冲突，不能冻结或发布"),
+    REL_PATCH_NOT_FOUND(53408, "未找到该补丁"),
+    REL_PATCH_STATUS_INVALID(53409, "当前补丁状态不允许该操作"),
+    REL_PATCH_SELF_REVIEW(53410, "补丁提交人不能审批自己的补丁，请由其他负责人复核"),
+    REL_FREEZE_ACTIVE(53411, "当前处于变更冻结窗口，禁止发布或部署"),
+    REL_CHECKLIST_INCOMPLETE(53412, "生产部署检查单不完整，请完成备份/回滚方案/冒烟/值班/变更单"),
+    REL_DEPLOYMENT_NOT_FOUND(53413, "未找到该部署记录"),
+    REL_ROLLBACK_NO_TARGET(53414, "没有可回滚的上一次成功部署"),
+    REL_VERSION_STATUS_INVALID(53415, "当前版本状态不允许该操作"),
+    REL_ACTOR_REQUIRED(53416, "发布操作必须带真实操作人，禁止匿名写入"),
+    REL_RELEASE_INVALID(53417, "发布内容不合法（版本号/时间/组件/检查单有误）"),
+    REL_TRAIN_DUPLICATE(53418, "发布列车编码已存在"),
+    REL_PATCH_INVALID(53419, "补丁内容不合法（影响版本为空或修复版本不属于该组件）"),
+    REL_WINDOW_NOT_FOUND(53420, "未找到该变更窗口"),
+    REL_WINDOW_INVALID(53421, "变更窗口不合法（结束时间必须晚于开始时间）");
 
     private final int code;
     private final String defaultMessage;

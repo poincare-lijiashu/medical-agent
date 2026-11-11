@@ -189,6 +189,16 @@ spring:
               metadata:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 response-timeout: ${GATEWAY_OPS_RESPONSE_TIMEOUT_MS:30000}
+            # 版本与补丁机制（组件版本/发布列车/兼容矩阵/补丁/冻结/部署回滚）：控制器自带 /release 前缀
+            - id: platform-release-v2
+              uri: ${PLATFORM_RELEASE_URI:http://127.0.0.1:8094}
+              predicates:
+                - Path=/api/v2/release/**
+              filters:
+                - StripPrefix=2
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_RELEASE_RESPONSE_TIMEOUT_MS:30000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2

@@ -52,7 +52,7 @@ public final class OpsDtos {
             @Min(1) @Max(525600) int responseMinutes,
             @Min(1) @Max(525600) int resolveMinutes,
             @Min(0) @Max(525600) Integer escalationMinutes,
-            boolean businessHours,
+            Boolean businessHours,
             @Size(max = 64) String calendarCode,
             @Pattern(regexp = "ACTIVE|INACTIVE") String status) {
     }

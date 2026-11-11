@@ -288,6 +288,12 @@ ops:
   env:
     - {name: NACOS_NAMESPACE, value: production}
 
+release:
+  replicaCount: 2
+  image: {repository: platform-release, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: production}
+
 serviceMonitor:
   enabled: true
   interval: 30s

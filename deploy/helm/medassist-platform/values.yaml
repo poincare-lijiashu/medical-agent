@@ -609,6 +609,39 @@ ops:
   tolerations: []
   affinity: {}
 
+# ---- 版本与补丁机制（组件版本/发布列车/兼容矩阵/补丁/部署回滚；计划书 G7）----
+release:
+  enabled: true
+  image:
+    repository: platform-release
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8094
+  resources:
+    requests: {cpu: 150m, memory: 384Mi}
+    limits: {cpu: 500m, memory: 768Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- 医技域（检查/检验申请、标本、报告、危急值）----
 tech:
   enabled: true

@@ -63,7 +63,7 @@ class GatewayRouteConfigTest {
         List<Map<String, Object>> platformRoutes = routes(loadConfig()).stream()
                 .filter(r -> String.valueOf(r.get("id")).startsWith("platform-"))
                 .toList();
-        assertThat(platformRoutes).hasSize(14);
+        assertThat(platformRoutes).hasSize(15);
 
         for (Map<String, Object> r : platformRoutes) {
             assertThat(r.get("metadata")).as("路由 %s 缺少 metadata", r.get("id")).isNotNull();

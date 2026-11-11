@@ -119,7 +119,8 @@ public class SlaService {
             throw new BusinessException(ErrorCode.OPS_SLA_INVALID,
                     "响应/解决时限必须为正，且解决时限不能早于响应时限");
         }
-        if (req.businessHours() && (req.calendarCode() == null || req.calendarCode().isBlank())) {
+        boolean businessHours = Boolean.TRUE.equals(req.businessHours());
+        if (businessHours && (req.calendarCode() == null || req.calendarCode().isBlank())) {
             throw new BusinessException(ErrorCode.OPS_SLA_INVALID, "营业时间模式必须绑定营业日历");
         }
         Calendar calendar = null;
@@ -131,7 +132,7 @@ public class SlaService {
                 existing == null ? UUID.randomUUID() : existing.id(),
                 req.serviceCode(), req.priority(), req.responseMinutes(), req.resolveMinutes(),
                 req.escalationMinutes() == null ? 0 : req.escalationMinutes(),
-                req.businessHours(), calendar == null ? null : calendar.code(),
+                businessHours, calendar == null ? null : calendar.code(),
                 req.status() == null ? "ACTIVE" : req.status(), existing == null ? 0 : existing.version()));
         repo.audit(actor, "POLICY_UPSERT", req.serviceCode() + "/" + req.priority(),
                 Map.of("responseMinutes", saved.responseMinutes(),

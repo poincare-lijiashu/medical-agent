@@ -1,0 +1,64 @@
+server:
+  max-http-request-header-size: 32KB
+  port: 8094
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-release
+
+  datasource:
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: release-pool
+      maximum-pool-size: 8
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: release_svc
+    default-schema: release_svc
+    locations: classpath:db/migration/release
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+medassist:
+  release:
+    # 生产部署强制检查项（逗号分隔，Helm 以 OPS 方式注入时用 REL_PROD_CHECKLIST）
+    prod-checklist: ${REL_PROD_CHECKLIST:backup,rollback_plan,smoke_test,oncall_confirmed,change_ticket}
+    max-page-size: ${REL_MAX_PAGE_SIZE:200}
+    audit-list-default: ${REL_AUDIT_LIST_DEFAULT:50}
+    audit-list-max: ${REL_AUDIT_LIST_MAX:200}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: INFO

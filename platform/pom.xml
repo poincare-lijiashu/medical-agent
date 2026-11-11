@@ -64,6 +64,7 @@
     <module>masterdata</module>
     <module>migration</module>
     <module>ops</module>
+    <module>release</module>
   </modules>
 
   <dependencyManagement>

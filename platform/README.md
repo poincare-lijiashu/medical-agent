@@ -36,7 +36,8 @@
 | `platform-fhir` | 8090 | FHIR R4 只读开放层：Patient / Encounter / Observation / MedicationRequest + CapabilityStatement | 已交付（§259） |
 | `platform-masterdata` | 8091 | 主数据治理：域注册、条目版本链、外部编码映射、变更审批、批量导入与质量看板 | 已交付（§269） |
 | `platform-migration` | 8092 | 历史数据迁移：目标/字段字典、可复用映射档案、预检校验、分批应用、版本反向回滚、迁移对账 | 已交付（§270） |
-| `platform-ops` | 8093 | 运营支撑：服务目录、SLA 策略与营业日历、工单全生命周期、超时扫描与运营看板 | 已交付（§271） |
+| `platform-ops` | 8093 | 运营支撑：服务目录、SLA 策略与营业日历、工单全生命周期、值班与事件复盘 | 已交付（§271/§272） |
+| `platform-release` | 8094 | 版本与补丁：组件版本、发布列车、兼容矩阵、补丁分级审批、冻结窗口、部署与回滚记录 | 已交付（§273） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -637,7 +638,52 @@ SLA/目录、值班、复盘审批、审计）。**SLA 修改不能让一线自�
   并成为"告警之后人的处理过程"的真源；
 - 值班排班是"生成后的事实"，查询不现算；重新生成不会覆盖已有人工调整；
 - 事件与工单是两级：工单是一个请求，事件是一次影响面，一个事件可关联主工单；
-- 版本与补丁机制（发布列车、兼容矩阵、回滚记录）放在 §273。
+- 前端运营工作台、告警自动建单与 CI/CD 发布联动放在后续批次。
+
+## 版本与补丁机制（§273）
+
+**定位**：医院系统的发布不是"把 jar 换掉"。一个版本必须能回答：包含哪些组件、和哪些版本兼容、
+有没有破坏性变更、补丁分级是什么、谁批的、哪个窗口允许发布、发布时检查了什么、出问题回滚到哪一版。
+本服务把这些事实做成可查询、可审计的系统记录。
+
+| 能力 | 实现 |
+|---|---|
+| 组件目录 | `rel_component`：13 个平台服务 + AI 中台 + 前端 + 基础设施 |
+| 版本注册 | `rel_version`：组件 + 版本唯一，记录 commit/镜像摘要/schema 版本；RELEASED 后内容不可改 |
+| 发布列车 | `rel_release_train` / `rel_train_item`：一组组件的联合发布；冻结后不允许增删车厢 |
+| 兼容矩阵 | `rel_compatibility`：显式 REQUIRES / CONFLICTS 边，不做版本号大小推断 |
+| 补丁 | `rel_patch`：CRITICAL–LOW，DRAFT→REVIEW→APPROVED→RELEASED，提交人不能自审 |
+| 变更窗口 | `rel_change_window`：FREEZE 禁止发布/部署，scope 为空表示全院 |
+| 部署记录 | `rel_deployment`：PROD 必须带完整检查单；回滚是新增 ROLLBACK 记录并指回原部署 |
+| 审计 | `rel_change_log` 追加式，记录版本/列车/补丁/窗口/部署的全部动作 |
+
+**发布口径**：
+- 版本发布门槛：变更说明 ≥10 字符；SERVICE/AI/WEB 必须有镜像摘要；INFRA 必须有 schema 版本；
+- 列车冻结/发布前校验兼容矩阵：所有 REQUIRES 必须在车厢中且版本精确匹配，CONFLICTS 不能同时出现；
+- 发布列车必须在冻结后、且当前不在 FREEZE 窗口；
+- 生产 DEPLOY 必须完成检查单（备份/回滚方案/冒烟/值班/变更单）；
+- 冻结窗口内禁止 DEPLOY；HOTFIX 只有指向已发布补丁的修复版本才允许穿透；
+- ROLLBACK 永远允许（恢复稳定性），但必须指向上一次成功部署并写原因。
+
+**API 一览**（`/api/v2/release/**`，控制器自带 `/release`）：
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| `GET` | `/components`、`/versions`、`/trains`、`/patches`、`/change-windows`、`/deployments` | `release:read` | 查询 |
+| `POST` | `/components`、`/versions`、`/trains`、`/trains/{id}/items`、`/patches`、`/change-windows` | `release:write` | 编排 |
+| `POST` | `/versions/{id}/publish`、`/trains/{id}/freeze`、`/trains/{id}/release`、`/patches/{id}/approve`、`/patches/{id}/release` | `release:approve` | 发布/审批 |
+| `POST` | `/deployments`、`/deployments/{id}/rollback` | `release:deploy` | 部署/回滚 |
+| `GET` | `/trains/{id}/readiness`、`/trains/{id}/compatibility` | `release:read` | 就绪报告/兼容冲突 |
+| `GET` | `/audit` | `release:audit:read` | 发布审计 |
+
+**权限**（auth V91）：`release:read` / `release:write` / `release:approve` / `release:deploy` /
+`release:audit:read`；角色 `RELEASE_MANAGER`（编排+审批+审计）与 `SRE_DEPLOYER`
+（只读+部署/回滚）。**能部署的人不能自己审批自己的发布**。
+
+**边界**：
+- 不直接操作 Kubernetes/镜像仓库：本服务记录"应该发什么、谁批的、发了什么"，执行仍由 CI/CD 完成；
+- 不做数据库 schema 的自动回滚：schema 版本只登记，回滚由 DBA 按变更单执行；
+- 版本号不强制 semver：院内构建号/日期版本同样可用，关键是唯一与不可变。
 
 ## 构建与运行
 
