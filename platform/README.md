@@ -235,6 +235,37 @@ python scripts/chs_sim.py --port 9099
 - **正式结果只读登记**：`OFFICIAL` 结果不参与院内测算，只用于差异分析；
 - **证据追加式**：`grouper_result` 由库级触发器拒绝 UPDATE/DELETE。
 
+## 输血闭环（WS/T 867—2025，§264）
+
+在既有"申请→配血→发血→输注→不良反应"状态机上补齐标准要求的三段证据：
+
+| 环节 | 证据表 | 门禁 |
+|---|---|---|
+| 输血前评估 | `transfusion_precheck` | 发血前必须有（评估人、指征、血常规/凝血、免疫筛查、知情同意签字） |
+| 发血核对 | `transfusion_issue` | 发血者 ≠ 核对者、取血人必填、外观正常且血袋完整 |
+| 输注观察 | `transfusion_observation` | 完成输注前至少一条（15 分钟观察），只增不改 |
+
+配血记录新增患者 ABO/RhD、主侧/次侧、抗体筛查；主/次侧任一不合时配血结论不能是 `COMPATIBLE`。
+不良反应新增类型（过敏/发热非溶血/溶血/TACO/TRALI/感染/其他）、上报对象与 `REPORTED → CLOSED` 闭环。
+
+| 变量 | 说明 |
+|---|---|
+| `TRANSFUSION_PRECHECK_REQUIRED` | 发血前是否强制输血前评估（默认 `true`；仅历史补录/演练可关闭） |
+| `TRANSFUSION_OBSERVATION_REQUIRED` | 完成输注前是否强制观察记录（默认 `true`） |
+
+**新增 API**（`/clinical/transfusion/**`）：
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `POST /requests/{id}/precheck` | `transfusion:request:write` | 输血前评估与知情同意（只能写一次） |
+| `POST /requests/{id}/issue` | `transfusion:issue:manage` | 发血核对（双人 + 取血人 + 外观检查） |
+| `POST /records/{id}/observations` | `transfusion:execute` | 追加输注观察（15 分钟观察） |
+| `POST /reactions/{id}/close` | `transfusion:execute` | 不良反应闭环 |
+| `GET /stats?days=` | `transfusion:request:read` | 期间质量指标、成分用量、不良反应分布 |
+
+边界：证据表（评估/发血核对/观察）由库级触发器拒绝 UPDATE/DELETE；
+关闭配置项只用于历史数据补录，接口不会因为关闭而伪造证据。
+
 ## 构建与运行
 
 ```powershell

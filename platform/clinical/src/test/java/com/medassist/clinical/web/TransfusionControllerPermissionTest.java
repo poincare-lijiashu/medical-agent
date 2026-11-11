@@ -6,9 +6,13 @@ import com.medassist.clinical.web.TransfusionDtos.CancelReq;
 import com.medassist.clinical.web.TransfusionDtos.CompleteTransfusionReq;
 import com.medassist.clinical.web.TransfusionDtos.CreateRequestReq;
 import com.medassist.clinical.web.TransfusionDtos.CrossmatchReq;
+import com.medassist.clinical.web.TransfusionDtos.IssueReq;
+import com.medassist.clinical.web.TransfusionDtos.ObservationReq;
+import com.medassist.clinical.web.TransfusionDtos.PrecheckReq;
 import com.medassist.clinical.web.TransfusionDtos.ReactionReq;
 import com.medassist.clinical.web.TransfusionDtos.RequestSummaryView;
 import com.medassist.clinical.web.TransfusionDtos.StartTransfusionReq;
+import com.medassist.clinical.web.TransfusionDtos.StatsView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
@@ -100,17 +104,49 @@ class TransfusionControllerPermissionTest {
     @DisplayName("配血/发血：各自独立权限")
     void crossmatchAndIssuePermissions() {
         CrossmatchReq crossmatch = new CrossmatchReq("BAG001", "A", "POSITIVE", "COMPATIBLE",
-                "微柱凝胶法", LocalDate.now().plusDays(20), null);
+                "微柱凝胶法", LocalDate.now().plusDays(20), null, "A", "POSITIVE",
+                "COMPATIBLE", null, "NEGATIVE");
         assertForbidden(() -> controller.crossmatch(requestId, crossmatch,
                 "transfusion:issue:manage", "bloodbank01", fullScope));
         controller.crossmatch(requestId, crossmatch, "transfusion:crossmatch:manage",
                 "bloodbank01", fullScope);
         verify(service).crossmatch(requestId, crossmatch, "bloodbank01");
 
-        assertForbidden(() -> controller.issue(requestId, "transfusion:crossmatch:manage",
-                "bloodbank01", fullScope));
-        controller.issue(requestId, "transfusion:issue:manage", "bloodbank01", fullScope);
-        verify(service).issue(requestId, "bloodbank01");
+        IssueReq issue = new IssueReq("bloodbank02", "porter01", "NORMAL", true);
+        assertForbidden(() -> controller.issue(requestId, issue,
+                "transfusion:crossmatch:manage", "bloodbank01", fullScope));
+        controller.issue(requestId, issue, "transfusion:issue:manage", "bloodbank01", fullScope);
+        verify(service).issue(requestId, issue, "bloodbank01");
+    }
+
+    @Test
+    @DisplayName("评估/观察/闭环/报表：评估走申请写入，观察与闭环走执行，报表走只读")
+    void newEndpointPermissions() {
+        PrecheckReq precheck = new PrecheckReq("重度贫血", null, null, null, null, "A",
+                "POSITIVE", null, null, null, null, null, "张三", null);
+        assertForbidden(() -> controller.precheck(requestId, precheck,
+                "transfusion:execute", "doctor01", fullScope));
+        controller.precheck(requestId, precheck, "transfusion:request:write", "doctor01",
+                fullScope);
+        verify(service).savePrecheck(requestId, precheck, "doctor01");
+
+        ObservationReq observation = new ObservationReq(null, new BigDecimal("36.8"), 82,
+                118, 78, 40, false, "无不适");
+        assertForbidden(() -> controller.observe(recordId, observation,
+                "transfusion:issue:manage", "nurse01", fullScope));
+        controller.observe(recordId, observation, "transfusion:execute", "nurse01", fullScope);
+        verify(service).observe(recordId, observation, "nurse01");
+
+        assertForbidden(() -> controller.closeReaction(UUID.randomUUID(),
+                "transfusion:request:write", "qc01", fullScope));
+        controller.closeReaction(UUID.randomUUID(), "transfusion:execute", "qc01", fullScope);
+
+        assertForbidden(() -> controller.stats(30, "transfusion:execute", "qc01"));
+        when(service.stats(30, "qc01")).thenReturn(new StatsView(Instant.now(), Instant.now(),
+                new com.medassist.clinical.domain.ClinicalModel.TransfusionPeriodStat(
+                        2, 1, 0, 1, 0, 0), List.of(), List.of()));
+        assertThat(controller.stats(30, "transfusion:request:read", "qc01")
+                .data().period().requests()).isEqualTo(2);
     }
 
     @Test
@@ -130,7 +166,8 @@ class TransfusionControllerPermissionTest {
         controller.complete(recordId, complete, "transfusion:execute", "nurse01", fullScope);
         verify(service).complete(recordId, complete, "nurse01");
 
-        ReactionReq reaction = new ReactionReq("MILD", "皮疹", "停药观察");
+        ReactionReq reaction = new ReactionReq("MILD", "皮疹", "停药观察", "ALLERGIC",
+                "HOSPITAL");
         assertForbidden(() -> controller.reaction(recordId, reaction,
                 "transfusion:request:write", "nurse01", fullScope));
         controller.reaction(recordId, reaction, "transfusion:execute", "nurse01", fullScope);

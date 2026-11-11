@@ -227,7 +227,8 @@ final class PhiMask {
                 r.issuedBy(), r.issuedAt(), r.startedBy(), r.startedAt(), r.completedBy(),
                 r.completedAt(), r.cancelReason(), r.cancelledBy(), r.cancelledAt(), r.createdBy(),
                 r.version(), r.createdAt(), r.updatedAt());
-        return new RequestView(masked, view.crossmatches(), view.record(), view.reaction());
+        return new RequestView(masked, view.crossmatches(), view.record(), view.reaction(),
+                view.precheck(), view.issue(), view.observations());
     }
 
     static SurgeryBoardView board(SurgeryBoardView view, DataScope scope) {

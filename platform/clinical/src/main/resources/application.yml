@@ -76,6 +76,10 @@ clinical:
   ai:
     base-url: ${CLINICAL_AI_BASE_URL:}
     timeout: ${CLINICAL_AI_TIMEOUT:PT3S}
+  # 输血闭环约束（第 264 批，WS/T 867—2025）：默认要求发血前评估与输注观察
+  transfusion:
+    precheck-required: ${TRANSFUSION_PRECHECK_REQUIRED:true}
+    observation-required: ${TRANSFUSION_OBSERVATION_REQUIRED:true}
   # 入站内部接口令牌（病历域读取入院时间、医保域拉取收费明细）；与出站共用同一令牌
   internal-api-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
 

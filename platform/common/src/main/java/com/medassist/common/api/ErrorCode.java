@@ -173,6 +173,12 @@ public enum ErrorCode {
     TRANSFUSION_REACTION_INVALID(44539, "输血不良反应内容不合法（分级/症状）"),
     TRANSFUSION_CANCEL_REASON_REQUIRED(44540, "取消输血申请必须填写原因"),
     TRANSFUSION_REACTION_EXISTS(44541, "该输注记录已上报不良反应，请勿重复上报"),
+    TRANSFUSION_PRECHECK_REQUIRED(44542, "发血前必须完成输血前评估与知情同意"),
+    TRANSFUSION_PRECHECK_EXISTS(44543, "该申请已存在输血前评估记录，不允许覆盖"),
+    TRANSFUSION_ISSUE_CHECK_INVALID(44544, "发血核对不合法（双人核对/取血人/血液外观/血袋完整性）"),
+    TRANSFUSION_OBSERVATION_REQUIRED(44545, "完成输注前至少需要一条输注观察记录（15 分钟观察）"),
+    TRANSFUSION_REACTION_STATUS_INVALID(44546, "当前不良反应状态不允许该操作"),
+    TRANSFUSION_REACTION_NOT_FOUND(44547, "未找到该输血不良反应记录"),
 
     // ---- CA 电子签名（44xxx 续，G41）----
     CA_SIGNATURE_NOT_FOUND(44550, "未找到该 CA 电子签名"),

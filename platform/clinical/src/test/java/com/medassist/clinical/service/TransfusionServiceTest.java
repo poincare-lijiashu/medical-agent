@@ -1,15 +1,21 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.client.PatientClient;
+import com.medassist.clinical.config.TransfusionProperties;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.BloodCrossmatch;
 import com.medassist.clinical.domain.ClinicalModel.BloodProduct;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionPrecheck;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionReaction;
 import com.medassist.clinical.domain.ClinicalModel.TransfusionRecord;
 import com.medassist.clinical.domain.ClinicalModel.TransfusionRequest;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.TransfusionDtos.CompleteTransfusionReq;
 import com.medassist.clinical.web.TransfusionDtos.CreateRequestReq;
 import com.medassist.clinical.web.TransfusionDtos.CrossmatchReq;
+import com.medassist.clinical.web.TransfusionDtos.IssueReq;
+import com.medassist.clinical.web.TransfusionDtos.ObservationReq;
+import com.medassist.clinical.web.TransfusionDtos.PrecheckReq;
 import com.medassist.clinical.web.TransfusionDtos.ReactionReq;
 import com.medassist.clinical.web.TransfusionDtos.StartTransfusionReq;
 import com.medassist.common.api.ErrorCode;
@@ -61,7 +67,8 @@ class TransfusionServiceTest {
     void setUp() {
         repo = mock(ClinicalRepository.class);
         patientClient = mock(PatientClient.class);
-        service = new TransfusionService(repo, patientClient, objectMapper);
+        service = new TransfusionService(repo, patientClient, objectMapper,
+                new TransfusionProperties(true, true));
     }
 
     private Admission admission() {
@@ -99,7 +106,16 @@ class TransfusionServiceTest {
     private BloodCrossmatch crossmatch(String result) {
         return new BloodCrossmatch(crossmatchId, "TXM20261104000001", requestId, "BAG001",
                 "A", "POSITIVE", result, "微柱凝胶法", BusinessTime.today().plusDays(20),
-                null, "bloodbank01", Instant.now(), 0L, Instant.now());
+                null, "bloodbank01", Instant.now(), 0L, Instant.now(),
+                "A", "POSITIVE", "COMPATIBLE", null, "NEGATIVE");
+    }
+
+    private TransfusionPrecheck precheck() {
+        Instant now = Instant.now();
+        return new TransfusionPrecheck(requestId, "doctor01", now, "重度贫血",
+                new BigDecimal("70"), new BigDecimal("25"), 150, "正常", "A", "POSITIVE",
+                "NEGATIVE", "NEGATIVE", "NEGATIVE", "NEGATIVE", "NEGATIVE",
+                "张三", now, null, now);
     }
 
     private TransfusionRecord record(String status, long version) {
@@ -115,6 +131,7 @@ class TransfusionServiceTest {
                 request(TransfusionRequest.REQUESTED, 0)));
         when(repo.listCrossmatchesByRequest(any())).thenReturn(List.of());
         when(repo.findTransfusionRecordByRequest(any())).thenReturn(Optional.empty());
+        when(repo.listObservations(any())).thenReturn(List.of());
     }
 
     @Test
@@ -174,26 +191,38 @@ class TransfusionServiceTest {
         stubDetail();
 
         service.crossmatch(requestId, new CrossmatchReq("BAG001", "A", "POSITIVE",
-                "COMPATIBLE", "微柱凝胶法", BusinessTime.today().plusDays(20), null),
-                "bloodbank01");
+                "COMPATIBLE", "微柱凝胶法", BusinessTime.today().plusDays(20), null,
+                "A", "POSITIVE", "COMPATIBLE", null, "NEGATIVE"), "bloodbank01");
         verify(repo).markTransfusionCrossmatched(eq(requestId), any(), eq("BAG001"),
                 any(), eq(0L));
 
         when(repo.findCrossmatchByBagNo("BAG001")).thenReturn(Optional.of(crossmatch("COMPATIBLE")));
         assertThatThrownBy(() -> service.crossmatch(requestId,
                 new CrossmatchReq("BAG001", "A", "POSITIVE", "COMPATIBLE", "微柱凝胶法",
-                        BusinessTime.today().plusDays(20), null), "bloodbank01"))
+                        BusinessTime.today().plusDays(20), null,
+                        "A", "POSITIVE", "COMPATIBLE", null, "NEGATIVE"), "bloodbank01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_CROSSMATCH_INVALID);
+
+        // 主侧不合却把结论写成相合：必须拒绝（不能把不相合的血袋发出去）
+        when(repo.findCrossmatchByBagNo("BAG002")).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.crossmatch(requestId,
+                new CrossmatchReq("BAG002", "A", "POSITIVE", "COMPATIBLE", "微柱凝胶法",
+                        BusinessTime.today().plusDays(20), null,
+                        "A", "POSITIVE", "INCOMPATIBLE", null, "NEGATIVE"), "bloodbank01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.TRANSFUSION_CROSSMATCH_INVALID);
     }
 
     @Test
-    @DisplayName("发血：未配血/过期拒绝，相合后推进 ISSUED")
+    @DisplayName("发血：未配血/过期/缺评估/同人核对/外观异常均拒绝，合规后推进 ISSUED")
     void issueRules() {
+        IssueReq okReq = new IssueReq("bloodbank02", "porter01", "NORMAL", true);
         TransfusionRequest requested = request(TransfusionRequest.REQUESTED, 0);
         when(repo.lockTransfusionRequest(requestId)).thenReturn(Optional.of(requested));
-        assertThatThrownBy(() -> service.issue(requestId, "bloodbank01"))
+        assertThatThrownBy(() -> service.issue(requestId, okReq, "bloodbank01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.TRANSFUSION_STATUS_INVALID);
@@ -202,19 +231,43 @@ class TransfusionServiceTest {
         when(repo.lockTransfusionRequest(requestId)).thenReturn(Optional.of(crossmatched));
         BloodCrossmatch expired = new BloodCrossmatch(crossmatchId, "TXM1", requestId, "BAG001",
                 "A", "POSITIVE", "COMPATIBLE", "微柱凝胶法", BusinessTime.today().minusDays(1),
-                null, "bloodbank01", Instant.now(), 0L, Instant.now());
+                null, "bloodbank01", Instant.now(), 0L, Instant.now(),
+                "A", "POSITIVE", "COMPATIBLE", null, "NEGATIVE");
         when(repo.findCompatibleCrossmatchByRequest(requestId)).thenReturn(Optional.of(expired));
-        assertThatThrownBy(() -> service.issue(requestId, "bloodbank01"))
+        assertThatThrownBy(() -> service.issue(requestId, okReq, "bloodbank01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.TRANSFUSION_CROSSMATCH_INVALID);
 
+        // 血袋有效但缺少输血前评估：发血必须被拦住
         when(repo.findCompatibleCrossmatchByRequest(requestId)).thenReturn(Optional.of(
                 crossmatch("COMPATIBLE")));
+        when(repo.findPrecheck(requestId)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.issue(requestId, okReq, "bloodbank01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_PRECHECK_REQUIRED);
+
+        // 发血者与核对者是同一人：拒绝
+        when(repo.findPrecheck(requestId)).thenReturn(Optional.of(precheck()));
+        assertThatThrownBy(() -> service.issue(requestId,
+                new IssueReq("bloodbank01", "porter01", "NORMAL", true), "bloodbank01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_ISSUE_CHECK_INVALID);
+
+        // 血液外观异常：拒绝
+        assertThatThrownBy(() -> service.issue(requestId,
+                new IssueReq("bloodbank02", "porter01", "ABNORMAL", true), "bloodbank01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_ISSUE_CHECK_INVALID);
+
         when(repo.markTransfusionIssued(requestId, "bloodbank01", 1)).thenReturn(true);
         stubDetail();
-        service.issue(requestId, "bloodbank01");
+        service.issue(requestId, okReq, "bloodbank01");
         verify(repo).markTransfusionIssued(requestId, "bloodbank01", 1);
+        verify(repo).insertIssue(any());
     }
 
     @Test
@@ -253,10 +306,19 @@ class TransfusionServiceTest {
     }
 
     @Test
-    @DisplayName("完成输注：记录与申请同时完成")
+    @DisplayName("完成输注：无观察记录拒绝；有观察后记录与申请同时完成")
     void completeFlow() {
         when(repo.lockTransfusionRecord(recordId)).thenReturn(Optional.of(
                 record(TransfusionRecord.TRANSFUSING, 0)));
+        when(repo.countObservations(recordId)).thenReturn(0L);
+        assertThatThrownBy(() -> service.complete(recordId,
+                new CompleteTransfusionReq(new BigDecimal("200"), new BigDecimal("36.8"),
+                        82, 118, 78), "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_OBSERVATION_REQUIRED);
+
+        when(repo.countObservations(recordId)).thenReturn(1L);
         when(repo.lockTransfusionRequest(requestId)).thenReturn(Optional.of(
                 request(TransfusionRequest.TRANSFUSING, 3)));
         when(repo.completeTransfusionRecord(eq(recordId), any(), any(), any(), any(), any(),
@@ -277,20 +339,101 @@ class TransfusionServiceTest {
         when(repo.lockTransfusionRecord(recordId)).thenReturn(Optional.of(
                 record(TransfusionRecord.TRANSFUSING, 0)));
         assertThatThrownBy(() -> service.reportReaction(recordId,
-                new ReactionReq("UNKNOWN", "皮疹", null), "nurse01"))
+                new ReactionReq("UNKNOWN", "皮疹", null, null, null), "nurse01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.TRANSFUSION_REACTION_INVALID);
 
         when(repo.findReactionByRecord(recordId)).thenReturn(Optional.of(
-                new com.medassist.clinical.domain.ClinicalModel.TransfusionReaction(
-                        UUID.randomUUID(), "TRR1", recordId, requestId, "MILD", "皮疹",
-                        null, "nurse01", Instant.now(), Instant.now())));
+                new TransfusionReaction(UUID.randomUUID(), "TRR1", recordId, requestId, "MILD",
+                        "皮疹", null, "nurse01", Instant.now(), Instant.now(), "ALLERGIC",
+                        "HOSPITAL", TransfusionReaction.REPORTED, null, null)));
         assertThatThrownBy(() -> service.reportReaction(recordId,
-                new ReactionReq("MILD", "皮疹", null), "nurse01"))
+                new ReactionReq("MILD", "皮疹", null, null, null), "nurse01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.TRANSFUSION_REACTION_EXISTS);
+    }
+
+    @Test
+    @DisplayName("输血前评估：重复提交拒绝；枚举不合法拒绝；成功写证据")
+    void precheckRules() {
+        when(repo.lockTransfusionRequest(requestId)).thenReturn(Optional.of(
+                request(TransfusionRequest.REQUESTED, 0)));
+        when(repo.findPrecheck(requestId)).thenReturn(Optional.of(precheck()));
+        assertThatThrownBy(() -> service.savePrecheck(requestId,
+                new PrecheckReq("贫血", null, null, null, null, "A", "POSITIVE", null,
+                        null, null, null, null, "张三", null), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_PRECHECK_EXISTS);
+
+        when(repo.findPrecheck(requestId)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.savePrecheck(requestId,
+                new PrecheckReq("贫血", null, null, null, null, "C", "POSITIVE", null,
+                        null, null, null, null, "张三", null), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_REQUEST_INVALID);
+
+        stubDetail();
+        service.savePrecheck(requestId, new PrecheckReq("贫血", new BigDecimal("70"), null,
+                150, null, "A", "POSITIVE", "NEGATIVE", "NEGATIVE", "NEGATIVE",
+                "NEGATIVE", "NEGATIVE", "张三", null), "doctor01");
+        verify(repo).insertPrecheck(any());
+    }
+
+    @Test
+    @DisplayName("输注观察：非输注中拒绝；观察时间早于开始时间拒绝；成功追加")
+    void observationRules() {
+        when(repo.findTransfusionRecord(recordId)).thenReturn(Optional.of(
+                record(TransfusionRecord.COMPLETED, 1)));
+        assertThatThrownBy(() -> service.observe(recordId,
+                new ObservationReq(null, new BigDecimal("36.8"), 82, 118, 78, 40, false, null),
+                "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_STATUS_INVALID);
+
+        when(repo.findTransfusionRecord(recordId)).thenReturn(Optional.of(
+                record(TransfusionRecord.TRANSFUSING, 0)));
+        assertThatThrownBy(() -> service.observe(recordId,
+                new ObservationReq(Instant.now().minusSeconds(3600), new BigDecimal("36.8"),
+                        82, 118, 78, 40, false, null), "nurse01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.TRANSFUSION_REQUEST_INVALID);
+
+        when(repo.findTransfusionRequest(requestId)).thenReturn(Optional.of(
+                request(TransfusionRequest.TRANSFUSING, 3)));
+        when(repo.findTransfusionRecordByRequest(requestId)).thenReturn(Optional.of(
+                record(TransfusionRecord.TRANSFUSING, 0)));
+        when(repo.listObservations(any())).thenReturn(List.of());
+        service.observe(recordId, new ObservationReq(null, new BigDecimal("36.8"), 82,
+                118, 78, 40, false, "无不适"), "nurse01");
+        verify(repo).insertObservation(any());
+    }
+
+    @Test
+    @DisplayName("不良反应闭环：已关闭幂等；非法状态拒绝")
+    void closeReactionRules() {
+        TransfusionReaction closed = new TransfusionReaction(UUID.randomUUID(), "TRR1",
+                recordId, requestId, "MILD", "皮疹", null, "nurse01", Instant.now(),
+                Instant.now(), "ALLERGIC", "HOSPITAL", TransfusionReaction.CLOSED,
+                "qc01", Instant.now());
+        when(repo.findReaction(closed.id())).thenReturn(Optional.of(closed));
+        stubDetail();
+        service.closeReaction(closed.id(), "qc01");
+        verify(repo, never()).closeReaction(any(), any());
+
+        TransfusionReaction reported = new TransfusionReaction(UUID.randomUUID(), "TRR2",
+                recordId, requestId, "MILD", "皮疹", null, "nurse01", Instant.now(),
+                Instant.now(), "ALLERGIC", "HOSPITAL", TransfusionReaction.REPORTED,
+                null, null);
+        when(repo.findReaction(reported.id())).thenReturn(Optional.of(reported));
+        when(repo.closeReaction(reported.id(), "qc01")).thenReturn(true);
+        service.closeReaction(reported.id(), "qc01");
+        verify(repo).closeReaction(reported.id(), "qc01");
     }
 
     @Test

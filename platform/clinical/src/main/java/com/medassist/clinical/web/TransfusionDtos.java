@@ -1,7 +1,13 @@
 package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.ClinicalModel.BloodCrossmatch;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionComponentUsage;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionIssue;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionObservation;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionPeriodStat;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionPrecheck;
 import com.medassist.clinical.domain.ClinicalModel.TransfusionReaction;
+import com.medassist.clinical.domain.ClinicalModel.TransfusionReactionStat;
 import com.medassist.clinical.domain.ClinicalModel.TransfusionRecord;
 import com.medassist.clinical.domain.ClinicalModel.TransfusionRequest;
 import jakarta.validation.constraints.DecimalMax;
@@ -39,6 +45,10 @@ public final class TransfusionDtos {
             @NotBlank @Size(max = 500) String indication) {
     }
 
+    /**
+     * 配血请求：主侧/次侧与抗体筛查可选；填了就必须自洽——
+     * 主侧不合时不允许把整体结果写成 COMPATIBLE。
+     */
     public record CrossmatchReq(
             @NotBlank @Size(max = 64) String bagNo,
             @NotBlank @Size(max = 8) String donorBloodType,
@@ -46,6 +56,49 @@ public final class TransfusionDtos {
             @NotBlank @Size(max = 16) String result,
             @NotBlank @Size(max = 64) String method,
             @NotNull LocalDate bagExpireAt,
+            @Size(max = 500) String note,
+            @Size(max = 8) String patientAbo,
+            @Size(max = 16) String patientRhd,
+            @Size(max = 16) String majorResult,
+            @Size(max = 16) String minorResult,
+            @Size(max = 16) String antibodyScreen) {
+    }
+
+    /** 输血前评估与知情同意（发血前必须具备；评估人取当前登录人）。 */
+    public record PrecheckReq(
+            @NotBlank @Size(max = 500) String indication,
+            @DecimalMin("20") @DecimalMax("250") BigDecimal hemoglobin,
+            @DecimalMin("5") @DecimalMax("80") BigDecimal hematocrit,
+            Integer platelet,
+            @Size(max = 200) String coagulation,
+            @Size(max = 8) String patientAbo,
+            @Size(max = 16) String patientRhd,
+            @Size(max = 16) String antibodyScreen,
+            @Size(max = 16) String hbsag,
+            @Size(max = 16) String hcv,
+            @Size(max = 16) String hiv,
+            @Size(max = 16) String syphilis,
+            @NotBlank @Size(max = 64) String consentSignedBy,
+            @Size(max = 500) String note) {
+    }
+
+    /** 发血核对：发血者取当前登录人，核对者与取血人必填。 */
+    public record IssueReq(
+            @NotBlank @Size(max = 64) String checkedBy,
+            @NotBlank @Size(max = 64) String fetchedBy,
+            @Size(max = 16) String appearance,
+            Boolean bagIntact) {
+    }
+
+    /** 输注观察：观察时间缺省取当前时间；反应标记由观察者判断。 */
+    public record ObservationReq(
+            java.time.Instant observedAt,
+            @DecimalMin("30") @DecimalMax("45") BigDecimal temperature,
+            Integer pulse,
+            Integer systolic,
+            Integer diastolic,
+            Integer dripRate,
+            Boolean reactionFlag,
             @Size(max = 500) String note) {
     }
 
@@ -69,7 +122,9 @@ public final class TransfusionDtos {
     public record ReactionReq(
             @NotBlank @Size(max = 16) String severity,
             @NotBlank @Size(max = 1000) String symptoms,
-            @Size(max = 1000) String actionTaken) {
+            @Size(max = 1000) String actionTaken,
+            @Size(max = 32) String reactionType,
+            @Size(max = 16) String reportedTo) {
     }
 
     public record CancelReq(@Size(max = 500) String reason) {
@@ -84,10 +139,19 @@ public final class TransfusionDtos {
     }
 
     public record RequestView(TransfusionRequest request, List<BloodCrossmatch> crossmatches,
-                              TransfusionRecord record, TransfusionReaction reaction) {
+                              TransfusionRecord record, TransfusionReaction reaction,
+                              TransfusionPrecheck precheck, TransfusionIssue issue,
+                              List<TransfusionObservation> observations) {
     }
 
     public record BoardView(long requested, long crossmatched, long issued, long transfusing,
                             long completedToday, long reactionsToday, long totalToday) {
+    }
+
+    /** 输血报表：期间质量指标 + 成分用量 + 不良反应分布。 */
+    public record StatsView(java.time.Instant from, java.time.Instant to,
+                            TransfusionPeriodStat period,
+                            List<TransfusionComponentUsage> components,
+                            List<TransfusionReactionStat> reactions) {
     }
 }

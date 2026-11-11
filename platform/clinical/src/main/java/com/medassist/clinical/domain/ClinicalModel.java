@@ -1464,12 +1464,19 @@ public final class ClinicalModel {
         }
     }
 
-    /** 配血记录：一次申请最多一条 COMPATIBLE，不合可换袋重配。 */
+    /**
+     * 配血记录：一次申请最多一条 COMPATIBLE，不合可换袋重配。
+     *
+     * <p>WS/T 867 要求区分主侧/次侧与抗体筛查；老数据这三列为空，
+     * 新数据由配血接口按需填写（未填不伪造"相合"）。
+     */
     public record BloodCrossmatch(UUID id, String crossmatchNo, UUID requestId, String bagNo,
                                   String donorBloodType, String donorRh, String result,
                                   String method, LocalDate bagExpireAt, String note,
                                   String testedBy, Instant testedAt, long version,
-                                  Instant createdAt) {
+                                  Instant createdAt, String patientAbo, String patientRhd,
+                                  String majorResult, String minorResult,
+                                  String antibodyScreen) {
 
         public static final String COMPATIBLE = "COMPATIBLE";
         public static final String INCOMPATIBLE = "INCOMPATIBLE";
@@ -1498,10 +1505,57 @@ public final class ClinicalModel {
         }
     }
 
-    /** 输血不良反应（一次输注一份）。 */
+    /** 输血不良反应（一次输注一份）：类型 + 上报对象 + REPORTED/CLOSED 闭环。 */
     public record TransfusionReaction(UUID id, String reactionNo, UUID recordId, UUID requestId,
                                       String severity, String symptoms, String actionTaken,
-                                      String reportedBy, Instant reportedAt, Instant createdAt) {
+                                      String reportedBy, Instant reportedAt, Instant createdAt,
+                                      String reactionType, String reportedTo, String reportStatus,
+                                      String closedBy, Instant closedAt) {
+
+        public static final String REPORTED = "REPORTED";
+        public static final String CLOSED = "CLOSED";
+
+        public boolean closed() {
+            return CLOSED.equals(reportStatus);
+        }
+    }
+
+    /** 输血前评估与知情同意（WS/T 867）：发血前必须具备。 */
+    public record TransfusionPrecheck(UUID requestId, String assessedBy, Instant assessedAt,
+                                      String indication, BigDecimal hemoglobin,
+                                      BigDecimal hematocrit, Integer platelet, String coagulation,
+                                      String patientAbo, String patientRhd,
+                                      String antibodyScreen, String hbsag, String hcv,
+                                      String hiv, String syphilis, String consentSignedBy,
+                                      Instant consentSignedAt, String note, Instant createdAt) {
+    }
+
+    /** 发血核对：发血/核对双人（不同人）+ 取血人 + 外观/血袋完整性。 */
+    public record TransfusionIssue(UUID requestId, String issuedBy, String checkedBy,
+                                   String fetchedBy, String appearance, boolean bagIntact,
+                                   Instant issuedAt) {
+    }
+
+    /** 输注观察（15 分钟观察）：生命体征、滴速与反应标记，只增不改。 */
+    public record TransfusionObservation(UUID id, UUID recordId, Instant observedAt,
+                                         BigDecimal temperature, Integer pulse, Integer systolic,
+                                         Integer diastolic, Integer dripRate,
+                                         boolean reactionFlag, String note, String observedBy,
+                                         Instant createdAt) {
+    }
+
+    /** 输血报表：按成分统计申请次数与总量。 */
+    public record TransfusionComponentUsage(String componentCode, String componentName,
+                                            String unit, long requests, BigDecimal totalQuantity) {
+    }
+
+    /** 输血报表：不良反应按分级与类型统计。 */
+    public record TransfusionReactionStat(String severity, String reactionType, long count) {
+    }
+
+    /** 输血报表：期间总量与质量指标（评估覆盖率、不良反应率、闭环率）。 */
+    public record TransfusionPeriodStat(long requests, long completed, long cancelled,
+                                        long prechecks, long reactions, long closedReactions) {
     }
 
     /** 输血看板：各状态数量与当日完成/不良反应。 */

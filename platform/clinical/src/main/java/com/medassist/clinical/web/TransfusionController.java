@@ -7,10 +7,14 @@ import com.medassist.clinical.web.TransfusionDtos.CancelReq;
 import com.medassist.clinical.web.TransfusionDtos.CompleteTransfusionReq;
 import com.medassist.clinical.web.TransfusionDtos.CreateRequestReq;
 import com.medassist.clinical.web.TransfusionDtos.CrossmatchReq;
+import com.medassist.clinical.web.TransfusionDtos.IssueReq;
+import com.medassist.clinical.web.TransfusionDtos.ObservationReq;
+import com.medassist.clinical.web.TransfusionDtos.PrecheckReq;
 import com.medassist.clinical.web.TransfusionDtos.ReactionReq;
 import com.medassist.clinical.web.TransfusionDtos.RequestSummaryView;
 import com.medassist.clinical.web.TransfusionDtos.RequestView;
 import com.medassist.clinical.web.TransfusionDtos.StartTransfusionReq;
+import com.medassist.clinical.web.TransfusionDtos.StatsView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.DataScope;
@@ -113,14 +117,29 @@ public class TransfusionController {
                 service.crossmatch(id, req, actor), scope));
     }
 
+    /** 输血前评估与知情同意（发血前必须具备）。 */
+    @PostMapping("/requests/{id}/precheck")
+    public ApiResponse<RequestView> precheck(
+            @PathVariable UUID id,
+            @Valid @RequestBody PrecheckReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, WRITE);
+        return ApiResponse.ok(PhiMask.transfusionRequest(
+                service.savePrecheck(id, req, actor), scope));
+    }
+
+    /** 发血核对（发血/核对双人 + 取血人 + 外观检查）。 */
     @PostMapping("/requests/{id}/issue")
     public ApiResponse<RequestView> issue(
             @PathVariable UUID id,
+            @Valid @RequestBody IssueReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
             DataScope scope) {
         Permissions.require(permissions, ISSUE);
-        return ApiResponse.ok(PhiMask.transfusionRequest(service.issue(id, actor), scope));
+        return ApiResponse.ok(PhiMask.transfusionRequest(service.issue(id, req, actor), scope));
     }
 
     @PostMapping("/requests/{id}/start")
@@ -167,6 +186,40 @@ public class TransfusionController {
         Permissions.require(permissions, EXECUTE);
         return ApiResponse.ok(PhiMask.transfusionRequest(
                 service.reportReaction(id, req, actor), scope));
+    }
+
+    /** 输注观察（15 分钟观察）：只增不改。 */
+    @PostMapping("/records/{id}/observations")
+    public ApiResponse<RequestView> observe(
+            @PathVariable UUID id,
+            @Valid @RequestBody ObservationReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, EXECUTE);
+        return ApiResponse.ok(PhiMask.transfusionRequest(service.observe(id, req, actor), scope));
+    }
+
+    /** 不良反应闭环：REPORTED → CLOSED。 */
+    @PostMapping("/reactions/{id}/close")
+    public ApiResponse<RequestView> closeReaction(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, EXECUTE);
+        return ApiResponse.ok(PhiMask.transfusionRequest(
+                service.closeReaction(id, actor), scope));
+    }
+
+    /** 输血报表：期间质量指标、成分用量、不良反应分布。 */
+    @GetMapping("/stats")
+    public ApiResponse<StatsView> stats(
+            @RequestParam(defaultValue = "30") int days,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.stats(days, actor));
     }
 
     @GetMapping("/board")

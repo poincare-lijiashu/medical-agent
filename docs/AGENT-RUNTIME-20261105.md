@@ -11546,4 +11546,75 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 未内置/导入真实 409/634 核心与细分组、DIP 9520 核心病种，需院方提供规则包后抽样测；
 - 未实现 DRG/DIP 3.0 差异比对报告（导入两版规则包后可做字段级 diff，本批未做）；
 - CC/MCC 只按次要诊断前缀匹配，未做"主诊断-次要诊断组合表"级别的排除逻辑；
-- 未按月/科室/医师维度出分组差异报表与超支预警（W2.5/W2.6 后续批次）。
+- 未按月/科室/医师维度出分组差异报表与超支预警（W2.5/W2.6 后续批次）；
+- 控制台暂未提供规则包导入/差异分析页面（接口与报表已具备，前端排期）。
+
+## 264. 2026-11-11 输血闭环补齐 WS/T 867—2025（第 264 批）
+
+**问题**
+
+- 既有 G40 只有"申请→配血→发血→输注→不良反应"状态机，缺少标准要求的三段证据：
+  **输血前评估/知情同意**、**发血双人核对与血液外观检查**、**输注中观察**；
+- 配血只有一个 COMPATIBLE/INCOMPATIBLE 结论，没有主侧/次侧、患者 ABO/RhD 复核与抗体筛查；
+- 不良反应只有分级，没有类型、上报对象与闭环状态，无法做质量统计。
+
+**本批做了什么**
+
+1. **输血前评估**（`transfusion_precheck`，V69）：评估人/时间、指征、Hb/Hct/PLT/凝血、
+   患者 ABO/RhD、抗体筛查、乙肝/丙肝/HIV/梅毒筛查、知情同意签字人与时间；
+   证据只允许写一次（重复提交 44543），**发血前必须有**（默认强制，可配置关闭用于补录）；
+2. **发血核对**（`transfusion_issue`）：发血者 ≠ 核对者、取血人必填、
+   血液外观必须 NORMAL 且血袋完整；命中异常直接拒绝，不允许"先发再补"；
+3. **输注观察**（`transfusion_observation`）：观察时间、体温/脉搏/血压、滴速、反应标记与备注；
+   观察时间不得早于输注开始、不得预填未来；**完成输注前至少一条**（15 分钟观察）；
+4. **配血细化**：`patient_abo/patient_rhd/major_result/minor_result/antibody_screen`；
+   主侧或次侧为 INCOMPATIBLE 时配血结论不能写 COMPATIBLE；
+5. **不良反应闭环**：类型（过敏/发热非溶血/溶血/TACO/TRALI/感染/其他）、上报对象
+   （院内/血站/两者）、REPORTED → CLOSED（关闭人/时间）；
+6. **报表**：`GET /stats?days=` 返回期间申请/完成/取消、评估覆盖数、不良反应数与闭环数、
+   成分用量与不良反应分布；
+7. **配置**：`TRANSFUSION_PRECHECK_REQUIRED` / `TRANSFUSION_OBSERVATION_REQUIRED`
+   默认 true；关闭只用于历史补录/演练，接口不会因关闭而伪造证据；
+8. **证据不可改**：评估/发血核对/观察三张表由库级触发器拒绝 UPDATE/DELETE
+   （复用 V22 的 `reject_audit_mutation()`）。
+
+**验证**
+
+```
+后端：mvn -pl clinical -am test → 通过（含既有门诊/住院/手术/护理/急诊测试）
+      TransfusionServiceTest 13 条：评估缺失/重复、同人核对、外观异常、无观察完成、
+          主侧不合写相合、观察时间越界、不良反应闭环等
+      TransfusionControllerPermissionTest 6 条：新增接口权限矩阵
+迁移 lint：scanned=256 new=0 PASS
+真实库（dev，重启 clinical）：flyway v69 success
+端到端（admin01，网关 8080，真实库）：
+      POST /requests → a5b3595d…（REQUESTED）
+      POST /precheck → patientAbo=A、知情同意人已落库
+      POST /crossmatch（BAG892941，主侧 COMPATIBLE）→ CROSSMATCHED
+      POST /issue（bloodbank02 核对、porter01 取血）→ ISSUED
+      POST /start（nurse01+nurse02）→ TRANSFUSING，record=2e175f60…
+      POST /observations（36.8℃/82/118/78/40 滴）→ 1 条
+      POST /complete（200ml）→ COMPLETED
+      GET /stats?days=7 → requests=5 completed=3 prechecks=1
+库内核对：update transfusion_precheck 被触发器拒绝（"追加式审计表，禁止 UPDATE"）
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **默认强制而不是默认放宽**：输血是高危操作，"先发血后补评估"是真实事故来源；
+  因此两项门禁默认开启，仅保留显式关闭给历史补录；
+- **评估证据一次性**：同一申请不允许覆盖评估内容；需要修正时作废申请重开，
+  避免"改一下指征就合规"；
+- **观察不等于不良反应**：观察里的 `reaction_flag` 只做提示，真正的不良反应仍走独立上报，
+  保证可分级、可上报、可闭环；
+- **不做血袋全生命周期**：退血/报废/血站库存不在本批，避免把输血科 LIS 的职责拉进 HIS；
+- **报表只做期间聚合**：不做实时大屏，避免在事务库上跑重查询。
+
+**遗留**
+
+- 未接血站/输血科系统（血液入库、血袋状态、退血/报废仍在他系统）；
+- 未做输血指征的规则引擎（如 Hb 阈值按病种/年龄自动判断），当前由医生评估填写；
+- 未做不良反应上报的外部接口（血站/国家平台），当前只落院内闭环；
+- 未做条码/RFID 扫描核对（腕带-血袋双扫码），需移动端与硬件配合；
+- 控制台输血页暂未展示评估/观察/闭环字段与报表（接口已具备，前端排期）。

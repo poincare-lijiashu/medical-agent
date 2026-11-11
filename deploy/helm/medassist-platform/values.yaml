@@ -379,6 +379,9 @@ clinical:
     startup: {failureThreshold: 30, periodSeconds: 5}
     liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
     readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 输血闭环（§264，WS/T 867）：生产保持默认 true；仅历史补录/演练可显式关闭
+  #   TRANSFUSION_PRECHECK_REQUIRED / TRANSFUSION_OBSERVATION_REQUIRED
+  # 详见 platform/README.md「输血闭环（WS/T 867—2025，§264）」
   env: []
   nodeSelector: {}
   tolerations: []
