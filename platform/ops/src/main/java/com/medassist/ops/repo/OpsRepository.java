@@ -46,6 +46,9 @@ public class OpsRepository {
 
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
+    private static final TypeReference<List<Map<String, Object>>> LIST_MAP_TYPE =
+            new TypeReference<>() {
+            };
     private static final ObjectMapper STATIC_JSON = new ObjectMapper();
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -456,6 +459,387 @@ public class OpsRepository {
         return com.medassist.ops.support.TicketNumbers.ticket(seq == null ? 1 : seq);
     }
 
+    // ------------------------------------------------------------------ 值班轮换
+
+    private static final RowMapper<OpsModel.OnCallRotation> ROTATION_MAPPER = (rs, n) ->
+            new OpsModel.OnCallRotation(
+                    rs.getObject("id", UUID.class),
+                    rs.getString("group_code"),
+                    rs.getString("name"),
+                    rs.getString("timezone"),
+                    rs.getObject("start_date", LocalDate.class),
+                    rs.getInt("cycle_days"),
+                    stringList(rs, "members"),
+                    rs.getObject("handover_time", LocalTime.class),
+                    rs.getString("status"),
+                    rs.getLong("version"));
+
+    public List<OpsModel.OnCallRotation> listRotations() {
+        return plain.query("""
+                SELECT id, group_code, name, timezone, start_date, cycle_days, members,
+                       handover_time, status, version
+                  FROM ops_svc.ops_oncall_rotation ORDER BY group_code
+                """, ROTATION_MAPPER);
+    }
+
+    public Optional<OpsModel.OnCallRotation> findRotation(UUID id) {
+        return plain.query("""
+                SELECT id, group_code, name, timezone, start_date, cycle_days, members,
+                       handover_time, status, version
+                  FROM ops_svc.ops_oncall_rotation WHERE id = ?
+                """, ROTATION_MAPPER, id).stream().findFirst();
+    }
+
+    public boolean insertRotation(OpsModel.OnCallRotation rotation) {
+        return jdbc.update("""
+                INSERT INTO ops_svc.ops_oncall_rotation
+                    (id, group_code, name, timezone, start_date, cycle_days, members,
+                     handover_time, status)
+                VALUES (:id, :group, :name, :timezone, :start, :cycle, CAST(:members AS text[]),
+                        :handover, :status)
+                ON CONFLICT (group_code) DO NOTHING
+                """, new MapSqlParameterSource()
+                .addValue("id", rotation.id())
+                .addValue("group", rotation.groupCode())
+                .addValue("name", rotation.name())
+                .addValue("timezone", rotation.timezone())
+                .addValue("start", rotation.startDate())
+                .addValue("cycle", rotation.cycleDays())
+                .addValue("members", arrayLiteral(rotation.members()))
+                .addValue("handover", rotation.handoverTime())
+                .addValue("status", rotation.status())) > 0;
+    }
+
+    private static final RowMapper<OpsModel.OnCallShift> SHIFT_MAPPER = (rs, n) ->
+            new OpsModel.OnCallShift(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("rotation_id", UUID.class),
+                    rs.getObject("shift_date", LocalDate.class),
+                    rs.getString("primary_user"),
+                    rs.getString("secondary_user"),
+                    rs.getString("note"));
+
+    public List<OpsModel.OnCallShift> listShifts(UUID rotationId, LocalDate from, LocalDate to) {
+        return plain.query("""
+                SELECT id, rotation_id, shift_date, primary_user, secondary_user, note
+                  FROM ops_svc.ops_oncall_shift
+                 WHERE rotation_id = ? AND shift_date BETWEEN ? AND ?
+                 ORDER BY shift_date
+                """, SHIFT_MAPPER, rotationId, from, to);
+    }
+
+    /** 今日值班：groupCode 为空返回全部组。 */
+    public List<Map<String, Object>> shiftsOn(LocalDate date, String groupCode) {
+        String sql = """
+                SELECT r.group_code, r.name, s.shift_date, s.primary_user, s.secondary_user
+                  FROM ops_svc.ops_oncall_shift s
+                  JOIN ops_svc.ops_oncall_rotation r ON r.id = s.rotation_id
+                 WHERE s.shift_date = :date AND r.status = 'ACTIVE'
+                """ + (groupCode == null || groupCode.isBlank() ? "" : " AND r.group_code = :group")
+                + " ORDER BY r.group_code";
+        MapSqlParameterSource params = new MapSqlParameterSource("date", date);
+        if (groupCode != null && !groupCode.isBlank()) {
+            params.addValue("group", groupCode);
+        }
+        return jdbc.queryForList(sql, params);
+    }
+
+    /** 排班生成：已存在的班次保留（不覆盖人工调整），返回新增数量。 */
+    public int generateShift(UUID rotationId, LocalDate date, String primary, String secondary) {
+        return jdbc.update("""
+                INSERT INTO ops_svc.ops_oncall_shift
+                    (id, rotation_id, shift_date, primary_user, secondary_user)
+                VALUES (:id, :rotation, :date, :primary, :secondary)
+                ON CONFLICT (rotation_id, shift_date) DO NOTHING
+                """, new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID())
+                .addValue("rotation", rotationId)
+                .addValue("date", date)
+                .addValue("primary", primary)
+                .addValue("secondary", secondary));
+    }
+
+    /** 人工覆盖：有则更新，无则新增。 */
+    public void overrideShift(UUID rotationId, LocalDate date, String primary, String secondary,
+                              String note) {
+        jdbc.update("""
+                INSERT INTO ops_svc.ops_oncall_shift
+                    (id, rotation_id, shift_date, primary_user, secondary_user, note)
+                VALUES (:id, :rotation, :date, :primary, :secondary, :note)
+                ON CONFLICT (rotation_id, shift_date) DO UPDATE SET
+                    primary_user = EXCLUDED.primary_user,
+                    secondary_user = EXCLUDED.secondary_user,
+                    note = EXCLUDED.note, updated_at = now()
+                """, new MapSqlParameterSource()
+                .addValue("id", UUID.randomUUID())
+                .addValue("rotation", rotationId)
+                .addValue("date", date)
+                .addValue("primary", primary)
+                .addValue("secondary", secondary)
+                .addValue("note", note));
+    }
+
+    // ------------------------------------------------------------------ 重大事件
+
+    public String nextIncidentNo() {
+        Long seq = plain.queryForObject("SELECT nextval('ops_svc.ops_incident_no_seq')", Long.class);
+        return com.medassist.ops.support.TicketNumbers.incident(seq == null ? 1 : seq);
+    }
+
+    private static final RowMapper<OpsModel.Incident> INCIDENT_MAPPER = (rs, n) ->
+            new OpsModel.Incident(
+                    rs.getObject("id", UUID.class),
+                    rs.getString("incident_no"),
+                    rs.getString("title"),
+                    rs.getString("severity"),
+                    rs.getString("status"),
+                    rs.getString("commander"),
+                    instant(rs, "detected_at"),
+                    instant(rs, "started_at"),
+                    instant(rs, "resolved_at"),
+                    instant(rs, "closed_at"),
+                    stringList(rs, "affected_services"),
+                    rs.getObject("ticket_id", UUID.class),
+                    rs.getString("summary"),
+                    rs.getString("root_cause"),
+                    rs.getString("impact"),
+                    rs.getLong("version"),
+                    instant(rs, "created_at"),
+                    instant(rs, "updated_at"),
+                    List.of());
+
+    private static final String INCIDENT_COLUMNS = """
+            id, incident_no, title, severity, status, commander, detected_at, started_at,
+            resolved_at, closed_at, affected_services, ticket_id, summary, root_cause, impact,
+            version, created_at, updated_at
+            """;
+
+    public Optional<OpsModel.Incident> findIncident(UUID id) {
+        return plain.query("SELECT " + INCIDENT_COLUMNS + " FROM ops_svc.ops_incident WHERE id = ?",
+                INCIDENT_MAPPER, id).stream().findFirst();
+    }
+
+    public List<OpsModel.Incident> listIncidents(String status, String severity, int limit, int offset) {
+        StringBuilder sql = new StringBuilder("SELECT " + INCIDENT_COLUMNS
+                + " FROM ops_svc.ops_incident WHERE 1 = 1");
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (status != null && !status.isBlank()) {
+            sql.append(" AND status = :status");
+            params.addValue("status", status);
+        }
+        if (severity != null && !severity.isBlank()) {
+            sql.append(" AND severity = :severity");
+            params.addValue("severity", severity);
+        }
+        sql.append(" ORDER BY detected_at DESC LIMIT :limit OFFSET :offset");
+        params.addValue("limit", limit).addValue("offset", offset);
+        return jdbc.query(sql.toString(), params, INCIDENT_MAPPER);
+    }
+
+    public long countIncidents(String status, String severity) {
+        StringBuilder sql = new StringBuilder("SELECT count(*) FROM ops_svc.ops_incident WHERE 1 = 1");
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        if (status != null && !status.isBlank()) {
+            sql.append(" AND status = :status");
+            params.addValue("status", status);
+        }
+        if (severity != null && !severity.isBlank()) {
+            sql.append(" AND severity = :severity");
+            params.addValue("severity", severity);
+        }
+        Long count = jdbc.queryForObject(sql.toString(), params, Long.class);
+        return count == null ? 0 : count;
+    }
+
+    public void insertIncident(OpsModel.Incident incident) {
+        jdbc.update("""
+                INSERT INTO ops_svc.ops_incident
+                    (id, incident_no, title, severity, status, commander, detected_at, started_at,
+                     affected_services, ticket_id, summary, impact)
+                VALUES
+                    (:id, :no, :title, :severity, :status, :commander, :detected, :started,
+                     CAST(:services AS text[]), :ticket, :summary, :impact)
+                """, new MapSqlParameterSource()
+                .addValue("id", incident.id())
+                .addValue("no", incident.incidentNo())
+                .addValue("title", incident.title())
+                .addValue("severity", incident.severity())
+                .addValue("status", incident.status())
+                .addValue("commander", incident.commander())
+                .addValue("detected", timestamp(incident.detectedAt()))
+                .addValue("started", timestamp(incident.startedAt()))
+                .addValue("services", arrayLiteral(incident.affectedServices()))
+                .addValue("ticket", incident.ticketId())
+                .addValue("summary", incident.summary())
+                .addValue("impact", incident.impact()));
+    }
+
+    private static final java.util.Set<String> MUTABLE_INCIDENT_COLUMNS = java.util.Set.of(
+            "title", "severity", "status", "commander", "detected_at", "started_at",
+            "resolved_at", "closed_at", "affected_services", "ticket_id", "summary",
+            "root_cause", "impact");
+
+    public boolean updateIncidentFields(UUID id, long expectedVersion, Map<String, Object> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return false;
+        }
+        List<String> sets = new ArrayList<>();
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        for (Map.Entry<String, Object> entry : fields.entrySet()) {
+            String column = entry.getKey();
+            if (!MUTABLE_INCIDENT_COLUMNS.contains(column)) {
+                throw new IllegalArgumentException("不允许修改的事件字段：" + column);
+            }
+            if ("affected_services".equals(column)) {
+                @SuppressWarnings("unchecked")
+                List<String> services = (List<String>) entry.getValue();
+                sets.add("affected_services = CAST(:services AS text[])");
+                params.addValue("services", arrayLiteral(services));
+            } else {
+                sets.add(column + " = :" + column);
+                params.addValue(column, jdbcValue(entry.getValue()));
+            }
+        }
+        params.addValue("id", id).addValue("expected", expectedVersion);
+        return jdbc.update("UPDATE ops_svc.ops_incident SET " + String.join(", ", sets)
+                + ", version = version + 1, updated_at = now()"
+                + " WHERE id = :id AND version = :expected", params) > 0;
+    }
+
+    public void insertIncidentEvent(OpsModel.IncidentEvent event) {
+        jdbc.update("""
+                INSERT INTO ops_svc.ops_incident_event
+                    (incident_id, actor, action, from_status, to_status, note, detail)
+                VALUES (:incident, :actor, :action, :from, :to, :note, CAST(:detail AS jsonb))
+                """, new MapSqlParameterSource()
+                .addValue("incident", event.incidentId())
+                .addValue("actor", event.actor())
+                .addValue("action", event.action())
+                .addValue("from", event.fromStatus())
+                .addValue("to", event.toStatus())
+                .addValue("note", event.note())
+                .addValue("detail", write(event.detail())));
+    }
+
+    public List<OpsModel.IncidentEvent> listIncidentEvents(UUID incidentId, int limit) {
+        return plain.query("""
+                SELECT id, incident_id, ts, actor, action, from_status, to_status, note, detail
+                  FROM ops_svc.ops_incident_event
+                 WHERE incident_id = ?
+                 ORDER BY ts, id LIMIT ?
+                """, (rs, n) -> new OpsModel.IncidentEvent(
+                rs.getLong("id"),
+                rs.getObject("incident_id", UUID.class),
+                instant(rs, "ts"),
+                rs.getString("actor"),
+                rs.getString("action"),
+                rs.getString("from_status"),
+                rs.getString("to_status"),
+                rs.getString("note"),
+                readMap(rs.getString("detail"))), incidentId, limit);
+    }
+
+    // ------------------------------------------------------------------ 复盘
+
+    private static final RowMapper<OpsModel.Postmortem> POSTMORTEM_MAPPER = (rs, n) ->
+            new OpsModel.Postmortem(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("incident_id", UUID.class),
+                    rs.getString("author"),
+                    rs.getString("status"),
+                    readListMap(rs.getString("timeline")),
+                    rs.getString("root_cause"),
+                    stringList(rs, "contributing_factors"),
+                    readListMap(rs.getString("corrective_actions")),
+                    rs.getString("approved_by"),
+                    instant(rs, "approved_at"),
+                    rs.getLong("version"),
+                    instant(rs, "created_at"),
+                    instant(rs, "updated_at"));
+
+    public Optional<OpsModel.Postmortem> findPostmortem(UUID incidentId) {
+        return plain.query("""
+                SELECT id, incident_id, author, status, timeline, root_cause,
+                       contributing_factors, corrective_actions, approved_by, approved_at,
+                       version, created_at, updated_at
+                  FROM ops_svc.ops_postmortem WHERE incident_id = ?
+                """, POSTMORTEM_MAPPER, incidentId).stream().findFirst();
+    }
+
+    public void insertPostmortem(OpsModel.Postmortem postmortem) {
+        jdbc.update("""
+                INSERT INTO ops_svc.ops_postmortem
+                    (id, incident_id, author, status, timeline, root_cause,
+                     contributing_factors, corrective_actions)
+                VALUES (:id, :incident, :author, :status, CAST(:timeline AS jsonb), :rootCause,
+                        CAST(:factors AS text[]), CAST(:actions AS jsonb))
+                """, new MapSqlParameterSource()
+                .addValue("id", postmortem.id())
+                .addValue("incident", postmortem.incidentId())
+                .addValue("author", postmortem.author())
+                .addValue("status", postmortem.status())
+                .addValue("timeline", write(postmortem.timeline()))
+                .addValue("rootCause", postmortem.rootCause())
+                .addValue("factors", arrayLiteral(postmortem.contributingFactors()))
+                .addValue("actions", write(postmortem.correctiveActions())));
+    }
+
+    private static final java.util.Set<String> MUTABLE_POSTMORTEM_COLUMNS = java.util.Set.of(
+            "status", "timeline", "root_cause", "contributing_factors", "corrective_actions",
+            "approved_by", "approved_at");
+
+    public boolean updatePostmortemFields(UUID id, long expectedVersion, Map<String, Object> fields) {
+        if (fields == null || fields.isEmpty()) {
+            return false;
+        }
+        List<String> sets = new ArrayList<>();
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        for (Map.Entry<String, Object> entry : fields.entrySet()) {
+            String column = entry.getKey();
+            if (!MUTABLE_POSTMORTEM_COLUMNS.contains(column)) {
+                throw new IllegalArgumentException("不允许修改的复盘字段：" + column);
+            }
+            switch (column) {
+                case "timeline", "corrective_actions" -> {
+                    sets.add(column + " = CAST(:" + column + " AS jsonb)");
+                    params.addValue(column, write(entry.getValue()));
+                }
+                case "contributing_factors" -> {
+                    @SuppressWarnings("unchecked")
+                    List<String> factors = (List<String>) entry.getValue();
+                    sets.add("contributing_factors = CAST(:factors AS text[])");
+                    params.addValue("factors", arrayLiteral(factors));
+                }
+                default -> {
+                    sets.add(column + " = :" + column);
+                    params.addValue(column, jdbcValue(entry.getValue()));
+                }
+            }
+        }
+        params.addValue("id", id).addValue("expected", expectedVersion);
+        return jdbc.update("UPDATE ops_svc.ops_postmortem SET " + String.join(", ", sets)
+                + ", version = version + 1, updated_at = now()"
+                + " WHERE id = :id AND version = :expected", params) > 0;
+    }
+
+    // ------------------------------------------------------------------ 看板（事件）
+
+    public long countOpenIncidents() {
+        Long n = plain.queryForObject("""
+                SELECT count(*) FROM ops_svc.ops_incident
+                 WHERE status NOT IN ('RESOLVED', 'CLOSED')
+                """, Long.class);
+        return n == null ? 0 : n;
+    }
+
+    public List<Map<String, Object>> countOpenIncidentsBySeverity() {
+        return plain.queryForList("""
+                SELECT severity, count(*) AS n FROM ops_svc.ops_incident
+                 WHERE status NOT IN ('RESOLVED', 'CLOSED')
+                 GROUP BY severity ORDER BY severity
+                """);
+    }
+
     // ------------------------------------------------------------------ 轨迹/审计
 
     public void insertEvent(TicketEvent event) {
@@ -648,6 +1032,17 @@ public class OpsRepository {
             return STATIC_JSON.readValue(json, MAP_TYPE);
         } catch (Exception e) {
             throw new IllegalStateException("JSON 解析失败", e);
+        }
+    }
+
+    private static List<Map<String, Object>> readListMap(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        try {
+            return STATIC_JSON.readValue(json, LIST_MAP_TYPE);
+        } catch (Exception e) {
+            throw new IllegalStateException("JSON 数组解析失败", e);
         }
     }
 

@@ -133,6 +133,83 @@ public final class OpsModel {
             Map<String, Object> detail) {
     }
 
+    /** 值班轮换。 */
+    public record OnCallRotation(
+            UUID id,
+            String groupCode,
+            String name,
+            String timezone,
+            LocalDate startDate,
+            int cycleDays,
+            List<String> members,
+            LocalTime handoverTime,
+            String status,
+            long version) {
+    }
+
+    /** 值班班次。 */
+    public record OnCallShift(
+            UUID id,
+            UUID rotationId,
+            LocalDate shiftDate,
+            String primaryUser,
+            String secondaryUser,
+            String note) {
+    }
+
+    /** 重大事件。 */
+    public record Incident(
+            UUID id,
+            String incidentNo,
+            String title,
+            String severity,
+            String status,
+            String commander,
+            Instant detectedAt,
+            Instant startedAt,
+            Instant resolvedAt,
+            Instant closedAt,
+            List<String> affectedServices,
+            UUID ticketId,
+            String summary,
+            String rootCause,
+            String impact,
+            long version,
+            Instant createdAt,
+            Instant updatedAt,
+            List<IncidentEvent> events) {
+    }
+
+    /** 事件轨迹。 */
+    public record IncidentEvent(
+            long id,
+            UUID incidentId,
+            Instant ts,
+            String actor,
+            String action,
+            String fromStatus,
+            String toStatus,
+            String note,
+            Map<String, Object> detail) {
+    }
+
+    /** 事件复盘。 */
+    public record Postmortem(
+            UUID id,
+            UUID incidentId,
+            String author,
+            String status,
+            List<Map<String, Object>> timeline,
+            String rootCause,
+            List<String> contributingFactors,
+            List<Map<String, Object>> correctiveActions,
+            String approvedBy,
+            Instant approvedAt,
+            long version,
+            Instant createdAt,
+            Instant updatedAt) {
+    }
+
     /** 运营审计。 */
     public record AuditLog(
             long id,

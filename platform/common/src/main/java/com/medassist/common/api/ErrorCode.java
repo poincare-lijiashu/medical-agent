@@ -523,7 +523,18 @@ public enum ErrorCode {
     OPS_ACTOR_REQUIRED(52412, "运营操作必须带真实操作人，禁止匿名写入"),
     OPS_REASON_REQUIRED(52413, "挂起、重开或取消必须填写原因（至少 2 个字符）"),
     OPS_TICKET_PAUSED(52414, "工单处于挂起状态，请先恢复后再处理"),
-    OPS_SLA_SCAN_FAILED(52415, "SLA 超时扫描失败，请检查数据库后重试");
+    OPS_SLA_SCAN_FAILED(52415, "SLA 超时扫描失败，请检查数据库后重试"),
+    OPS_ROTATION_NOT_FOUND(52416, "未找到该值班轮换组"),
+    OPS_ROTATION_INVALID(52417, "值班轮换配置不合法（成员/周期/起始日期有误，或组编码已存在）"),
+    OPS_SHIFT_NOT_FOUND(52418, "未找到该值班班次"),
+    OPS_INCIDENT_NOT_FOUND(52419, "未找到该重大事件"),
+    OPS_INCIDENT_STATUS_INVALID(52420, "当前事件状态不允许该操作"),
+    OPS_INCIDENT_TRANSITION_INVALID(52421, "事件状态流转不合法"),
+    OPS_POSTMORTEM_NOT_FOUND(52422, "未找到该事件复盘"),
+    OPS_POSTMORTEM_SELF_REVIEW(52423, "复盘作者不能审批自己的复盘，请由其他负责人复核"),
+    OPS_POSTMORTEM_STATUS_INVALID(52424, "当前复盘状态不允许该操作"),
+    OPS_POSTMORTEM_INCOMPLETE(52425, "复盘提交前必须填写根因与至少一条纠正措施"),
+    OPS_INCIDENT_INVALID(52426, "事件内容不合法（影响服务为空或关联工单不存在）");
 
     private final int code;
     private final String defaultMessage;

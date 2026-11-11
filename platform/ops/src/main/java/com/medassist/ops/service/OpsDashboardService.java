@@ -69,6 +69,13 @@ public class OpsDashboardService {
         result.put("avgFirstResponseMinutes", round(repo.avgFirstResponseMinutes(since)));
         result.put("avgResolveMinutes", round(repo.avgResolveMinutes(since)));
         result.put("avgSatisfaction", round(repo.avgSatisfaction(since)));
+
+        Map<String, Long> incidentsBySeverity = new LinkedHashMap<>();
+        for (Map<String, Object> row : repo.countOpenIncidentsBySeverity()) {
+            incidentsBySeverity.put(String.valueOf(row.get("severity")), asLong(row.get("n")));
+        }
+        result.put("openIncidents", repo.countOpenIncidents());
+        result.put("openIncidentsBySeverity", incidentsBySeverity);
         result.put("trend", repo.dailyTrend(14));
         return result;
     }

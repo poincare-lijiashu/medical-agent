@@ -20,4 +20,8 @@ public final class TicketNumbers {
     public static String ticket(long seq) {
         return "OP" + DAY.format(BusinessTime.today()) + String.format("%06d", seq);
     }
+
+    public static String incident(long seq) {
+        return "INC" + DAY.format(BusinessTime.today()) + String.format("%06d", seq);
+    }
 }

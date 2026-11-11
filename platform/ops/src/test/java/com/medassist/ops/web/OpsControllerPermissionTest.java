@@ -3,7 +3,9 @@ package com.medassist.ops.web;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.ops.repo.OpsRepository;
+import com.medassist.ops.service.IncidentService;
 import com.medassist.ops.service.OpsDashboardService;
+import com.medassist.ops.service.OnCallService;
 import com.medassist.ops.service.SlaService;
 import com.medassist.ops.service.TicketService;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +31,8 @@ class OpsControllerPermissionTest {
     private SlaService slaService;
     private TicketService ticketService;
     private OpsDashboardService dashboardService;
+    private OnCallService onCallService;
+    private IncidentService incidentService;
     private OpsRepository repo;
     private OpsController controller;
 
@@ -37,8 +41,11 @@ class OpsControllerPermissionTest {
         slaService = mock(SlaService.class);
         ticketService = mock(TicketService.class);
         dashboardService = mock(OpsDashboardService.class);
+        onCallService = mock(OnCallService.class);
+        incidentService = mock(IncidentService.class);
         repo = mock(OpsRepository.class);
-        controller = new OpsController(slaService, ticketService, dashboardService, repo);
+        controller = new OpsController(slaService, ticketService, dashboardService,
+                onCallService, incidentService, repo);
     }
 
     private void assertForbidden(Runnable call) {
@@ -86,5 +93,22 @@ class OpsControllerPermissionTest {
     @DisplayName("审计：必须 ops:audit:read")
     void auditPermission() {
         assertForbidden(() -> controller.audit(null, "ops:read"));
+    }
+
+    @Test
+    @DisplayName("值班管理：必须 ops:oncall:manage")
+    void oncallPermission() {
+        OpsDtos.RotationReq req = new OpsDtos.RotationReq("CLINICAL_ONCALL", "临床值班",
+                "Asia/Shanghai", java.time.LocalDate.now(), 7,
+                List.of("doctor01", "doctor02"), java.time.LocalTime.of(8, 0));
+        assertForbidden(() -> controller.createRotation(req, "ops:ticket:write", "u", null, null));
+    }
+
+    @Test
+    @DisplayName("事件处置：必须 ops:incident:write")
+    void incidentPermission() {
+        OpsDtos.IncidentCreateReq req = new OpsDtos.IncidentCreateReq("网关不可用", "SEV1",
+                null, List.of("platform-gateway"), null, null, null);
+        assertForbidden(() -> controller.createIncident(req, "ops:read", "u", null, null));
     }
 }

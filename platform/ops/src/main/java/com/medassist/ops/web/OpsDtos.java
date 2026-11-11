@@ -4,12 +4,15 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * 运营 API 请求体。
@@ -97,5 +100,61 @@ public final class OpsDtos {
     public record PriorityReq(
             @NotBlank @Pattern(regexp = "P1|P2|P3|P4") String priority,
             @NotBlank @Size(min = 2, max = 500) String reason) {
+    }
+
+    // ------------------------------------------------------------------ 值班
+
+    public record RotationReq(
+            @NotBlank @Size(max = 64) String groupCode,
+            @NotBlank @Size(max = 128) String name,
+            @Size(max = 64) String timezone,
+            @NotNull LocalDate startDate,
+            @Min(1) @Max(90) int cycleDays,
+            @NotEmpty List<@NotBlank @Size(max = 64) String> members,
+            LocalTime handoverTime) {
+    }
+
+    public record ShiftOverrideReq(
+            @NotBlank @Size(max = 64) String primaryUser,
+            @Size(max = 64) String secondaryUser,
+            @NotBlank @Size(min = 2, max = 500) String reason) {
+    }
+
+    // ------------------------------------------------------------------ 事件
+
+    public record IncidentCreateReq(
+            @NotBlank @Size(max = 200) String title,
+            @NotBlank @Pattern(regexp = "SEV1|SEV2|SEV3|SEV4") String severity,
+            @Size(max = 64) String commander,
+            @NotEmpty List<@NotBlank @Size(max = 64) String> affectedServices,
+            UUID ticketId,
+            @Size(max = 2000) String summary,
+            @Size(max = 2000) String impact) {
+    }
+
+    public record IncidentStatusReq(
+            @NotBlank @Pattern(regexp = "OPEN|MITIGATING|MONITORING|RESOLVED|CLOSED|REOPENED")
+            String status,
+            @NotBlank @Size(min = 2, max = 1000) String note) {
+    }
+
+    public record IncidentCommentReq(
+            @NotBlank @Size(min = 2, max = 2000) String note) {
+    }
+
+    public record CommanderReq(
+            @NotBlank @Size(max = 64) String commander,
+            @NotBlank @Size(min = 2, max = 500) String reason) {
+    }
+
+    public record PostmortemReq(
+            List<Map<String, Object>> timeline,
+            @Size(max = 4000) String rootCause,
+            List<@Size(max = 200) String> contributingFactors,
+            List<Map<String, Object>> correctiveActions) {
+    }
+
+    public record PostmortemApproveReq(
+            @Size(max = 1000) String note) {
     }
 }

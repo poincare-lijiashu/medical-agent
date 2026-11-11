@@ -6,23 +6,31 @@ import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
 import com.medassist.ops.domain.OpsModel.AuditLog;
 import com.medassist.ops.domain.OpsModel.Calendar;
+import com.medassist.ops.domain.OpsModel.Incident;
+import com.medassist.ops.domain.OpsModel.OnCallRotation;
+import com.medassist.ops.domain.OpsModel.OnCallShift;
+import com.medassist.ops.domain.OpsModel.Postmortem;
 import com.medassist.ops.domain.OpsModel.ServiceCatalog;
 import com.medassist.ops.domain.OpsModel.SlaPolicy;
 import com.medassist.ops.domain.OpsModel.Ticket;
 import com.medassist.ops.repo.OpsRepository;
+import com.medassist.ops.service.IncidentService;
 import com.medassist.ops.service.OpsDashboardService;
+import com.medassist.ops.service.OnCallService;
 import com.medassist.ops.service.SlaService;
 import com.medassist.ops.service.TicketService;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -49,18 +57,25 @@ public class OpsController {
     private static final String TICKET_CREATE = "ops:ticket:create";
     private static final String TICKET_WRITE = "ops:ticket:write";
     private static final String SLA_MANAGE = "ops:sla:manage";
+    private static final String INCIDENT_WRITE = "ops:incident:write";
+    private static final String ONCALL_MANAGE = "ops:oncall:manage";
     private static final String AUDIT_READ = "ops:audit:read";
 
     private final SlaService slaService;
     private final TicketService ticketService;
     private final OpsDashboardService dashboardService;
+    private final OnCallService onCallService;
+    private final IncidentService incidentService;
     private final OpsRepository repo;
 
     public OpsController(SlaService slaService, TicketService ticketService,
-                         OpsDashboardService dashboardService, OpsRepository repo) {
+                         OpsDashboardService dashboardService, OnCallService onCallService,
+                         IncidentService incidentService, OpsRepository repo) {
         this.slaService = slaService;
         this.ticketService = ticketService;
         this.dashboardService = dashboardService;
+        this.onCallService = onCallService;
+        this.incidentService = incidentService;
         this.repo = repo;
     }
 
@@ -298,6 +313,200 @@ public class OpsController {
         Permissions.require(permissions, TICKET_WRITE);
         return ApiResponse.ok(ticketService.changePriority(id, req.priority(), req.reason(),
                 actor, clientIp, traceId));
+    }
+
+    // ------------------------------------------------------------------ 值班
+
+    @GetMapping("/oncall/rotations")
+    public ApiResponse<List<OnCallRotation>> rotations(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(onCallService.listRotations());
+    }
+
+    @PostMapping("/oncall/rotations")
+    public ApiResponse<OnCallRotation> createRotation(
+            @Valid @RequestBody OpsDtos.RotationReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, ONCALL_MANAGE);
+        return ApiResponse.ok(onCallService.createRotation(req, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/oncall/rotations/{id}/generate")
+    public ApiResponse<Map<String, Object>> generateShifts(
+            @PathVariable UUID id,
+            @RequestParam LocalDate from,
+            @RequestParam LocalDate to,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, ONCALL_MANAGE);
+        return ApiResponse.ok(onCallService.generate(id, from, to, actor, clientIp, traceId));
+    }
+
+    @GetMapping("/oncall/rotations/{id}/shifts")
+    public ApiResponse<List<OnCallShift>> shifts(
+            @PathVariable UUID id,
+            @RequestParam(required = false) LocalDate from,
+            @RequestParam(required = false) LocalDate to,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(onCallService.shifts(id, from, to));
+    }
+
+    @GetMapping("/oncall/today")
+    public ApiResponse<Map<String, Object>> onCallToday(
+            @RequestParam(required = false) String groupCode,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(onCallService.today(groupCode));
+    }
+
+    @PutMapping("/oncall/shifts/{rotationId}/{date}")
+    public ApiResponse<Map<String, Object>> overrideShift(
+            @PathVariable UUID rotationId,
+            @PathVariable LocalDate date,
+            @Valid @RequestBody OpsDtos.ShiftOverrideReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, ONCALL_MANAGE);
+        onCallService.overrideShift(rotationId, date, req, actor, clientIp, traceId);
+        return ApiResponse.ok(Map.of("ok", true));
+    }
+
+    // ------------------------------------------------------------------ 重大事件
+
+    @GetMapping("/incidents")
+    public ApiResponse<PageResult<Incident>> incidents(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String severity,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        int safePage = Math.max(page, 1);
+        int safeSize = Math.min(Math.max(size, 1), PageResult.MAX_PAGE_SIZE);
+        long total = incidentService.count(status, severity);
+        List<Incident> items = incidentService.list(status, severity, safeSize,
+                (safePage - 1) * safeSize);
+        return ApiResponse.ok(PageResult.of(safePage, safeSize, total, items));
+    }
+
+    @PostMapping("/incidents")
+    public ApiResponse<Incident> createIncident(
+            @Valid @RequestBody OpsDtos.IncidentCreateReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.create(req, actor, clientIp, traceId));
+    }
+
+    @GetMapping("/incidents/{id}")
+    public ApiResponse<Incident> incident(
+            @PathVariable UUID id,
+            @RequestParam(required = false) Integer eventLimit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(incidentService.detail(id, eventLimit));
+    }
+
+    @PostMapping("/incidents/{id}/status")
+    public ApiResponse<Incident> incidentStatus(
+            @PathVariable UUID id,
+            @Valid @RequestBody OpsDtos.IncidentStatusReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.changeStatus(id, req, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/incidents/{id}/commander")
+    public ApiResponse<Incident> incidentCommander(
+            @PathVariable UUID id,
+            @Valid @RequestBody OpsDtos.CommanderReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.changeCommander(id, req, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/incidents/{id}/comments")
+    public ApiResponse<Incident> incidentComment(
+            @PathVariable UUID id,
+            @Valid @RequestBody OpsDtos.IncidentCommentReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.comment(id, req.note(), actor, clientIp, traceId));
+    }
+
+    @GetMapping("/incidents/{id}/postmortem")
+    public ApiResponse<Postmortem> postmortem(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(incidentService.postmortem(id));
+    }
+
+    @PostMapping("/incidents/{id}/postmortem")
+    public ApiResponse<Postmortem> createPostmortem(
+            @PathVariable UUID id,
+            @RequestBody OpsDtos.PostmortemReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.createPostmortem(id, req, actor, clientIp, traceId));
+    }
+
+    @PutMapping("/incidents/{id}/postmortem")
+    public ApiResponse<Postmortem> updatePostmortem(
+            @PathVariable UUID id,
+            @RequestBody OpsDtos.PostmortemReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.updatePostmortem(id, req, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/incidents/{id}/postmortem/submit")
+    public ApiResponse<Postmortem> submitPostmortem(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.submitPostmortem(id, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/incidents/{id}/postmortem/approve")
+    public ApiResponse<Postmortem> approvePostmortem(
+            @PathVariable UUID id,
+            @RequestBody(required = false) OpsDtos.PostmortemApproveReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INCIDENT_WRITE);
+        return ApiResponse.ok(incidentService.approvePostmortem(id, req, actor, clientIp, traceId));
     }
 
     // ------------------------------------------------------------------ 看板/SLA 扫描/审计

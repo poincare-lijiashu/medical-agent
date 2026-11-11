@@ -582,7 +582,10 @@ CSV 表头至少包含 `域编码,本地编码,系统编码,外部编码`；可�
 | 工单 | `ops_ticket`：创建 → 派单 → 接单 → 处理 ⇄ 挂起 → 解决 → 关闭/重开；任意未完成可取消 |
 | 轨迹 | `ops_ticket_event`：每次状态变化、评论、SLA 违约都追加一条（触发器拒绝改删） |
 | 超时扫描 | 每 60s 扫描一次；首响/解决超时只记一次 `SLA_*_BREACH` 事件，可统计违约率 |
-| 看板 | 积压/超期、按优先级与服务拆解、近 30 天首响与 MTTR、满意度、14 天新建/解决趋势 |
+| 值班 | `ops_oncall_rotation` / `ops_oncall_shift`：按组轮换，主备相邻配对；排班生成后可人工覆盖 |
+| 重大事件 | `ops_incident` / `ops_incident_event`：SEV1–SEV4，OPEN→MITIGATING⇄MONITORING→RESOLVED→CLOSED，可重开 |
+| 复盘 | `ops_postmortem`：时间线/根因/促成因素/纠正措施；DRAFT→REVIEWED→APPROVED，作者不能审批 |
+| 看板 | 积压/超期、按优先级与服务拆解、近 30 天首响与 MTTR、满意度、未关闭事件、14 天新建/解决趋势 |
 | 审计 | `ops_change_log` 追加式，记录谁在何时改了什么 |
 
 **SLA 口径**：
@@ -609,19 +612,32 @@ CSV 表头至少包含 `域编码,本地编码,系统编码,外部编码`；可�
 | `POST` | `/tickets/{id}/close` | `ops:ticket:write` | 关闭（可带满意度） |
 | `POST` | `/tickets/{id}/reopen` | `ops:ticket:write` | 重开（重算解决时限） |
 | `POST` | `/tickets/{id}/cancel`、`/priority` | `ops:ticket:write` | 取消 / 调整优先级 |
-| `GET` | `/dashboard?trendDays=` | `ops:read` | 运营看板 |
+| `GET` | `/dashboard?trendDays=` | `ops:read` | 运营看板（含未关闭事件） |
 | `POST` | `/sla/scan` | `ops:ticket:write` | 手动触发超时扫描 |
+| `GET` | `/oncall/rotations`、`/oncall/today` | `ops:read` | 值班组 / 今日值班 |
+| `POST` | `/oncall/rotations` | `ops:oncall:manage` | 建值班组 |
+| `POST` | `/oncall/rotations/{id}/generate?from=&to=` | `ops:oncall:manage` | 生成排班（不覆盖人工调整） |
+| `PUT` | `/oncall/shifts/{rotationId}/{date}` | `ops:oncall:manage` | 人工覆盖（必须写原因） |
+| `GET` | `/incidents?status=&severity=`、`/{id}` | `ops:read` | 事件列表/详情 |
+| `POST` | `/incidents` | `ops:incident:write` | 宣告事件 |
+| `POST` | `/incidents/{id}/status`、`/commander`、`/comments` | `ops:incident:write` | 状态/指挥/评论 |
+| `GET` | `/incidents/{id}/postmortem` | `ops:read` | 复盘 |
+| `POST`/`PUT` | `/incidents/{id}/postmortem` | `ops:incident:write` | 创建/修改草稿 |
+| `POST` | `/incidents/{id}/postmortem/submit`、`/approve` | `ops:incident:write` | 提交复核 / 审批（作者不能审批自己） |
 | `GET` | `/audit?limit=` | `ops:audit:read` | 运营审计 |
 
-**权限**（auth V89）：`ops:read` / `ops:ticket:create` / `ops:ticket:write` /
-`ops:sla:manage` / `ops:audit:read`；角色 `OPS_AGENT`（一线：建单/处理/查询）与
-`OPS_MANAGER`（经理：额外维护 SLA/目录、查审计）。**SLA 修改不能让一线自己做**，
-否则"承诺"随时可被放宽。
+**权限**（auth V89/V90）：`ops:read` / `ops:ticket:create` / `ops:ticket:write` /
+`ops:sla:manage` / `ops:incident:write` / `ops:oncall:manage` / `ops:audit:read`；
+角色 `OPS_AGENT`（一线：建单/处理/宣告事件）与 `OPS_MANAGER`（经理：额外维护
+SLA/目录、值班、复盘审批、审计）。**SLA 修改不能让一线自己做**，否则"承诺"随时可被放宽；
+**复盘作者不能审批自己的复盘**，由服务层强制。
 
 **边界**：
 - 不替代监控告警（Prometheus/SkyWalking）和即时通讯；本服务接收告警转单，
   并成为"告警之后人的处理过程"的真源；
-- 值班表、事件（Incident）与复盘（Postmortem）在 §272 交付，本批先把 SLA/工单闭环做扎实。
+- 值班排班是"生成后的事实"，查询不现算；重新生成不会覆盖已有人工调整；
+- 事件与工单是两级：工单是一个请求，事件是一次影响面，一个事件可关联主工单；
+- 版本与补丁机制（发布列车、兼容矩阵、回滚记录）放在 §273。
 
 ## 构建与运行
 
