@@ -105,6 +105,7 @@ import type {
   PrescriptionAuditView,
   PrescriptionView,
   PrintEvent,
+  PrintEventPage,
   ProcurementSummary,
   PurchaseOrderSummary,
   PurchaseOrderView,
@@ -241,14 +242,17 @@ export const clinicalApi = {
   /** 住院周转趋势（入院/出院/在院/平均住院日；最多 92 天）。 */
   inpatientTrend: (from?: string, to?: string) =>
     get<InpatientTrendView>('/clinical/reports/inpatient-trend', { from, to }),
-  /** 单据打印留痕（第 230 批）：按单号/对象核查补打次数，需 clinical:print:read。 */
+  /** 单据打印留痕（第 230/235 批）：按单号/对象/日期区间核查补打次数，需 clinical:print:read。 */
   printEvents: (params: {
     docType?: string
     docNo?: string
     targetType?: string
     targetId?: string
+    from?: string
+    to?: string
+    offset?: number
     limit?: number
-  }) => get<PrintEvent[]>('/clinical/print-events', params),
+  }) => get<PrintEventPage>('/clinical/print-events', params),
   /** 运营日快照（G17）：默认最近 7 天；metric 为空返回全部指标。 */
   reportSnapshots: (from?: string, to?: string, metric?: string) =>
     get<SnapshotList>('/clinical/reports/snapshots', { from, to, metric }),

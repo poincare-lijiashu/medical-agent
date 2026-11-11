@@ -616,6 +616,14 @@ export interface PrintEvent {
   printedAt: string
 }
 
+/** 打印留痕分页结果：total 为满足条件的总条数（跨页不变）。 */
+export interface PrintEventPage {
+  items: PrintEvent[]
+  total: number
+  offset: number
+  limit: number
+}
+
 /** 收费票据：金额/支付方式为开票快照；重打累计次数，作废留原因。 */
 export interface ChargeReceipt {
   id: string

@@ -111,6 +111,10 @@ def test_print_history_page_wired():
     for component in ("PermissionDenied", "LoadError", "EmptyState", "TableSkeleton"):
         assert component in text, f"打印留痕页缺少 {component}（空/错/无权限/加载态）"
     assert "isForbidden(" in text, "403 必须与故障区分（不显示重试）"
+    # 第 235 批：时间区间 + 分页（长期流水不能一次拉全表）
+    assert 'type="date"' in text, "打印留痕页缺少日期区间筛选"
+    assert "page.items" in text and "page.total" in text, "打印留痕页必须消费分页结果"
+    assert "上一页" in text and "下一页" in text, "打印留痕页缺少分页按钮"
 
     router = (SRC / "router" / "index.ts").read_text(encoding="utf-8")
     assert "PrintHistoryView.vue" in router, "打印留痕页未注册路由"

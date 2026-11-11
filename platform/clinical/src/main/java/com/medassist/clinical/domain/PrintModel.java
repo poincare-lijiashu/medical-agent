@@ -20,4 +20,15 @@ public final class PrintModel {
                              String targetType, UUID targetId, String patientNo,
                              String actor, UUID campusId, OffsetDateTime printedAt) {
     }
+
+    /**
+     * 分页结果（第 235 批）。
+     *
+     * <p>为什么用 offset 而不是游标：留痕页是“质控按时间段核查”，
+     * 允许期间内新记录造成下一页轻微位移；总量 `total` 让页面能显示“共 N 条”，
+     * 而游标分页在并发追加下更稳但无法给出总数，取舍以核查体验优先。
+     */
+    public record PrintEventPage(java.util.List<PrintEvent> items, long total,
+                                 int offset, int limit) {
+    }
 }

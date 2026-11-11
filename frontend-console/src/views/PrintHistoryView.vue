@@ -5,7 +5,7 @@
   <div class="page">
     <PageHeader title="打印留痕" sub="票据 / 同意书 / 处方笺 / 输液卡 / 费用汇总单 / 腕带 · 按单号核查补打 · 按院区收敛">
       <template #actions>
-        <button class="btn" type="button" :disabled="loading" @click="load">
+        <button class="btn" type="button" :disabled="loading" @click="load()">
           <AppIcon name="refresh" :size="15" /> 刷新
         </button>
       </template>
@@ -16,7 +16,7 @@
       <div class="filters">
         <label class="field f-type">
           <span class="label">单据类型</span>
-          <select v-model="docType" class="select" @change="load">
+          <select v-model="docType" class="select" @change="load()">
             <option value="">全部类型</option>
             <option v-for="opt in DOC_TYPE_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
@@ -28,26 +28,34 @@
             class="input"
             maxlength="64"
             placeholder="票据号 / 处方号 / 住院号…"
-            @keyup.enter="load"
+            @keyup.enter="load()"
           />
         </label>
+        <label class="field f-date">
+          <span class="label">开始日期</span>
+          <input v-model="from" class="input" type="date" :max="to || undefined" @change="load()" />
+        </label>
+        <label class="field f-date">
+          <span class="label">结束日期</span>
+          <input v-model="to" class="input" type="date" :min="from || undefined" @change="load()" />
+        </label>
         <label class="field f-limit">
-          <span class="label">条数</span>
-          <select v-model.number="limit" class="select" @change="load">
-            <option :value="50">最近 50 条</option>
-            <option :value="100">最近 100 条</option>
-            <option :value="200">最近 200 条</option>
+          <span class="label">每页</span>
+          <select v-model.number="limit" class="select" @change="load()">
+            <option :value="20">20 条</option>
+            <option :value="50">50 条</option>
+            <option :value="100">100 条</option>
           </select>
         </label>
-        <button class="btn btn--primary f-query" type="button" :disabled="loading" @click="load">
+        <button class="btn btn--primary f-query" type="button" :disabled="loading" @click="load()">
           <AppIcon name="search" :size="15" /> 查询
         </button>
       </div>
 
       <LoadError v-if="loadErr" :message="loadErr" :retrying="loading" @retry="load" />
 
-      <div v-if="!loadErr && docNo && events.length" class="notice notice--warn">
-        单据号 <strong class="mono">{{ docNo }}</strong> 共打印 <strong>{{ events.length }}</strong> 次；
+      <div v-if="!loadErr && docNo && total > 0" class="notice notice--warn">
+        单据号 <strong class="mono">{{ docNo }}</strong> 共打印 <strong>{{ total }}</strong> 次；
         补打请与患者/家属核对，避免重复出单。
       </div>
 
@@ -84,14 +92,23 @@
             </tr>
           </tbody>
         </table>
-        <p class="hint">最多返回 {{ limit }} 条；留痕只追加不修改，跨院区账号仅能看到本院区流水与跨院区流水。</p>
+      </div>
+
+      <div v-if="!loadErr && total > 0" class="pager">
+        <span class="muted">共 {{ total }} 条 · 第 {{ offset + 1 }}–{{ offset + events.length }} 条</span>
+        <button class="btn btn--sm" type="button" :disabled="loading || offset === 0" @click="prevPage">
+          上一页
+        </button>
+        <button class="btn btn--sm" type="button" :disabled="loading || !hasNext" @click="nextPage">
+          下一页
+        </button>
       </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import LoadError from '@/components/ui/LoadError.vue'
@@ -116,11 +133,17 @@ const DOC_TYPE_OPTIONS = [
 
 const docType = ref('')
 const docNo = ref('')
-const limit = ref(50)
+const from = ref('')
+const to = ref('')
+const limit = ref(20)
+const offset = ref(0)
+const total = ref(0)
 const events = ref<PrintEvent[]>([])
 const loading = ref(false)
 const loadErr = ref('')
 const forbidden = ref(false)
+
+const hasNext = computed(() => offset.value + events.value.length < total.value)
 
 function docTypeLabel(value: string): string {
   return DOC_TYPE_OPTIONS.find((o) => o.value === value)?.label ?? value
@@ -130,20 +153,29 @@ function shortId(value: string): string {
   return value.length > 8 ? `${value.slice(0, 8)}…` : value
 }
 
-async function load() {
+/** reset=true 表示筛选条件变化：回到第一页。 */
+async function load(reset = true) {
+  if (reset) offset.value = 0
   loading.value = true
   loadErr.value = ''
   try {
-    events.value = await clinicalApi.printEvents({
+    const page = await clinicalApi.printEvents({
       docType: docType.value || undefined,
       docNo: docNo.value || undefined,
+      from: from.value || undefined,
+      to: to.value || undefined,
       limit: limit.value,
+      offset: offset.value,
     })
+    events.value = page.items
+    total.value = page.total
+    offset.value = page.offset
     forbidden.value = false
   } catch (e) {
     // 403 与“服务故障”分开：403 只显示受限态，不显示重试
     forbidden.value = isForbidden(e)
     events.value = []
+    total.value = 0
     if (!forbidden.value) {
       loadErr.value = errorText(e)
       toast.error('打印留痕加载失败', loadErr.value)
@@ -153,7 +185,19 @@ async function load() {
   }
 }
 
-onMounted(load)
+function prevPage() {
+  offset.value = Math.max(0, offset.value - limit.value)
+  void load(false)
+}
+
+function nextPage() {
+  offset.value += limit.value
+  void load(false)
+}
+
+onMounted(() => {
+  void load()
+})
 </script>
 
 <style scoped>
@@ -175,7 +219,19 @@ onMounted(load)
 }
 
 .f-limit {
-  flex: 0 0 140px;
+  flex: 0 0 120px;
+}
+
+.f-date {
+  flex: 0 0 150px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--s3);
+  padding: var(--s3) var(--card-pad) var(--s4);
 }
 
 .f-query {

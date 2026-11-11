@@ -1,12 +1,15 @@
 package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
+import com.medassist.clinical.domain.PrintModel.PrintEventPage;
 import com.medassist.clinical.repo.PrintEventRepository;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -30,6 +33,8 @@ public class PrintEventService {
     private static final int MAX_TARGET_TYPE = 32;
     private static final int MAX_PATIENT_NO = 32;
     private static final int DEFAULT_LIMIT = 50;
+    /** 单页上限：与前端“最近 200 条”对齐，防止一次拉全表。 */
+    private static final int MAX_LIMIT = 200;
 
     private final PrintEventRepository repo;
 
@@ -52,11 +57,38 @@ public class PrintEventService {
         return event;
     }
 
-    public List<PrintEvent> list(String docType, String docNo, String targetType, UUID targetId,
-                                 String campusCsv, Integer limit) {
-        return repo.list(optionalText(docType, MAX_DOC_TYPE), optionalText(docNo, MAX_DOC_NO),
-                optionalText(targetType, MAX_TARGET_TYPE), targetId, campusCsv,
-                limit == null ? DEFAULT_LIMIT : limit);
+    /**
+     * 分页查询（第 235 批）：支持按日期区间核查打印历史。
+     *
+     * <p>时间口径是**业务日期**：`[from 00:00, to 次日 00:00)`，用系统时区换算，
+     * 与运营报表按日归属的做法一致；`from/to` 为空表示不限。
+     */
+    public PrintEventPage page(String docType, String docNo, String targetType, UUID targetId,
+                               String campusCsv, LocalDate from, LocalDate to,
+                               Integer offset, Integer limit) {
+        if (from != null && to != null && from.isAfter(to)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始日期不能晚于结束日期");
+        }
+        ZoneId zone = ZoneId.systemDefault();
+        OffsetDateTime fromTs = from == null ? null : from.atStartOfDay(zone).toOffsetDateTime();
+        OffsetDateTime toTs = to == null ? null : to.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
+        int size = clampLimit(limit);
+        int start = offset == null ? 0 : Math.max(0, offset);
+        String type = optionalText(docType, MAX_DOC_TYPE);
+        String no = optionalText(docNo, MAX_DOC_NO);
+        String target = optionalText(targetType, MAX_TARGET_TYPE);
+        long total = repo.count(type, no, target, targetId, campusCsv, fromTs, toTs);
+        List<PrintEvent> items = total <= start
+                ? List.of()
+                : repo.list(type, no, target, targetId, campusCsv, fromTs, toTs, start, size);
+        return new PrintEventPage(items, total, start, size);
+    }
+
+    private static int clampLimit(Integer limit) {
+        if (limit == null) {
+            return DEFAULT_LIMIT;
+        }
+        return Math.max(1, Math.min(limit, MAX_LIMIT));
     }
 
     private static String requireText(String value, String label, int max) {

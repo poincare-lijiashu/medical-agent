@@ -1,6 +1,7 @@
 package com.medassist.clinical.web;
 
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
+import com.medassist.clinical.domain.PrintModel.PrintEventPage;
 import com.medassist.clinical.service.PrintEventService;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
@@ -9,6 +10,7 @@ import com.medassist.common.security.Permissions;
 import com.medassist.common.security.CampusFilters;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -17,7 +19,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
+import java.time.LocalDate;
 import java.util.Set;
 import java.util.UUID;
 
@@ -56,19 +58,22 @@ public class PrintEventController {
                 req.targetId(), req.patientNo(), actor, campusOf(scope)));
     }
 
-    /** 打印历史：条件全空返回最近流水；按院区收敛。 */
+    /** 打印历史（分页）：条件全空返回最近流水；按院区收敛；支持日期区间核查。 */
     @GetMapping
-    public ApiResponse<List<PrintEvent>> list(
+    public ApiResponse<PrintEventPage> page(
             @RequestParam(required = false) String docType,
             @RequestParam(required = false) String docNo,
             @RequestParam(required = false) String targetType,
             @RequestParam(required = false) UUID targetId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Integer offset,
             @RequestParam(required = false) Integer limit,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(docType, docNo, targetType, targetId,
-                CampusFilters.csv(scope.campusFilter()), limit));
+        return ApiResponse.ok(service.page(docType, docNo, targetType, targetId,
+                CampusFilters.csv(scope.campusFilter()), from, to, offset, limit));
     }
 
     /** 院区归属：只有唯一院区的账号才落 campus_id，跨院区角色写空（与列表收敛口径一致）。 */
