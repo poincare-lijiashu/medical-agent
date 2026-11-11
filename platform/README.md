@@ -685,6 +685,23 @@ SLA/目录、值班、复盘审批、审计）。**SLA 修改不能让一线自�
 - 不做数据库 schema 的自动回滚：schema 版本只登记，回滚由 DBA 按变更单执行；
 - 版本号不强制 semver：院内构建号/日期版本同样可用，关键是唯一与不可变。
 
+## 实施与培训交付包（§274）
+
+代码交付只是上线的一半；另一半是"医院能自己接住"。实施交付包位于
+[`docs/implementation/`](../docs/implementation/README.md)：
+
+| 文档 | 用途 |
+|---|---|
+| [实施方法论](../docs/implementation/README.md) | 五阶段（准备/蓝图/构建/迁移演练/上线稳定）、门禁、RACI、交付物与变更控制 |
+| [培训矩阵与认证规则](../docs/implementation/training-matrix.md) | 角色 × 能力矩阵、课程目录、认证/补考/有效期规则、角色与权限点对应 |
+| [上线 Go/No-Go 检查单](../docs/implementation/go-live-checklist.md) | 数据/接口/安全/性能/培训/运维/回滚/业务确认，阻塞项与一票否决规则 |
+| [回滚演练脚本](../docs/implementation/rollback-drill.md) | L1–L4 回滚层级、触发条件、决策、步骤、验证、沟通模板与复盘要求 |
+| [认证题库](../docs/implementation/certification-bank.json) | 11 个角色、44 道题，含答案与解析，供认证抽题 |
+
+**不会腐烂的机制**：`tests/test_implementation_package.py` 会校验文档完整性、
+题库结构/角色覆盖/答案下标、Markdown 本地链接可达，并禁止 TODO/待补充等占位词；
+材料缺失或题库不合规会让 CI 失败。
+
 ## 构建与运行
 
 ```powershell

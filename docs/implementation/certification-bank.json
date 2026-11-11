@@ -1,0 +1,681 @@
+{
+  "version": "2026.11",
+  "passScore": 80,
+  "highRiskPassScore": 90,
+  "highRiskRoles": ["OPS", "RELEASE", "DATA_STEWARD", "IMPLEMENTATION"],
+  "roles": [
+    "DOCTOR",
+    "NURSE",
+    "PHARMACIST",
+    "CASHIER",
+    "TECH",
+    "CODER",
+    "INSURANCE",
+    "OPS",
+    "RELEASE",
+    "DATA_STEWARD",
+    "IMPLEMENTATION"
+  ],
+  "questions": [
+    {
+      "id": "DOC-001",
+      "role": "DOCTOR",
+      "module": "门诊流程",
+      "difficulty": "BASIC",
+      "question": "医生接诊时发现患者尚未挂号，正确做法是？",
+      "options": [
+        "直接在诊室开立医嘱",
+        "先完成挂号/建档，再进入接诊",
+        "让护士代开医嘱",
+        "跳过挂号直接收费"
+      ],
+      "answer": 1,
+      "explanation": "就诊必须由挂号产生 visit 记录；没有挂号直接开医嘱会导致医嘱无法归属就诊、收费也无法闭环。"
+    },
+    {
+      "id": "DOC-002",
+      "role": "DOCTOR",
+      "module": "医嘱",
+      "difficulty": "BASIC",
+      "question": "医嘱金额的正确来源是？",
+      "options": [
+        "医生在开立时手工输入",
+        "客户端传入价格",
+        "服务端按收费项目主数据计价",
+        "药房发药时随意填写"
+      ],
+      "answer": 2,
+      "explanation": "医嘱金额由服务端按收费项目主数据计算，客户端不得传价，避免同项目不同价与篡改。"
+    },
+    {
+      "id": "DOC-003",
+      "role": "DOCTOR",
+      "module": "病历",
+      "difficulty": "INTERMEDIATE",
+      "question": "病历完成电子签名并归档后需要修改，正确路径是？",
+      "options": [
+        "直接编辑原病历",
+        "删除后重新写一份",
+        "提交病案修改申请并走审批留痕",
+        "让管理员在数据库改"
+      ],
+      "answer": 2,
+      "explanation": "签名归档病历不可直接修改，必须走修改申请与审批，保留原版本与修改痕迹，满足病历可追溯要求。"
+    },
+    {
+      "id": "DOC-004",
+      "role": "DOCTOR",
+      "module": "患者主索引",
+      "difficulty": "INTERMEDIATE",
+      "question": "发现同一患者存在两条档案并完成合并后，以下哪项正确？",
+      "options": [
+        "旧档案被物理删除，历史记录全部丢失",
+        "旧档案标记 MERGED 并指向主档案，历史标识保留",
+        "两条档案都可以继续独立建档",
+        "需要手工把历史病历复制到新档案"
+      ],
+      "answer": 1,
+      "explanation": "患者合并采用标记+指针，旧档案保留并指向主档案，跨系统标识与历史记录可追溯。"
+    },
+    {
+      "id": "NUR-001",
+      "role": "NURSE",
+      "module": "护理执行",
+      "difficulty": "BASIC",
+      "question": "执行医嘱前，护士必须完成的关键核对是？",
+      "options": [
+        "只核对患者姓名",
+        "核对患者、药品/项目、剂量、途径、时间，并扫码确认",
+        "只要医生口头确认即可",
+        "先执行后补记录"
+      ],
+      "answer": 1,
+      "explanation": "护理执行必须做患者与医嘱的双向核对并扫码留痕，不能以口头确认替代系统核对。"
+    },
+    {
+      "id": "NUR-002",
+      "role": "NURSE",
+      "module": "危急值",
+      "difficulty": "BASIC",
+      "question": "收到危急值提醒后，正确的闭环动作是？",
+      "options": [
+        "忽略，等医生自己看",
+        "电话通知医生并在系统确认接收/处理",
+        "只在交班本上写一下",
+        "直接修改报告数值"
+      ],
+      "answer": 1,
+      "explanation": "危急值必须通知到医生并在系统内确认、处理、关闭，形成可审计闭环，不能只靠纸质交班。"
+    },
+    {
+      "id": "NUR-003",
+      "role": "NURSE",
+      "module": "护理指标",
+      "difficulty": "INTERMEDIATE",
+      "question": "凌晨 02:30 发生的跌倒事件，在跨午夜夜班（22:00–06:00）中应归属哪一天？",
+      "options": [
+        "事件发生当天",
+        "夜班开始的那一天（前一天业务日）",
+        "随机选择",
+        "由护士手工决定"
+      ],
+      "answer": 1,
+      "explanation": "跨午夜班次按班次开始日归属，02:30 属于前一天 22:00 开始的夜班，系统按班次窗口自动计算。"
+    },
+    {
+      "id": "NUR-004",
+      "role": "NURSE",
+      "module": "安全",
+      "difficulty": "BASIC",
+      "question": "发现患者身份信息与腕带不一致时，正确做法是？",
+      "options": [
+        "先执行治疗，事后再说",
+        "暂停操作，重新核对并报告，必要时重新识别患者",
+        "改腕带以匹配系统",
+        "借用同病室患者信息"
+      ],
+      "answer": 1,
+      "explanation": "身份不一致是患者安全事件，必须暂停操作、重新识别并上报，禁止将错就错。"
+    },
+    {
+      "id": "PHA-001",
+      "role": "PHARMACIST",
+      "module": "审方",
+      "difficulty": "BASIC",
+      "question": "处方审方未通过时，正确做法是？",
+      "options": [
+        "先发药再补审",
+        "拒绝发药并记录审方意见，由医生修改后重审",
+        "口头发药",
+        "删除处方"
+      ],
+      "answer": 1,
+      "explanation": "未通过审方的处方不得发药；必须记录审方意见并走医生修改/重审流程。"
+    },
+    {
+      "id": "PHA-002",
+      "role": "PHARMACIST",
+      "module": "麻精药品",
+      "difficulty": "INTERMEDIATE",
+      "question": "麻精药品发放的核心控制要求是？",
+      "options": [
+        "单人发放即可",
+        "双人核对、专柜/专账、处方与空安瓿回收留痕",
+        "可以电话授权发放",
+        "与普通药品同一流程"
+      ],
+      "answer": 1,
+      "explanation": "麻精药品必须双人核对、专柜专账、处方与空安瓿回收留痕，满足特殊管理药品监管要求。"
+    },
+    {
+      "id": "PHA-003",
+      "role": "PHARMACIST",
+      "module": "库存",
+      "difficulty": "INTERMEDIATE",
+      "question": "发药时库存扣减应遵循？",
+      "options": [
+        "先进先出即可，不看效期",
+        "按批次效期优先（近效期先出）并记录批次",
+        "随机选择批次",
+        "只扣总数不记批次"
+      ],
+      "answer": 1,
+      "explanation": "发药必须按批次效期优先并记录批次，才能支持召回、追溯与效期管理。"
+    },
+    {
+      "id": "PHA-004",
+      "role": "PHARMACIST",
+      "module": "退药",
+      "difficulty": "INTERMEDIATE",
+      "question": "患者退药时，正确的处理是？",
+      "options": [
+        "直接退款，不回收药品",
+        "核对原发药批次与药品状态，回收合格药品并冲减收费",
+        "把退回药品直接放回任意货架",
+        "只改库存数量"
+      ],
+      "answer": 1,
+      "explanation": "退药必须核对原批次与药品状态，合格药品回库、收费冲减，保证账物一致与可追溯。"
+    },
+    {
+      "id": "CAS-001",
+      "role": "CASHIER",
+      "module": "收费",
+      "difficulty": "BASIC",
+      "question": "同一就诊重复收费的正确防护是？",
+      "options": [
+        "依靠收费员记忆",
+        "系统按就诊唯一收费单与医嘱唯一计费做幂等控制",
+        "每次收费前手工查 Excel",
+        "重复收费后再退费"
+      ],
+      "answer": 1,
+      "explanation": "收费单按就诊唯一、费用明细按医嘱唯一，数据库级幂等防止重复收费。"
+    },
+    {
+      "id": "CAS-002",
+      "role": "CASHIER",
+      "module": "退费",
+      "difficulty": "INTERMEDIATE",
+      "question": "已支付收费单需要退费时，正确做法是？",
+      "options": [
+        "直接删除收费单",
+        "按退费/作废流程冲正，保留原单据与审计",
+        "修改金额为 0",
+        "让医生重新开医嘱"
+      ],
+      "answer": 1,
+      "explanation": "已支付单据不能删除或改金额，必须走退费/作废冲正，保留原始凭证与审计轨迹。"
+    },
+    {
+      "id": "CAS-003",
+      "role": "CASHIER",
+      "module": "日结",
+      "difficulty": "BASIC",
+      "question": "日结时发现系统金额与现金不一致，正确做法是？",
+      "options": [
+        "直接调整系统金额",
+        "按收费流水逐笔核对，登记差异并上报",
+        "修改日报表",
+        "忽略差异"
+      ],
+      "answer": 1,
+      "explanation": "日结差异必须逐笔核对、登记并上报，禁止直接改系统金额或报表掩盖差异。"
+    },
+    {
+      "id": "CAS-004",
+      "role": "CASHIER",
+      "module": "挂号",
+      "difficulty": "BASIC",
+      "question": "患者当天同一科室已存在在途就诊时，系统通常会？",
+      "options": [
+        "允许无限重复挂号",
+        "阻止重复在途就诊并提示已有就诊",
+        "自动删除旧就诊",
+        "随机选择一个"
+      ],
+      "answer": 1,
+      "explanation": "同一患者同一天同一科室只允许一个在途就诊（部分唯一索引兜底），避免重复占用号源与重复计费。"
+    },
+    {
+      "id": "TEC-001",
+      "role": "TECH",
+      "module": "标本",
+      "difficulty": "BASIC",
+      "question": "标本采集后流转的关键要求是？",
+      "options": [
+        "只要送到检验科即可",
+        "扫码接收/交接，记录时间、人员与状态",
+        "手工登记在本子上",
+        "可以直接丢弃异常标本"
+      ],
+      "answer": 1,
+      "explanation": "标本必须扫码流转并记录时间、人员、状态，才能追溯不合格标本与时限要求。"
+    },
+    {
+      "id": "TEC-002",
+      "role": "TECH",
+      "module": "报告",
+      "difficulty": "INTERMEDIATE",
+      "question": "报告已审核发布后需要修订，正确做法是？",
+      "options": [
+        "直接覆盖原报告",
+        "提交修订并保留原版本、修订原因与审核记录",
+        "删除原报告重新发",
+        "口头通知临床"
+      ],
+      "answer": 1,
+      "explanation": "已发布报告修订必须留痕（原版本、原因、审核人），不能覆盖或删除，保证诊疗依据可追溯。"
+    },
+    {
+      "id": "TEC-003",
+      "role": "TECH",
+      "module": "危急值",
+      "difficulty": "BASIC",
+      "question": "危急值报告后，医技人员应？",
+      "options": [
+        "发完报告就结束",
+        "跟踪临床确认与处理，未确认时升级提醒",
+        "只在报告上标红",
+        "等下次复查"
+      ],
+      "answer": 1,
+      "explanation": "危急值必须闭环：通知、确认、处理、关闭；未确认要升级提醒，不能只发报告。"
+    },
+    {
+      "id": "TEC-004",
+      "role": "TECH",
+      "module": "影像",
+      "difficulty": "INTERMEDIATE",
+      "question": "PACS 影像调阅失败时，正确做法是？",
+      "options": [
+        "让临床看纸质报告即可",
+        "记录失败原因并联系接口/影像运维，保留工单",
+        "重启生产数据库",
+        "修改患者 ID 重试"
+      ],
+      "answer": 1,
+      "explanation": "影像调阅失败应定位接口/网络/存储原因并建单处理，不能以纸质报告替代或擅自改数据。"
+    },
+    {
+      "id": "COD-001",
+      "role": "CODER",
+      "module": "病案首页",
+      "difficulty": "BASIC",
+      "question": "一次住院病案首页的主诊断数量要求是？",
+      "options": [
+        "可以有多条主诊断",
+        "只能有一条主诊断",
+        "不需要主诊断",
+        "由系统随机选择"
+      ],
+      "answer": 1,
+      "explanation": "主诊断唯一（数据库部分唯一索引兜底），多条主诊断会导致 DRG/DIP 分组与医保结算错误。"
+    },
+    {
+      "id": "COD-002",
+      "role": "CODER",
+      "module": "编码",
+      "difficulty": "INTERMEDIATE",
+      "question": "编码完成后发现主要诊断选择错误，正确做法是？",
+      "options": [
+        "直接修改数据库",
+        "提交编码更正申请，说明理由并走审批",
+        "删除病案重写",
+        "让护士修改"
+      ],
+      "answer": 1,
+      "explanation": "编码更正必须走申请与审批，保留更正前后版本与理由，满足病案质量与医保监管要求。"
+    },
+    {
+      "id": "COD-003",
+      "role": "CODER",
+      "module": "归档",
+      "difficulty": "BASIC",
+      "question": "病案归档后临床要求补充记录，正确路径是？",
+      "options": [
+        "开放原病历直接编辑",
+        "走归档后修改审批，生成修订版本并留痕",
+        "在纸质病历上手写",
+        "新建一份无关病历"
+      ],
+      "answer": 1,
+      "explanation": "归档病历修改必须审批并留痕，不能直接开放编辑，否则破坏病历原始性与法律效力。"
+    },
+    {
+      "id": "COD-004",
+      "role": "CODER",
+      "module": "质控",
+      "difficulty": "INTERMEDIATE",
+      "question": "病案质控发现必填项缺失时，系统应？",
+      "options": [
+        "允许直接归档",
+        "阻断归档并提示缺失项，补齐后再归档",
+        "自动填默认值",
+        "忽略"
+      ],
+      "answer": 1,
+      "explanation": "质控必填项缺失应阻断归档并明确提示，不能用默认值掩盖缺失。"
+    },
+    {
+      "id": "INS-001",
+      "role": "INSURANCE",
+      "module": "结算清单",
+      "difficulty": "BASIC",
+      "question": "医保结算清单生成前，必须确保？",
+      "options": [
+        "患者已出院即可，不需要费用",
+        "就诊有有效收费明细且参保信息有效",
+        "随便填一个诊断",
+        "不需要目录对照"
+      ],
+      "answer": 1,
+      "explanation": "结算清单依赖有效参保信息与收费明细；无费用或未参保应明确拒绝生成，而不是生成空清单。"
+    },
+    {
+      "id": "INS-002",
+      "role": "INSURANCE",
+      "module": "冲正",
+      "difficulty": "INTERMEDIATE",
+      "question": "已上传医保的结算清单需要更正，正确做法是？",
+      "options": [
+        "直接覆盖原清单",
+        "按作废/冲正流程处理并重新生成，保留原记录",
+        "删除数据库记录",
+        "让收费员改金额"
+      ],
+      "answer": 1,
+      "explanation": "已上传清单不能覆盖，必须作废/冲正后重新生成，保留原记录与操作审计。"
+    },
+    {
+      "id": "INS-003",
+      "role": "INSURANCE",
+      "module": "目录映射",
+      "difficulty": "BASIC",
+      "question": "院内项目没有医保目录映射时，正确做法是？",
+      "options": [
+        "随便选一个编码",
+        "先在主数据/医保目录完成对照，再结算",
+        "不结算",
+        "改成自费不告知患者"
+      ],
+      "answer": 1,
+      "explanation": "无映射会导致结算错误或拒付，必须先完成目录对照；不能猜编码或隐瞒自费。"
+    },
+    {
+      "id": "INS-004",
+      "role": "INSURANCE",
+      "module": "对账",
+      "difficulty": "INTERMEDIATE",
+      "question": "医保对账出现金额差异时，正确做法是？",
+      "options": [
+        "直接调整医院账",
+        "按清单逐笔核对差异，登记并按规定申诉/冲正",
+        "忽略小额差异",
+        "修改医保返回数据"
+      ],
+      "answer": 1,
+      "explanation": "对账差异必须逐笔核对、登记并按医保规定处理，不能直接改账或篡改返回数据。"
+    },
+    {
+      "id": "OPS-001",
+      "role": "OPS",
+      "module": "SLA",
+      "difficulty": "BASIC",
+      "question": "工单挂起（PENDING）对 SLA 的影响是？",
+      "options": [
+        "SLA 继续正常计时",
+        "暂停计时，恢复时把暂停分钟顺延到截止时间",
+        "SLA 直接作废",
+        "自动关闭工单"
+      ],
+      "answer": 1,
+      "explanation": "挂起会暂停 SLA 计时，恢复时按暂停分钟顺延截止时间，暂停总时长可审计。"
+    },
+    {
+      "id": "OPS-002",
+      "role": "OPS",
+      "module": "工单",
+      "difficulty": "BASIC",
+      "question": "首次响应时间在什么动作时记录？",
+      "options": [
+        "报告人建单时",
+        "责任人或接单人真正接单/处理/评论时",
+        "工单关闭时",
+        "任何查看工单时"
+      ],
+      "answer": 1,
+      "explanation": "首响只在责任人或接单人动作时记录，报告人补充说明不算响应，避免虚高响应速度。"
+    },
+    {
+      "id": "OPS-003",
+      "role": "OPS",
+      "module": "事件",
+      "difficulty": "INTERMEDIATE",
+      "question": "重大事件（Incident）与工单（Ticket）的关系是？",
+      "options": [
+        "完全等价",
+        "事件是一次影响面，可关联一个主工单，也可独立存在",
+        "事件只能由系统自动创建",
+        "工单必须关联事件"
+      ],
+      "answer": 1,
+      "explanation": "工单是一个请求，事件是一次影响面；一个事件可能对应多个工单，复盘针对事件而非单个工单。"
+    },
+    {
+      "id": "OPS-004",
+      "role": "OPS",
+      "module": "复盘",
+      "difficulty": "INTERMEDIATE",
+      "question": "事件复盘审批的正确规则是？",
+      "options": [
+        "作者可以审批自己的复盘",
+        "作者不能审批自己的复盘，必须由他人复核",
+        "不需要审批",
+        "由系统自动批准"
+      ],
+      "answer": 1,
+      "explanation": "复盘 DRAFT → REVIEWED → APPROVED，作者不能审批自己的复盘，避免自查自批。"
+    },
+    {
+      "id": "REL-001",
+      "role": "RELEASE",
+      "module": "版本",
+      "difficulty": "BASIC",
+      "question": "版本发布为 RELEASED 后，以下哪项正确？",
+      "options": [
+        "可以继续修改镜像摘要",
+        "内容不可修改，只能新增版本或标记弃用/作废",
+        "可以删除版本记录",
+        "可以改版本号"
+      ],
+      "answer": 1,
+      "explanation": "版本是不可变制品；RELEASED 后只能新增版本或 DEPRECATED/YANKED，保证生产制品可追溯。"
+    },
+    {
+      "id": "REL-002",
+      "role": "RELEASE",
+      "module": "发布列车",
+      "difficulty": "INTERMEDIATE",
+      "question": "发布列车冻结后，正确做法是？",
+      "options": [
+        "仍可增删车厢",
+        "不允许增删车厢，需变更须取消后重新走流程",
+        "可以直接改库",
+        "由运维口头同意即可"
+      ],
+      "answer": 1,
+      "explanation": "冻结即锁定版本清单；变更必须取消列车并重新编排、评审，避免冻结后偷换版本。"
+    },
+    {
+      "id": "REL-003",
+      "role": "RELEASE",
+      "module": "兼容矩阵",
+      "difficulty": "INTERMEDIATE",
+      "question": "列车中某版本声明 REQUIRES 另一组件某版本，但该组件不在列车中，系统应？",
+      "options": [
+        "忽略依赖",
+        "判定兼容冲突，禁止冻结/发布",
+        "自动加入最新版本",
+        "只记录警告"
+      ],
+      "answer": 1,
+      "explanation": "REQUIRES 必须在列车中精确匹配；缺失依赖属于兼容冲突，不能靠猜版本号大小自动补齐。"
+    },
+    {
+      "id": "REL-004",
+      "role": "RELEASE",
+      "module": "部署",
+      "difficulty": "ADVANCED",
+      "question": "变更冻结窗口内需要紧急修复，正确条件是？",
+      "options": [
+        "任何部署都可以",
+        "HOTFIX 且指向已发布补丁的修复版本",
+        "只要口头批准",
+        "改系统时间绕过"
+      ],
+      "answer": 1,
+      "explanation": "FREEZE 窗口内禁止部署；HOTFIX 只有在指向已发布补丁时才允许穿透，保证紧急修复有审批依据。"
+    },
+    {
+      "id": "DAT-001",
+      "role": "DATA_STEWARD",
+      "module": "主数据",
+      "difficulty": "BASIC",
+      "question": "主数据变更申请的审批规则是？",
+      "options": [
+        "提交人可以审批自己的申请",
+        "提交人不能审批自己的申请，必须由其他治理员复核",
+        "不需要审批",
+        "由系统自动通过"
+      ],
+      "answer": 1,
+      "explanation": "提交人 ≠ 审批人，且申请固化基础版本，防止审 A 批 B。"
+    },
+    {
+      "id": "DAT-002",
+      "role": "DATA_STEWARD",
+      "module": "映射",
+      "difficulty": "INTERMEDIATE",
+      "question": "一个外部编码同时对应多个院内编码时，系统应？",
+      "options": [
+        "随便选一个",
+        "返回全部候选并标记 ambiguous，由调用方显式处理",
+        "自动合并条目",
+        "删除映射"
+      ],
+      "answer": 1,
+      "explanation": "一源多码必须返回候选并标 ambiguous，不能自动选择，避免收费/医保错配。"
+    },
+    {
+      "id": "DAT-003",
+      "role": "DATA_STEWARD",
+      "module": "导入",
+      "difficulty": "INTERMEDIATE",
+      "question": "批量导入预检存在 ERROR/CONFLICT 行时，正确做法是？",
+      "options": [
+        "仍然应用，跳过坏行",
+        "整批拒绝应用，修正源数据后重新预检",
+        "手工改库补齐",
+        "忽略错误"
+      ],
+      "answer": 1,
+      "explanation": "导入采用全有或全无：有错误/冲突整批拒绝，避免半截导入与账实不符。"
+    },
+    {
+      "id": "DAT-004",
+      "role": "DATA_STEWARD",
+      "module": "版本链",
+      "difficulty": "ADVANCED",
+      "question": "主数据版本链的 checksum 作用是？",
+      "options": [
+        "装饰字段",
+        "串联上一条版本形成防篡改链，可发现改/删/重排",
+        "用于排序",
+        "用于生成编码"
+      ],
+      "answer": 1,
+      "explanation": "prev_checksum → checksum 形成哈希链，校验时可发现单条被改/被删/被重排；整链重写需外部锚定。"
+    },
+    {
+      "id": "IMP-001",
+      "role": "IMPLEMENTATION",
+      "module": "迁移顺序",
+      "difficulty": "BASIC",
+      "question": "历史数据迁移的正确顺序是？",
+      "options": [
+        "先迁收费，再迁患者",
+        "字典 → 患者主索引/跨系统标识 → 就诊/住院/诊断/医嘱/收费/费用明细",
+        "任意顺序",
+        "只迁患者即可"
+      ],
+      "answer": 1,
+      "explanation": "必须先有字典与患者，才能迁业务历史；依赖顺序错误会导致引用解析失败或外键冲突。"
+    },
+    {
+      "id": "IMP-002",
+      "role": "IMPLEMENTATION",
+      "module": "预检",
+      "difficulty": "BASIC",
+      "question": "迁移批次存在 ERROR/CONFLICT 时，正确做法是？",
+      "options": [
+        "直接应用，坏行跳过",
+        "禁止应用，修正后重新预检",
+        "手动改库",
+        "减少行数再试"
+      ],
+      "answer": 1,
+      "explanation": "预检是应用的前置门禁；有错误/冲突的批次整批拒绝，避免半截落库。"
+    },
+    {
+      "id": "IMP-003",
+      "role": "IMPLEMENTATION",
+      "module": "回滚",
+      "difficulty": "INTERMEDIATE",
+      "question": "多批次回滚的正确顺序是？",
+      "options": [
+        "按创建时间正序",
+        "按目标依赖逆序（费用明细→收费/医嘱→就诊→患者→字典）",
+        "随机顺序",
+        "只回滚最后一批"
+      ],
+      "answer": 1,
+      "explanation": "回滚必须逆依赖顺序，否则外键与引用会导致失败；平台会自动按目标顺序逆序执行。"
+    },
+    {
+      "id": "IMP-004",
+      "role": "IMPLEMENTATION",
+      "module": "患者加密",
+      "difficulty": "ADVANCED",
+      "question": "迁移患者时证件号加密与查重哈希应使用？",
+      "options": [
+        "任意密钥",
+        "与在线建档相同的 EMPI 密钥与哈希盐",
+        "明文存储",
+        "只存哈希不存密文"
+      ],
+      "answer": 1,
+      "explanation": "迁移与在线建档必须共用同一 FieldCipher 与哈希盐，否则查重哈希不一致，会造出重复主索引。"
+    }
+  ]
+}
