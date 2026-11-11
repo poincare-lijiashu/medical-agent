@@ -18,6 +18,7 @@ export const PRINT_DOC_TYPES = {
   pivasCard: 'PIVAS_CARD',
   inpatientFinance: 'INPATIENT_FINANCE',
   wristband: 'WRISTBAND',
+  nursingSheet: 'NURSING_SHEET',
 } as const
 
 export interface PrintAuditInput {

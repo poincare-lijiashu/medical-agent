@@ -111,6 +111,7 @@ const DOC_TYPE_OPTIONS = [
   { value: 'PIVAS_CARD', label: '静配输液卡' },
   { value: 'INPATIENT_FINANCE', label: '住院费用汇总单' },
   { value: 'WRISTBAND', label: '住院腕带' },
+  { value: 'NURSING_SHEET', label: '护理执行单' },
 ]
 
 const docType = ref('')
