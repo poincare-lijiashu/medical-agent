@@ -28,9 +28,26 @@ public record EmrProperties(Empi empi, Clinical clinical, Internal internal, Ca 
      * @param mode      mock / vendor
      * @param baseUrl   厂商签名/验签接口根地址（vendor 模式必填）
      * @param apiKey    厂商接口密钥（vendor 模式）
-     * @param secret    本地 Mock HMAC 密钥（mock 模式）
-     * @param timeout   连接/读取超时
+     * @param secret      本地 Mock HMAC 密钥（mock 模式）
+     * @param timeout     连接/读取超时
+     * @param tsaUrl      RFC 3161 可信时间戳服务地址；为空表示不取时间戳
+     * @param tsaRequired 是否强制时间戳（生产建议 true：无时间戳的签名不落库）
+     * @param tsaTimeout  时间戳请求超时
      */
-    public record Ca(String mode, String baseUrl, String apiKey, String secret, Duration timeout) {
+    public record Ca(String mode, String baseUrl, String apiKey, String secret, Duration timeout,
+                     String tsaUrl, Boolean tsaRequired, Duration tsaTimeout) {
+
+        public boolean tsaEnabled() {
+            return tsaUrl != null && !tsaUrl.isBlank();
+        }
+
+        public boolean tsaRequiredOrDefault() {
+            return Boolean.TRUE.equals(tsaRequired);
+        }
+
+        public Duration tsaTimeoutOrDefault() {
+            return tsaTimeout == null || tsaTimeout.isNegative() || tsaTimeout.isZero()
+                    ? Duration.ofSeconds(5) : tsaTimeout;
+        }
     }
 }

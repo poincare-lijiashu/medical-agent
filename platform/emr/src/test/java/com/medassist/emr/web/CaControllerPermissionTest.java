@@ -4,6 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
 import com.medassist.emr.domain.EmrModel.CaSignature;
+import com.medassist.emr.domain.EmrModel.CaTimestamp;
 import com.medassist.emr.service.CaSignatureService;
 import com.medassist.emr.service.EmrAccessGuard;
 import com.medassist.emr.web.CaDtos.RevokeReq;
@@ -107,6 +108,19 @@ class CaControllerPermissionTest {
         when(service.verify(id, "qc01")).thenReturn(ca());
         controller.verify(id, "emr:ca:verify", "qc01", allScope);
         verify(service).verify(id, "qc01");
+    }
+
+    @Test
+    @DisplayName("时间戳证据：emr:ca:read，且走病历归属校验")
+    void timestampPermission() {
+        when(service.recordIdOf(id)).thenReturn(UUID.randomUUID());
+        assertForbidden(() -> controller.timestamp(id, "emr:ca:verify", allScope));
+        verify(service, never()).timestampEvidence(any());
+
+        when(service.timestampEvidence(id)).thenReturn(new CaTimestamp(id,
+                "https://tsa.example/tsr", "TOKEN", Instant.now(), Instant.now()));
+        assertThat(controller.timestamp(id, "emr:ca:read", allScope).data().token())
+                .isEqualTo("TOKEN");
     }
 
     @Test

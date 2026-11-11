@@ -32,4 +32,8 @@ public final class CaDtos {
 
     public record ModeView(String mode) {
     }
+
+    /** RFC 3161 时间戳证据：令牌原文是离线复核的唯一依据，不能只给时间。 */
+    public record TimestampView(String tsaUrl, Instant genTime, String token, Instant createdAt) {
+    }
 }

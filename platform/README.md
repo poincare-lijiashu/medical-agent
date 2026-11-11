@@ -163,6 +163,33 @@ python scripts/chs_sim.py --port 9099
 
 模拟器只检查信封必填字段与 `sign` 是否存在，**不验签**；签名算法与证书链需在院方前置机联调时验证。
 
+## CA 电子签名与可信时间戳（§262）
+
+病历签名行落 `emr_svc.ca_signature`（证书序列号/签名值/验签计数），时间戳令牌落
+`emr_svc.ca_timestamp`（追加式，库级触发器拒绝改删）。CA 只证明"谁签的"，
+时间戳（RFC 3161）证明"什么时候签的"，二者缺一不可。
+
+| 变量 | 说明 |
+|---|---|
+| `CA_MODE` | `mock`（本地 HMAC，仅开发）/ `vendor`（厂商 HTTP 接口）；`prod` profile 下 `mock` 拒绝启动 |
+| `CA_BASE_URL` / `CA_API_KEY` | 厂商签名/验签接口根地址与密钥（vendor 必填） |
+| `CA_SECRET` | `mock` 模式的 HMAC 密钥；为空时拒绝签名（不回退硬编码常量） |
+| `CA_TIMEOUT` | 调用 CA 厂商的连接/读取超时（默认 `PT2S`） |
+| `CA_TSA_URL` | RFC 3161 时间戳服务完整地址（`application/timestamp-query`）；为空表示不取时间戳 |
+| `CA_TSA_REQUIRED` | `true`：无令牌拒绝落库、验签判失败；生产建议 `true` |
+| `CA_TSA_TIMEOUT` | 时间戳请求超时（默认 `PT5S`） |
+
+行为约定：
+
+- **锁外预签**：`preSign` 只外呼 CA/TSA，不占病历行锁；结果（含时间戳令牌）在短事务内复核哈希后落库，
+  厂商抖动不会把同一病历的所有写操作堵在数据库锁上；
+- **时间戳绑定签名值**：对签名值字节做 SHA-256 作为 `messageImprint`，验签时同时校验摘要与令牌自身签名；
+- **TSA 故障不阻断签署（未强制时）**：`CA_TSA_REQUIRED=false` 时记录 WARN 后继续签署、不伪造时间戳；
+  `true` 时整笔签名失败回滚——生产建议 `true`，但需先确认 TSA 可用性与超时；
+- **信任边界**：本客户端校验令牌内 TSA 证书签名，**不内置根信任库**；完整证书链与吊销
+  （CRL/OCSP）由院方 TSA 信任锚在联调时补，不能把"能解析令牌"当作"证书可信"；
+- **不是国密**：`mock` 的 HMAC-SHA256 只用于开发与测试，不替代 `SM2/SM3` 证书体系。
+
 ## 构建与运行
 
 ```powershell

@@ -53,6 +53,17 @@
       <artifactId>platform-common</artifactId>
       <version>${project.version}</version>
     </dependency>
+    <!-- RFC 3161 可信时间戳（TSP）请求/响应与令牌验签；只用于 CA 时间戳，不引入证书签发能力 -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>1.87</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk18on</artifactId>
+      <version>1.87</version>
+    </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-test</artifactId>

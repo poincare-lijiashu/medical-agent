@@ -317,6 +317,15 @@ public final class EmrModel {
     }
 
     /**
+     * CA 签名的 RFC 3161 时间戳证据（第 262 批）。
+     *
+     * <p>令牌原文是离线复核的唯一依据：只存 genTime 无法证明"该签名值在那一刻已存在"。
+     */
+    public record CaTimestamp(UUID caSignatureId, String tsaUrl, String token,
+                              Instant genTime, Instant createdAt) {
+    }
+
+    /**
      * 知情同意书模板（G44）：DRAFT → PUBLISHED → DISABLED。
      *
      * <p>发布后内容不可改；要改内容必须新建模板编码或新版本，避免已签文书被追溯篡改。

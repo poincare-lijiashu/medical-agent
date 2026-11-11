@@ -3,6 +3,7 @@ package com.medassist.emr.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.emr.domain.EmrModel.CaSignature;
+import com.medassist.emr.domain.EmrModel.CaTimestamp;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.repo.EmrRepository;
@@ -33,6 +34,7 @@ class CaSignatureServiceTest {
 
     private EmrRepository repo;
     private CaSignatureProvider provider;
+    private CaTimestampClient timestampClient;
     private CaSignatureService service;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -44,7 +46,11 @@ class CaSignatureServiceTest {
     void setUp() {
         repo = mock(EmrRepository.class);
         provider = mock(CaSignatureProvider.class);
-        service = new CaSignatureService(repo, provider, objectMapper);
+        timestampClient = mock(CaTimestampClient.class);
+        when(timestampClient.enabled()).thenReturn(false);
+        when(timestampClient.required()).thenReturn(false);
+        when(repo.findCaTimestamp(any())).thenReturn(Optional.empty());
+        service = new CaSignatureService(repo, provider, objectMapper, timestampClient);
         when(provider.mode()).thenReturn("MOCK");
     }
 
@@ -89,6 +95,27 @@ class CaSignatureServiceTest {
     }
 
     @Test
+    @DisplayName("TSA 故障：未强制时签名继续且不伪造时间戳；强制时整笔失败")
+    void timestampOutageIsBestEffortUnlessRequired() {
+        when(repo.findCaSignatureBySignature(signatureId)).thenReturn(Optional.empty());
+        when(provider.sign(any())).thenReturn(new CaSignResult("MOCK-doctor01", "SIG-001",
+                "HMAC-SHA256", Instant.now()));
+        when(timestampClient.enabled()).thenReturn(true);
+        when(timestampClient.timestamp(any())).thenThrow(new BusinessException(
+                ErrorCode.CA_PROVIDER_UNAVAILABLE, "TSA down"));
+
+        var result = service.sign(record(), signature(), "doctor01");
+        assertThat(result.status()).isEqualTo(CaSignature.VALID);
+        verify(repo, never()).insertCaTimestamp(any());
+
+        when(timestampClient.required()).thenReturn(true);
+        assertThatThrownBy(() -> service.sign(record(), signature(), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CA_PROVIDER_UNAVAILABLE);
+    }
+
+    @Test
     @DisplayName("验签成功：计数 +1 并返回最新记录")
     void verifySuccess() {
         CaSignature original = ca(CaSignature.VALID, null, 0);
@@ -116,6 +143,38 @@ class CaSignatureServiceTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CA_VERIFY_FAILED);
         verify(repo).recordCaVerify(caId, false);
+    }
+
+    @Test
+    @DisplayName("强制时间戳：签名缺令牌时验签判失败并留痕")
+    void verifyRequiresTimestampWhenConfigured() {
+        CaSignature original = ca(CaSignature.VALID, null, 0);
+        CaSignature failed = ca(CaSignature.VALID, false, 1);
+        when(repo.findCaSignature(caId)).thenReturn(Optional.of(original), Optional.of(failed));
+        when(provider.verify(original)).thenReturn(true);
+        when(timestampClient.required()).thenReturn(true);
+        when(repo.recordCaVerify(caId, false)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.verify(caId, "qc01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CA_VERIFY_FAILED);
+        verify(repo).recordCaVerify(caId, false);
+    }
+
+    @Test
+    @DisplayName("时间戳证据：有令牌返回原文；无令牌 404")
+    void timestampEvidence() {
+        when(repo.findCaSignature(caId)).thenReturn(Optional.of(ca(CaSignature.VALID, null, 0)));
+        when(repo.findCaTimestamp(caId)).thenReturn(Optional.of(new CaTimestamp(caId,
+                "https://tsa.example/tsr", "TOKEN", Instant.now(), Instant.now())));
+        assertThat(service.timestampEvidence(caId).token()).isEqualTo("TOKEN");
+
+        when(repo.findCaTimestamp(caId)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.timestampEvidence(caId))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.NOT_FOUND);
     }
 
     @Test

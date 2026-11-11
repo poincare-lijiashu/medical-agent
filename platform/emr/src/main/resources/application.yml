@@ -60,6 +60,10 @@ emr:
     api-key: ${CA_API_KEY:}
     secret: ${CA_SECRET:medassist-dev-ca-secret}
     timeout: ${CA_TIMEOUT:PT2S}
+    # RFC 3161 可信时间戳；生产建议 CA_TSA_REQUIRED=true，且必须配置 CA_TSA_URL
+    tsa-url: ${CA_TSA_URL:}
+    tsa-required: ${CA_TSA_REQUIRED:false}
+    tsa-timeout: ${CA_TSA_TIMEOUT:PT5S}
 
 management:
   endpoints:

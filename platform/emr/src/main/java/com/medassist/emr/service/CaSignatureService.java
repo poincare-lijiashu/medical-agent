@@ -4,11 +4,14 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.time.BusinessTime;
 import com.medassist.emr.domain.EmrModel.CaSignature;
+import com.medassist.emr.domain.EmrModel.CaTimestamp;
 import com.medassist.emr.domain.EmrModel.MedicalRecord;
 import com.medassist.emr.domain.EmrModel.RecordSignature;
 import com.medassist.emr.repo.EmrRepository;
 import com.medassist.emr.service.CaSignatureProvider.CaSignCommand;
 import com.medassist.emr.service.CaSignatureProvider.CaSignResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -32,18 +35,21 @@ import java.util.UUID;
 @Service
 public class CaSignatureService {
 
+    private static final Logger log = LoggerFactory.getLogger(CaSignatureService.class);
     private static final int LIST_LIMIT = 200;
     private static final Set<String> STATUSES = Set.of(CaSignature.VALID, CaSignature.REVOKED);
 
     private final EmrRepository repo;
     private final CaSignatureProvider provider;
     private final ObjectMapper objectMapper;
+    private final CaTimestampClient timestampClient;
 
     public CaSignatureService(EmrRepository repo, CaSignatureProvider provider,
-                              ObjectMapper objectMapper) {
+                              ObjectMapper objectMapper, CaTimestampClient timestampClient) {
         this.repo = repo;
         this.provider = provider;
         this.objectMapper = objectMapper;
+        this.timestampClient = timestampClient;
     }
 
     public String mode() {
@@ -62,7 +68,32 @@ public class CaSignatureService {
         if (contentHash == null || contentHash.isBlank()) {
             throw new BusinessException(ErrorCode.CA_SIGNATURE_INVALID, "病历签名缺少内容哈希");
         }
-        return provider.sign(new CaSignCommand(record.recordNo(), contentHash, signer, signType));
+        CaSignResult result = provider.sign(
+                new CaSignCommand(record.recordNo(), contentHash, signer, signType));
+        if (!timestampClient.enabled()) {
+            if (timestampClient.required()) {
+                throw new BusinessException(ErrorCode.CA_PROVIDER_UNAVAILABLE,
+                        "已要求可信时间戳，但未配置 TSA 地址（CA_TSA_URL）");
+            }
+            return result;
+        }
+        CaTimestampClient.TimestampEvidence evidence;
+        try {
+            evidence = timestampClient.timestamp(
+                    result.signatureValue().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (BusinessException e) {
+            // 未强制时间戳时，TSA 故障不能阻断病历签署（否则"时间戳服务挂了=全院不能签病历"）；
+            // 强制模式（生产建议）仍按失败处理，由调用方回滚整笔签名。
+            if (timestampClient.required()) {
+                throw e;
+            }
+            log.warn("ca.tsa.unavailable recordNo={} reason={}", record.recordNo(),
+                    e.getMessage());
+            return result;
+        }
+        return new CaSignResult(result.certificateSerial(), result.signatureValue(),
+                result.algorithm(), result.signedAt(), evidence.tsaUrl(), evidence.token(),
+                evidence.genTime());
     }
 
     /**
@@ -81,10 +112,26 @@ public class CaSignatureService {
                 result.algorithm(), result.signatureValue(), result.signedAt(),
                 CaSignature.VALID, 0, null, null, null, null, null, Instant.now());
         repo.insertCaSignature(ca);
-        audit(actor, "CA_SIGN", ca.id().toString(), Map.of(
-                "recordNo", record.recordNo(), "revision", signature.revision(),
-                "signType", signature.signType(), "certificateSerial",
-                result.certificateSerial(), "algorithm", result.algorithm()));
+        if (result.timestamped()) {
+            repo.insertCaTimestamp(new com.medassist.emr.domain.EmrModel.CaTimestamp(
+                    ca.id(), result.tsaUrl(), result.timestampToken(), result.timestampTime(),
+                    Instant.now()));
+        } else if (timestampClient.required()) {
+            throw new BusinessException(ErrorCode.CA_PROVIDER_UNAVAILABLE,
+                    "已要求可信时间戳，但本次签名未取得时间戳令牌，拒绝落库");
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("recordNo", record.recordNo());
+        detail.put("revision", signature.revision());
+        detail.put("signType", signature.signType());
+        detail.put("certificateSerial", result.certificateSerial());
+        detail.put("algorithm", result.algorithm());
+        detail.put("timestamped", result.timestamped());
+        if (result.timestamped()) {
+            detail.put("tsaUrl", result.tsaUrl());
+            detail.put("timestampTime", String.valueOf(result.timestampTime()));
+        }
+        audit(actor, "CA_SIGN", ca.id().toString(), detail);
         return ca;
     }
 
@@ -114,6 +161,20 @@ public class CaSignatureService {
                     "CA 签名状态为 " + signature.status() + "，不能验签");
         }
         boolean valid = provider.verify(signature);
+        var timestamp = repo.findCaTimestamp(id);
+        if (valid) {
+            if (timestamp.isPresent()) {
+                try {
+                    timestampClient.verify(
+                            signature.signatureValue().getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            timestamp.get().token());
+                } catch (BusinessException e) {
+                    valid = false;
+                }
+            } else if (timestampClient.required()) {
+                valid = false;
+            }
+        }
         repo.recordCaVerify(id, valid);
         CaSignature refreshed = repo.findCaSignature(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.CA_SIGNATURE_NOT_FOUND));
@@ -145,6 +206,20 @@ public class CaSignatureService {
                 Map.of("reason", normalized, "signer", signature.signer()));
         return repo.findCaSignature(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.CA_SIGNATURE_NOT_FOUND));
+    }
+
+    /**
+     * 时间戳证据（§262）：供审计与离线复核读取令牌原文。
+     *
+     * <p>没有令牌时返回 404，而不是返回一个只有时间、没有令牌的空对象——
+     * 那会让人误以为"有可信时间"。
+     */
+    public CaTimestamp timestampEvidence(UUID signatureId) {
+        repo.findCaSignature(signatureId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.CA_SIGNATURE_NOT_FOUND));
+        return repo.findCaTimestamp(signatureId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND,
+                        "该 CA 签名没有可信时间戳令牌"));
     }
 
     /**

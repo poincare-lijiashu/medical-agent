@@ -29,7 +29,7 @@ class CaSignatureProviderTest {
     private final CaSignatureProvider provider = new CaSignatureProvider(
             new EmrProperties(null, null, null,
                     new EmrProperties.Ca("mock", "http://127.0.0.1:9098", "",
-                            "medassist-dev-ca-secret", Duration.ofSeconds(2))),
+                            "medassist-dev-ca-secret", Duration.ofSeconds(2), null, null, null)),
             new MockEnvironment());
 
     @Test
@@ -41,7 +41,7 @@ class CaSignatureProviderTest {
         assertThatThrownBy(() -> new CaSignatureProvider(
                 new EmrProperties(null, null, null,
                         new EmrProperties.Ca("mock", "http://127.0.0.1:9098", "k", "s",
-                                Duration.ofSeconds(2))), prod))
+                                Duration.ofSeconds(2), null, null, null)), prod))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("禁止 CA mock");
     }
@@ -52,7 +52,7 @@ class CaSignatureProviderTest {
         CaSignatureProvider noSecret = new CaSignatureProvider(
                 new EmrProperties(null, null, null,
                         new EmrProperties.Ca("mock", "http://127.0.0.1:9098", "", "",
-                                Duration.ofSeconds(2))),
+                                Duration.ofSeconds(2), null, null, null)),
                 new MockEnvironment());
 
         assertThatThrownBy(() -> noSecret.sign(new CaSignCommand("MR1", "hash", "doctor01", "AUTHOR")))

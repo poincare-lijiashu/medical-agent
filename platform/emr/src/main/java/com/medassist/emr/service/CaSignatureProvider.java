@@ -56,6 +56,10 @@ public class CaSignatureProvider {
             if (blank(apiKey())) {
                 throw new IllegalStateException("生产环境必须配置 CA_API_KEY");
             }
+            if (ca != null && ca.tsaRequiredOrDefault() && !ca.tsaEnabled()) {
+                throw new IllegalStateException(
+                        "生产环境要求可信时间戳，但未配置 CA_TSA_URL：无时间戳的签名不能作为可靠电子签名证据");
+            }
         }
     }
 
@@ -260,7 +264,18 @@ public class CaSignatureProvider {
     }
 
     public record CaSignResult(String certificateSerial, String signatureValue, String algorithm,
-                               Instant signedAt) {
+                               Instant signedAt, String tsaUrl, String timestampToken,
+                               Instant timestampTime) {
+
+        /** 无时间戳结果（mock/vendor 未配置 TSA 时）。 */
+        public CaSignResult(String certificateSerial, String signatureValue, String algorithm,
+                            Instant signedAt) {
+            this(certificateSerial, signatureValue, algorithm, signedAt, null, null, null);
+        }
+
+        public boolean timestamped() {
+            return timestampToken != null && !timestampToken.isBlank();
+        }
     }
 
     private record VendorSignResponse(String certificateSerial, String signatureValue,

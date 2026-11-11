@@ -11418,3 +11418,58 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 国密 SM2/SM3/SM4 与签名验签由院方前置机负责，本平台未实现；
 - 医保目录/病种/耗材映射沿用既有能力，映射准确率需在接入真实目录后抽样核对；
 - 日结/月结三方对账与差异工单仍是后续批次（W2.5）。
+
+## 262. 2026-11-11 CA 签名可信时间戳（RFC 3161）（第 262 批）
+
+**问题**
+
+- 既有 CA 签名只能证明"谁签的"，`ca_signature.signed_at` 仍是本机时钟：
+  时钟回拨或事后补签无法被识别；WS/T 847—2024 与电子病历规范要求关键文书有**可信时间源**；
+- 只存"签名时间"不存令牌等于不可复核：审计需要能离线证明"该签名值在某一时刻已存在"。
+
+**本批做了什么**
+
+1. **RFC 3161 TSP 客户端**（`CaTimestampClient`，BouncyCastle 1.87）：
+   对签名值字节做 SHA-256 作为 `messageImprint`，POST `application/timestamp-query`，
+   解析 `TimeStampResponse` 并 `validate(request)`；验签时同时校验摘要绑定与令牌 CMS 签名；
+2. **证据落库**：新增 `emr_svc.ca_timestamp`（V27：令牌原文 Base64 + TSA 地址 + 签发时间，
+   追加式触发器拒绝 UPDATE/DELETE；外键**不带 CASCADE**，父行被删时报错，不把第三方证据一起删掉）；
+3. **签名链路**：`preSign` 锁外预签后再取时间戳，`CaSignResult` 携带令牌；
+   `persist` 在同一短事务写 `ca_signature` + `ca_timestamp`；
+   `CA_TSA_REQUIRED=true` 时无令牌拒绝落库、验签判失败；
+4. **TSA 故障语义**：未强制时记 WARN 继续签署（不伪造时间），强制时整笔失败回滚——
+   既避免"TSA 抖动导致全院不能签病历"，又保留生产强约束开关；
+5. **生产守卫**：prod profile 下 `mock` 拒绝启动；`tsa-required=true` 但未配 `CA_TSA_URL` 拒绝启动；
+6. **证据读取 API**：`GET /emr/ca/signatures/{id}/timestamp`（`emr:ca:read`，走病历归属校验），
+   无令牌 404，不返回"只有时间没有令牌"的伪证据；
+7. **测试**：`CaTimestampClientTest` 用本机 BouncyCastle TSA 做真实 HTTP 往返，覆盖签发+验签、
+   签名值篡改失败、未配置 TSA 不伪造；`CaSignatureServiceTest` 增加 TSA 故障降级/强制失败、
+   强制时间戳下缺令牌验签失败、证据读取 404；`CaControllerPermissionTest` 增加证据接口权限与归属校验。
+
+**验证**
+
+```
+后端：mvn -pl emr -am test → 通过（含全部既有病历/签名/首页/编码测试）
+迁移 lint：scanned=254 new=0 PASS
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+真实库：重启 emr(dev) → flyway v27 success；ca_timestamp 触发器与
+      外键 confdeltype=a(NO ACTION) 核对通过
+接口：admin01 验签既有签名 22769489… → verifyCount=2、lastVerifyResult=true
+```
+
+**取舍**
+
+- **只做 TSP over HTTP**：不做 SOAP/专用端口；院方 TSA 若只有私有 API，在 `CaTimestampClient`
+  内加适配，不动表结构；
+- **不内置根信任库**：令牌内证书签名可验，但"该证书是否由可信 TSA 签发"依赖院方信任锚；
+  不把公网/测试 TSA 根证书带进医疗内网，链信任与吊销在联调时按信任库补；
+- **摘要对象是签名值本身**：病历内容完整性由 `record_signature.content_hash` 负责，
+  时间戳只绑定签名值，两层证据各管一段，不重复计算大报文哈希；
+- **不新增"是否可信"布尔列**：有令牌即可信，没有就是没有，不用可空列制造灰色状态。
+
+**遗留**
+
+- 院方 TSA/CA 真实证书链、CRL/OCSP 吊销检查与 TSA 高可用未联调；
+- 长期验证（LTV/PAdES）与归档时间戳（ATS 续证）未做，令牌过期后的再签需后续批次；
+- 国密 SM2/SM3 时间戳（GM/T 0033）未做，需院方国密 TSA；
+- 前端暂未展示时间戳证据面板（接口已具备，控制台排期）。

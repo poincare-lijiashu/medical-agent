@@ -13,6 +13,7 @@ import com.medassist.emr.web.CaDtos.BoardView;
 import com.medassist.emr.web.CaDtos.CaSignatureView;
 import com.medassist.emr.web.CaDtos.ModeView;
 import com.medassist.emr.web.CaDtos.RevokeReq;
+import com.medassist.emr.web.CaDtos.TimestampView;
 import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -90,6 +91,23 @@ public class CaController {
         Permissions.require(permissions, VERIFY);
         guard.requireRecord(scope, service.recordIdOf(id));
         return ApiResponse.ok(view(service.verify(id, actor)));
+    }
+
+    /**
+     * 时间戳证据（§262）：返回 RFC 3161 令牌原文，供审计与离线复核。
+     *
+     * <p>无令牌时 404；不返回"只有时间没有令牌"的伪证据。
+     */
+    @GetMapping("/signatures/{id}/timestamp")
+    public ApiResponse<TimestampView> timestamp(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        guard.requireRecord(scope, service.recordIdOf(id));
+        var evidence = service.timestampEvidence(id);
+        return ApiResponse.ok(new TimestampView(evidence.tsaUrl(), evidence.genTime(),
+                evidence.token(), evidence.createdAt()));
     }
 
     @PostMapping("/signatures/{id}/revoke")

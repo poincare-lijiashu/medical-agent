@@ -593,6 +593,11 @@ emr:
     startup: {failureThreshold: 30, periodSeconds: 5}
     liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
     readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # CA 电子签名与可信时间戳：密钥用 external Secret，不要在此写明文：
+  #   CA_MODE=vendor / CA_BASE_URL / CA_API_KEY / CA_TIMEOUT
+  #   CA_TSA_URL / CA_TSA_REQUIRED=true / CA_TSA_TIMEOUT
+  # 生产必须 vendor + TSA_REQUIRED=true；mock 在 prod profile 会拒绝启动。
+  # 详见 platform/README.md「CA 电子签名与可信时间戳（§262）」
   env: []
   nodeSelector: {}
   tolerations: []

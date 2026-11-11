@@ -586,6 +586,37 @@ public class EmrRepository {
                 .param(id).query(CA_SIGNATURE_MAPPER).optional();
     }
 
+    /** 时间戳证据只追加：同一签名重复写入时保持首条（令牌不可替换）。 */
+    public void insertCaTimestamp(com.medassist.emr.domain.EmrModel.CaTimestamp timestamp) {
+        jdbc.sql("""
+                        INSERT INTO emr_svc.ca_timestamp
+                            (ca_signature_id, tsa_url, token, gen_time)
+                        VALUES (:id, :tsaUrl, :token, :genTime)
+                        ON CONFLICT (ca_signature_id) DO NOTHING
+                        """)
+                .param("id", timestamp.caSignatureId())
+                .param("tsaUrl", timestamp.tsaUrl())
+                .param("token", timestamp.token())
+                .param("genTime", ts(timestamp.genTime())).update();
+    }
+
+    public Optional<com.medassist.emr.domain.EmrModel.CaTimestamp> findCaTimestamp(
+            UUID caSignatureId) {
+        return jdbc.sql("""
+                        SELECT ca_signature_id, tsa_url, token, gen_time, created_at
+                          FROM emr_svc.ca_timestamp
+                         WHERE ca_signature_id = ?
+                        """)
+                .param(caSignatureId)
+                .query((rs, rowNum) -> new com.medassist.emr.domain.EmrModel.CaTimestamp(
+                        rs.getObject("ca_signature_id", UUID.class),
+                        rs.getString("tsa_url"),
+                        rs.getString("token"),
+                        rs.getObject("gen_time", java.time.OffsetDateTime.class).toInstant(),
+                        rs.getObject("created_at", java.time.OffsetDateTime.class).toInstant()))
+                .optional();
+    }
+
     public Optional<CaSignature> findCaSignatureBySignature(UUID signatureId) {
         return jdbc.sql(CA_SIGNATURE_SELECT + " WHERE signature_id = ?")
                 .param(signatureId).query(CA_SIGNATURE_MAPPER).optional();
