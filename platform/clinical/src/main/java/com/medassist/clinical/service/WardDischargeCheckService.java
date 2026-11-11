@@ -193,7 +193,7 @@ public class WardDischargeCheckService {
     // ---------------------------------------------------------------- 内部
 
     /** 病区内最早入院日：统一区间对每个就诊都成立（早于医嘱起效日不会 JOIN 出缺口）。 */
-    private static LocalDate earliestAdmissionDay(List<Admission> admissions, LocalDate today) {
+    static LocalDate earliestAdmissionDay(List<Admission> admissions, LocalDate today) {
         LocalDate earliest = null;
         for (Admission a : admissions) {
             if (a.admittedAt() == null) {

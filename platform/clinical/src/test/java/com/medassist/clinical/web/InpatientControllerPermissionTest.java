@@ -2,6 +2,7 @@ package com.medassist.clinical.web;
 
 import com.medassist.clinical.service.BedReservationService;
 import com.medassist.clinical.service.DischargeCheckService;
+import com.medassist.clinical.service.HandoverService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
@@ -46,6 +47,7 @@ class InpatientControllerPermissionTest {
     private DischargeCheckService checkService;
     private WardDischargeCheckService wardCheckService;
     private BedReservationService reservationService;
+    private HandoverService handoverService;
     private VisitAccessGuard guard;
     private InpatientController controller;
 
@@ -62,9 +64,10 @@ class InpatientControllerPermissionTest {
         checkService = mock(DischargeCheckService.class);
         wardCheckService = mock(WardDischargeCheckService.class);
         reservationService = mock(BedReservationService.class);
+        handoverService = mock(HandoverService.class);
         guard = mock(VisitAccessGuard.class);
         controller = new InpatientController(service, financeService, nursingService, checkService,
-                wardCheckService, reservationService, guard);
+                wardCheckService, reservationService, handoverService, guard);
     }
 
     @Test
@@ -257,6 +260,29 @@ class InpatientControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(reservationService, never()).release(any(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("交班报告：读权限可查；保存/签字需护理执行权限，签字走 sign 分支")
+    void handoverPermissions() {
+        controller.handover(wardId, null, null, "inpatient:read", scope);
+        verify(guard).requireWard(scope, wardId);
+        verify(handoverService).view(wardId, null, null);
+
+        var req = new com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq(
+                java.time.LocalDate.now(), "DAY", "夜班注意 3 床血压", List.of());
+        assertThatThrownBy(() -> controller.saveHandover(wardId, req, "inpatient:read",
+                "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(handoverService, never()).save(any(), any(), anyString(), eq(false));
+
+        controller.saveHandover(wardId, req, "inpatient:nursing:execute", "nurse01", scope);
+        verify(handoverService).save(wardId, req, "nurse01", false);
+
+        controller.signHandover(wardId, req, "inpatient:nursing:execute", "nurse01", scope);
+        verify(handoverService).save(wardId, req, "nurse01", true);
     }
 
     @Test

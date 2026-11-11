@@ -170,6 +170,8 @@ const messages = {
   'nav.consultation.hint': '会诊申请与意见 · 受邀科室只读授权随会诊结束收回',
   'nav.inpatient.title': '住院工作台',
   'nav.inpatient.hint': '病区床位 · 入出院 · 分床转床 · 预交金与欠费预警',
+  'nav.handover.title': '交班报告',
+  'nav.handover.hint': '班次交接 · 在院风险清单 · 逐人交班备注 · 签字冻结与打印',
   'nav.transfusion.title': '输血管理',
   'nav.transfusion.hint': '申请 · 配血 · 发血 · 双人核对输注 · 不良反应',
   'nav.mobile-nursing.title': '移动护理',

@@ -107,6 +107,12 @@ const router = createRouter({
           component: () => import('@/views/InpatientView.vue'),
         },
         {
+          // 第 254 批：病区交班报告（风险清单 + 逐人备注 + 签字冻结）
+          path: 'handover',
+          name: 'handover',
+          component: () => import('@/views/HandoverView.vue'),
+        },
+        {
           path: 'nursing',
           name: 'nursing',
           component: () => import('@/views/NursingView.vue'),

@@ -346,6 +346,39 @@ export interface BedReservationView {
   expired: boolean
 }
 
+/** 交班逐患者条目：风险机器码与出院预检同源（另加 PLANNED_DISCHARGE_TODAY）。 */
+export interface HandoverItemView {
+  admissionId: string
+  bedNo: string | null
+  patientNo: string
+  flags: string[]
+  note: string | null
+}
+
+/** 病区交班报告；id 为空表示该班次尚未保存，editable=false 表示已签字冻结。 */
+export interface HandoverView {
+  id: string | null
+  wardId: string
+  wardName: string
+  shiftDate: string
+  shiftCode: 'DAY' | 'EVENING' | 'NIGHT'
+  status: 'DRAFT' | 'SIGNED'
+  note: string | null
+  createdBy: string | null
+  signedBy: string | null
+  signedAt: string | null
+  editable: boolean
+  items: HandoverItemView[]
+}
+
+/** 保存交班草稿 / 交班签字的上送体（只含备注，患者与风险由服务端生成）。 */
+export interface HandoverSaveBody {
+  shiftDate: string
+  shiftCode: 'DAY' | 'EVENING' | 'NIGHT'
+  note?: string
+  items: { admissionId: string; note?: string }[]
+}
+
 /** 转科记录（append-only）：一次主诊科室变更。 */
 export interface VisitTransfer {
   id: string

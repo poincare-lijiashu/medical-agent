@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.domain.ClinicalModel.WardOccupancy;
 import com.medassist.clinical.service.BedReservationService;
 import com.medassist.clinical.service.DischargeCheckService;
+import com.medassist.clinical.service.HandoverService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
@@ -22,6 +23,8 @@ import com.medassist.clinical.web.ClinicalDtos.DepositReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositView;
 import com.medassist.clinical.web.ClinicalDtos.DischargeCheckView;
 import com.medassist.clinical.web.ClinicalDtos.DischargeReadinessSummary;
+import com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq;
+import com.medassist.clinical.web.ClinicalDtos.HandoverView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
@@ -87,18 +90,21 @@ public class InpatientController {
     private final DischargeCheckService checkService;
     private final WardDischargeCheckService wardCheckService;
     private final BedReservationService reservationService;
+    private final HandoverService handoverService;
     private final VisitAccessGuard guard;
 
     public InpatientController(InpatientService service, InpatientFinanceService financeService,
                                NursingService nursingService, DischargeCheckService checkService,
                                WardDischargeCheckService wardCheckService,
-                               BedReservationService reservationService, VisitAccessGuard guard) {
+                               BedReservationService reservationService,
+                               HandoverService handoverService, VisitAccessGuard guard) {
         this.service = service;
         this.financeService = financeService;
         this.nursingService = nursingService;
         this.checkService = checkService;
         this.wardCheckService = wardCheckService;
         this.reservationService = reservationService;
+        this.handoverService = handoverService;
         this.guard = guard;
     }
 
@@ -211,6 +217,55 @@ public class InpatientController {
         guard.requireWard(scope, wardId);
         reservationService.release(wardId, id, req == null ? null : req.reason(), actor);
         return ApiResponse.ok(null);
+    }
+
+    /**
+     * 交班报告（按病区 + 交班日 + 班次）。
+     *
+     * <p>已签字返回冻结快照；否则返回实时在院清单并叠加草稿备注。
+     */
+    @GetMapping("/wards/{wardId}/handover")
+    public ApiResponse<HandoverView> handover(
+            @PathVariable UUID wardId,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate shiftDate,
+            @RequestParam(required = false) String shift,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(handoverService.view(wardId, shiftDate, shift));
+    }
+
+    /**
+     * 保存交班草稿。
+     *
+     * <p>写权限用护理执行（`inpatient:nursing:execute`）：交班备注属于护理记录；
+     * 只接受逐人备注，患者与风险项由服务端生成。
+     */
+    @PostMapping("/wards/{wardId}/handover")
+    public ApiResponse<HandoverView> saveHandover(
+            @PathVariable UUID wardId,
+            @Valid @RequestBody HandoverSaveReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, NURSING_EXECUTE);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(handoverService.save(wardId, req, actor, false));
+    }
+
+    /** 交班签字：保存并冻结（DRAFT → SIGNED），签字后不可再改。 */
+    @PostMapping("/wards/{wardId}/handover/sign")
+    public ApiResponse<HandoverView> signHandover(
+            @PathVariable UUID wardId,
+            @Valid @RequestBody HandoverSaveReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, NURSING_EXECUTE);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(handoverService.save(wardId, req, actor, true));
     }
 
     @GetMapping("/wards/{wardId}/admissions")

@@ -21,6 +21,8 @@ import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedication;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedicationItem;
+import com.medassist.clinical.domain.ClinicalModel.Handover;
+import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBed;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyObservation;
@@ -2657,6 +2659,111 @@ public class ClinicalRepository {
                         """)
                 .param("id", id).param("version", expectedVersion)
                 .param("from", from).param("to", to).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 交班报告
+
+    private static final RowMapper<Handover> HANDOVER_MAPPER = (rs, i) -> new Handover(
+            rs.getObject("id", UUID.class),
+            rs.getObject("ward_id", UUID.class),
+            rs.getObject("shift_date", LocalDate.class),
+            rs.getString("shift_code"),
+            rs.getString("note"),
+            rs.getString("status"),
+            rs.getString("created_by"),
+            rs.getString("signed_by"),
+            rs.getTimestamp("signed_at") == null ? null : rs.getTimestamp("signed_at").toInstant(),
+            rs.getTimestamp("created_at").toInstant(),
+            rs.getLong("version"));
+
+    private static final RowMapper<HandoverItem> HANDOVER_ITEM_MAPPER = (rs, i) -> new HandoverItem(
+            rs.getObject("id", UUID.class),
+            rs.getObject("handover_id", UUID.class),
+            rs.getObject("admission_id", UUID.class),
+            rs.getString("bed_no"),
+            rs.getString("patient_no"),
+            rs.getString("flags"),
+            rs.getString("note"));
+
+    public Optional<Handover> findHandover(UUID wardId, LocalDate shiftDate, String shiftCode) {
+        return jdbc.sql("""
+                        SELECT id, ward_id, shift_date, shift_code, note, status, created_by,
+                               signed_by, signed_at, created_at, version
+                          FROM clinical_svc.handover
+                         WHERE ward_id = :wardId AND shift_date = :shiftDate
+                           AND shift_code = :shiftCode
+                        """)
+                .param("wardId", wardId).param("shiftDate", shiftDate)
+                .param("shiftCode", shiftCode).query(HANDOVER_MAPPER).optional();
+    }
+
+    /** 加行锁读取交班报告；必须在事务内调用。 */
+    public Optional<Handover> lockHandover(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, ward_id, shift_date, shift_code, note, status, created_by,
+                               signed_by, signed_at, created_at, version
+                          FROM clinical_svc.handover WHERE id = ? FOR UPDATE
+                        """).param(id).query(HANDOVER_MAPPER).optional();
+    }
+
+    public void insertHandover(Handover h) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.handover
+                            (id, ward_id, shift_date, shift_code, note, status, created_by, version)
+                        VALUES (:id, :wardId, :shiftDate, :shiftCode, :note, :status, :createdBy, 0)
+                        """)
+                .param("id", h.id()).param("wardId", h.wardId())
+                .param("shiftDate", h.shiftDate()).param("shiftCode", h.shiftCode())
+                .param("note", h.note()).param("status", h.status())
+                .param("createdBy", h.createdBy()).update();
+    }
+
+    /** 编辑草稿（CAS）：只有 DRAFT 可改。 */
+    public boolean updateHandoverDraft(UUID id, String note, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.handover
+                           SET note = :note, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'DRAFT'
+                        """)
+                .param("id", id).param("note", note).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 签字（CAS）：DRAFT → SIGNED，同时记录签字人与时间。 */
+    public boolean signHandover(UUID id, String signedBy, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.handover
+                           SET status = 'SIGNED', signed_by = :signedBy, signed_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'DRAFT'
+                        """)
+                .param("id", id).param("signedBy", signedBy)
+                .param("version", expectedVersion).update() > 0;
+    }
+
+    public List<HandoverItem> listHandoverItems(UUID handoverId) {
+        return jdbc.sql("""
+                        SELECT id, handover_id, admission_id, bed_no, patient_no, flags, note
+                          FROM clinical_svc.handover_item
+                         WHERE handover_id = ?
+                         ORDER BY bed_no NULLS LAST, patient_no
+                        """).param(handoverId).query(HANDOVER_ITEM_MAPPER).list();
+    }
+
+    public void deleteHandoverItems(UUID handoverId) {
+        jdbc.sql("DELETE FROM clinical_svc.handover_item WHERE handover_id = ?")
+                .param(handoverId).update();
+    }
+
+    public void insertHandoverItem(HandoverItem item) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.handover_item
+                            (id, handover_id, admission_id, bed_no, patient_no, flags, note)
+                        VALUES (:id, :handoverId, :admissionId, :bedNo, :patientNo, :flags, :note)
+                        """)
+                .param("id", item.id()).param("handoverId", item.handoverId())
+                .param("admissionId", item.admissionId()).param("bedNo", item.bedNo())
+                .param("patientNo", item.patientNo()).param("flags", item.flags())
+                .param("note", item.note()).update();
     }
 
     public String nextAdmissionNo() {

@@ -200,6 +200,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['inpatient:read'],
   },
   {
+    // 第 254 批：班次交接（风险清单 + 逐人备注 + 签字冻结）
+    name: 'handover',
+    path: '/handover',
+    title: '交班报告',
+    hint: '班次交接 · 在院风险清单 · 逐人交班备注 · 签字冻结与打印',
+    icon: 'clipboard',
+    group: '住院管理',
+    permissions: ['inpatient:read'],
+  },
+  {
     name: 'transfusion',
     path: '/transfusion',
     title: '输血管理',

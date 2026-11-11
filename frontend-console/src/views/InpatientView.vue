@@ -67,6 +67,13 @@
         床位预留
         <span v-if="reservedCount > 0" class="badge badge--neutral">{{ reservedCount }}</span>
       </button>
+      <RouterLink
+        v-if="selectedWardId"
+        class="btn btn--sm"
+        :to="{ path: '/handover', query: { ward: selectedWardId } }"
+      >
+        交班报告
+      </RouterLink>
       <button
         v-if="selectedWardId"
         class="btn btn--sm"
@@ -562,11 +569,11 @@
                   <span v-for="c in it.blockers" :key="c" class="badge badge--danger">
                     {{ checkCodeLabel(c) }}
                   </span>
-                  <span v-for="c in visibleWarnings(it)" :key="c" class="badge badge--warn">
+                  <span v-for="c in visibleWarnings(it.warnings)" :key="c" class="badge badge--warn">
                     {{ checkCodeLabel(c) }}
                   </span>
                   <span
-                    v-if="!it.blockers.length && !visibleWarnings(it).length && !it.overdueDays"
+                    v-if="!it.blockers.length && !visibleWarnings(it.warnings).length && !it.overdueDays"
                     class="hint"
                   >
                     无待处理项
@@ -888,6 +895,7 @@ import type {
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { downloadCsv } from '@/utils/csv'
+import { checkCodeLabel, visibleWarnings } from '@/utils/clinicalLabels'
 import { ageOf, dateTime, genderLabel, money, todayIso } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
@@ -1458,29 +1466,6 @@ const wardLabel = computed(() =>
   currentWard.value ? `${currentWard.value.name}（${currentWard.value.code}）` : '',
 )
 
-/** 与后端 DischargeCheckService 的机器码一一对应；未知码原样显示，便于发现新码。 */
-const CHECK_CODE_LABELS: Record<string, string> = {
-  ADMISSION_STATUS: '状态异常',
-  UNSETTLED_CHARGE: '未结费用',
-  UNBILLED_TEMP_ORDER: '临时医嘱未计费',
-  UNBILLED_DAILY_ORDER: '长嘱未计费',
-  UNSTOPPED_LONG_ORDER: '长嘱未停',
-  DISCHARGE_MED_PENDING: '带药未完成',
-  EMR_ARCHIVE: '病历未归档',
-  OVERDUE_DISCHARGE: '超期未出院',
-}
-
-/** 超期在行内已有“超期 N 天”徽章，列表里不再重复一枚“超期未出院”。 */
-const OVERDUE_CODE = 'OVERDUE_DISCHARGE'
-
-function visibleWarnings(it: WardDischargeReadiness): string[] {
-  return it.warnings.filter((c) => c !== OVERDUE_CODE)
-}
-
-function checkCodeLabel(code: string): string {
-  return CHECK_CODE_LABELS[code] ?? code
-}
-
 function openReadiness() {
   readinessOpen.value = true
   readinessFilter.value = 'all'
@@ -1528,7 +1513,7 @@ function exportReadinessCsv() {
         : '未设置',
       it.ready ? '可出院' : `${it.blockerCount} 项阻断`,
       it.blockers.map((c) => checkCodeLabel(c)).join('、') || '—',
-      visibleWarnings(it).map((c) => checkCodeLabel(c)).join('、') || '—',
+      visibleWarnings(it.warnings).map((c) => checkCodeLabel(c)).join('、') || '—',
     ])
   }
   downloadCsv(`出院预检-${ward.code}-${todayIso()}.csv`, rows)
@@ -1606,8 +1591,8 @@ async function printReadiness() {
           }</td>
           <td>${it.ready ? '可出院' : `${it.blockerCount} 项阻断`}</td>
           <td>${it.blockers.length ? it.blockers.map((c) => esc(checkCodeLabel(c))).join('、') : '—'}</td>
-          <td>${visibleWarnings(it).length
-              ? visibleWarnings(it).map((c) => esc(checkCodeLabel(c))).join('、')
+          <td>${visibleWarnings(it.warnings).length
+              ? visibleWarnings(it.warnings).map((c) => esc(checkCodeLabel(c))).join('、')
               : '—'}</td>
         </tr>`,
       )

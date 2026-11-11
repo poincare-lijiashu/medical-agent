@@ -277,6 +277,7 @@ const DOC_TYPE_OPTIONS = [
   { value: 'WRISTBAND', label: '住院腕带' },
   { value: 'NURSING_SHEET', label: '护理执行单' },
   { value: 'DISCHARGE_READINESS', label: '出院预检交接单' },
+  { value: 'HANDOVER', label: '病区交班报告' },
 ]
 
 const docType = ref('')

@@ -167,6 +167,8 @@ const messages: Record<MessageKey, string> = {
   'nav.consultation.hint': 'Requests and opinions; read access for invited departments ends with the consult',
   'nav.inpatient.title': 'Inpatient Workbench',
   'nav.inpatient.hint': 'Ward beds, admission and discharge, bed moves, deposits and arrears alerts',
+  'nav.handover.title': 'Shift Handover',
+  'nav.handover.hint': 'Shift handover, ward risk list, per-patient notes, signature freeze and print',
   'nav.transfusion.title': 'Blood Transfusion',
   'nav.transfusion.hint': 'Request, crossmatch, issue, double-check transfusion, adverse reactions',
   'nav.mobile-nursing.title': 'Mobile Nursing',

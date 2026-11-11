@@ -692,6 +692,32 @@ public final class ClinicalModel {
     }
 
     /**
+     * 病区交班报告（一次班次一份）。
+     *
+     * <p>签字后冻结：记录不能再改，患者与风险项保留签字当时的快照。
+     */
+    public record Handover(UUID id, UUID wardId, LocalDate shiftDate, String shiftCode,
+                           String note, String status, String createdBy, String signedBy,
+                           Instant signedAt, Instant createdAt, long version) {
+
+        public static final String DAY = "DAY";
+        public static final String EVENING = "EVENING";
+        public static final String NIGHT = "NIGHT";
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SIGNED = "SIGNED";
+
+        public boolean editable() {
+            return DRAFT.equals(status);
+        }
+    }
+
+    /** 交班逐患者快照（床位/病案号/风险项为保存当时的值）。 */
+    public record HandoverItem(UUID id, UUID handoverId, UUID admissionId, String bedNo,
+                               String patientNo, String flags, String note) {
+    }
+
+    /**
      * 住院登记。
      *
      * @param plannedDischargeDate 预计出院日（业务日期，仅用于床位计划与超期预警，不阻断出院）

@@ -26,6 +26,7 @@ export const PRINT_DOC_TYPES = {
   wristband: 'WRISTBAND',
   nursingSheet: 'NURSING_SHEET',
   dischargeReadiness: 'DISCHARGE_READINESS',
+  handover: 'HANDOVER',
 } as const
 
 /** 与留痕页、原因弹窗同一套中文口径（弹窗标题用）。 */
@@ -38,6 +39,7 @@ export const PRINT_DOC_LABELS: Record<(typeof PRINT_DOC_TYPES)[keyof typeof PRIN
   WRISTBAND: '住院腕带',
   NURSING_SHEET: '护理执行单',
   DISCHARGE_READINESS: '出院预检交接单',
+  HANDOVER: '病区交班报告',
 }
 
 /** 服务端错误码：补打未登记原因（ErrorCode.PRINT_REASON_REQUIRED）。 */

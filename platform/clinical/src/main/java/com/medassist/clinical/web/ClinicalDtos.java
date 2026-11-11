@@ -222,6 +222,44 @@ public final class ClinicalDtos {
     }
 
     /**
+     * 交班逐患者备注（保存/签字时上送）。
+     *
+     * <p>只接受备注：床位、病案号、风险项一律由服务端按当前在院数据生成，
+     * 避免客户端篡改"交班时看到的风险"。
+     */
+    public record HandoverItemReq(@NotNull UUID admissionId, @Size(max = 1000) String note) {
+    }
+
+    /** 保存交班草稿 / 交班签字（同一份内容，签字是原子保存+冻结）。 */
+    public record HandoverSaveReq(
+            @NotNull LocalDate shiftDate,
+            @NotBlank String shiftCode,
+            @Size(max = 4000) String note,
+            List<HandoverItemReq> items) {
+    }
+
+    /**
+     * 交班逐患者视图。
+     *
+     * @param flags 风险机器码（与出院预检同一套码，另加 PLANNED_DISCHARGE_TODAY）
+     */
+    public record HandoverItemView(UUID admissionId, String bedNo, String patientNo,
+                                   List<String> flags, String note) {
+    }
+
+    /**
+     * 交班报告视图。
+     *
+     * @param id       未保存过草稿时为 null（前端据此判断"尚未保存"）
+     * @param editable 已签字为 false，界面必须只读
+     */
+    public record HandoverView(UUID id, UUID wardId, String wardName, LocalDate shiftDate,
+                               String shiftCode, String status, String note, String createdBy,
+                               String signedBy, Instant signedAt, boolean editable,
+                               List<HandoverItemView> items) {
+    }
+
+    /**
      * 转科：目标科室 + 目标床位 + 理由。
      *
      * <p>{@code bedId} 在患者当前已占床时必填：转科必须同时落到目标科室的病区床位，
