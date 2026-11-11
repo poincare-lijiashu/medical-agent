@@ -37,12 +37,14 @@ public class AuditController {
             @RequestParam(required = false) String actor,
             @RequestParam(required = false) String action,
             @RequestParam(required = false) String targetType,
+            @RequestParam(required = false) String targetId,
             @RequestParam(required = false) Instant from,
             @RequestParam(required = false) Instant to,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.search(actor, action, targetType, from, to, page, size));
+        return ApiResponse.ok(service.search(actor, action, targetType, targetId, from, to,
+                page, size));
     }
 }

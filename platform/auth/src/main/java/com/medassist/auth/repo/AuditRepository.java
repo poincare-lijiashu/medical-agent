@@ -14,7 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 跨域审计汇聚查询（只读）。
  *
  * <p>现状：各域的 change_log 在同一个 PostgreSQL 实例的不同 schema，直接 UNION ALL 即可形成
- * 统一审计视图（按时间倒序、支持 actor/action/targetType/时间窗过滤）。
+ * 统一审计视图（按时间倒序、支持 actor/action/targetType/targetId/时间窗过滤）。
  *
  * <p><b>过滤参数约定</b>：空字符串表示"不限"，时间窗用 [epoch, 9999-12-31] 表示"不限"。
  * 全部条件都是普通比较（不用 {@code :x IS NULL}），避免 JDBC 无法推断 NULL 参数类型。
@@ -52,7 +52,7 @@ public class AuditRepository {
     /** 已部署域的探测结果（运行期不会消失，只探测一次）。 */
     private volatile List<Source> deployedSources;
 
-    /** 按过滤组合缓存的 UNION SQL（最多 8 种组合：actor/action/targetType 各有无）。 */
+    /** 按过滤组合缓存的 UNION SQL（16 种组合：actor/action/targetType/targetId 各有无）。 */
     private final Map<Integer, String> sqlCache = new ConcurrentHashMap<>();
 
     public AuditRepository(JdbcClient jdbc) {
@@ -60,13 +60,15 @@ public class AuditRepository {
     }
 
     public List<AuditEventResp> search(String actor, String action, String targetType,
-                                       Instant from, Instant to, int limit, int offset) {
+                                       String targetId, Instant from, Instant to,
+                                       int limit, int offset) {
         String actorValue = orEmpty(actor);
         String actionValue = orEmpty(action);
         String targetValue = orEmpty(targetType);
+        String targetIdValue = orEmpty(targetId);
         // id 决胜列：同一毫秒的多条事件（批量写入）若只按 ts 排序，翻页会出现重复/漏项
         JdbcClient.StatementSpec spec = jdbc.sql("SELECT * FROM ("
-                        + union(actorValue, actionValue, targetValue)
+                        + union(actorValue, actionValue, targetValue, targetIdValue)
                         + ") e ORDER BY e.ts DESC, e.id DESC LIMIT :limit OFFSET :offset")
                 .param("fromTs", Timestamp.from(from == null ? BEGINNING : from))
                 .param("toTs", Timestamp.from(to == null ? END : to))
@@ -81,6 +83,9 @@ public class AuditRepository {
         if (!targetValue.isEmpty()) {
             spec = spec.param("targetType", targetValue);
         }
+        if (!targetIdValue.isEmpty()) {
+            spec = spec.param("targetId", targetIdValue);
+        }
         return spec.query((rs, i) -> new AuditEventResp(
                         rs.getString("source"),
                         rs.getLong("id"),
@@ -93,12 +98,14 @@ public class AuditRepository {
                 .list();
     }
 
-    public long count(String actor, String action, String targetType, Instant from, Instant to) {
+    public long count(String actor, String action, String targetType, String targetId,
+                      Instant from, Instant to) {
         String actorValue = orEmpty(actor);
         String actionValue = orEmpty(action);
         String targetValue = orEmpty(targetType);
+        String targetIdValue = orEmpty(targetId);
         JdbcClient.StatementSpec spec = jdbc.sql("SELECT count(*) FROM ("
-                        + union(actorValue, actionValue, targetValue) + ") e")
+                        + union(actorValue, actionValue, targetValue, targetIdValue) + ") e")
                 .param("fromTs", Timestamp.from(from == null ? BEGINNING : from))
                 .param("toTs", Timestamp.from(to == null ? END : to));
         if (!actorValue.isEmpty()) {
@@ -110,6 +117,9 @@ public class AuditRepository {
         if (!targetValue.isEmpty()) {
             spec = spec.param("targetType", targetValue);
         }
+        if (!targetIdValue.isEmpty()) {
+            spec = spec.param("targetId", targetIdValue);
+        }
         return spec.query(Long.class).single();
     }
 
@@ -119,15 +129,18 @@ public class AuditRepository {
      * <p>空过滤条件**直接省略**而不是写成 {@code (:actor = '' OR actor = :actor)}：
      * 后者在 pgjdbc 的 generic plan 下无法做 Index Cond，会让 (actor, ts) 索引完全失效
      * （第四轮 SF-14）。
+     *
+     * <p>`targetId` 用于按单号/主键反查“谁动过这条记录”（如打印单据 `docType:docNo`）。
      */
-    private String union(String actor, String action, String targetType) {
+    private String union(String actor, String action, String targetType, String targetId) {
         int key = (actor.isEmpty() ? 0 : 1) | (action.isEmpty() ? 0 : 2)
-                | (targetType.isEmpty() ? 0 : 4);
+                | (targetType.isEmpty() ? 0 : 4) | (targetId.isEmpty() ? 0 : 8);
         return sqlCache.computeIfAbsent(key, k -> buildUnion(
-                !actor.isEmpty(), !action.isEmpty(), !targetType.isEmpty()));
+                !actor.isEmpty(), !action.isEmpty(), !targetType.isEmpty(), !targetId.isEmpty()));
     }
 
-    private String buildUnion(boolean filterActor, boolean filterAction, boolean filterTarget) {
+    private String buildUnion(boolean filterActor, boolean filterAction, boolean filterTarget,
+                              boolean filterTargetId) {
         StringBuilder sb = new StringBuilder();
         StringBuilder where = new StringBuilder(" WHERE ts >= :fromTs AND ts <= :toTs");
         if (filterActor) {
@@ -138,6 +151,9 @@ public class AuditRepository {
         }
         if (filterTarget) {
             where.append(" AND target_type = :targetType");
+        }
+        if (filterTargetId) {
+            where.append(" AND target_id = :targetId");
         }
         for (Source source : sources()) {
             if (sb.length() > 0) {

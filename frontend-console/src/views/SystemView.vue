@@ -274,7 +274,7 @@
             <span class="sheet-title">审计日志</span>
             <span class="badge badge--neutral">{{ auditTotal }}</span>
             <span class="spacer" />
-            <span class="hint">跨 auth / empi 等域的变更日志；时间留空表示不限</span>
+            <span class="hint">跨账号 / 患者 / 临床 / 药事 / 医技 / 病案 / 医保的变更日志；时间留空表示不限</span>
           </div>
 
           <div class="toolbar">
@@ -289,6 +289,15 @@
             <label class="field">
               <span class="label">对象类型</span>
               <input v-model.trim="auditForm.targetType" class="input" placeholder="例如 USER" @keydown.enter="resetAuditPage" />
+            </label>
+            <label class="field">
+              <span class="label">对象 ID</span>
+              <input
+                v-model.trim="auditForm.targetId"
+                class="input"
+                placeholder="按单号/主键反查，例如 RECEIPT:20261111001"
+                @keydown.enter="resetAuditPage"
+              />
             </label>
             <label class="field">
               <span class="label">开始时间</span>
@@ -335,11 +344,13 @@
               <tbody>
                 <tr v-for="e in auditRows" :key="`${e.source}-${e.id}`">
                   <td data-primary>{{ dateTime(e.ts) }}</td>
-                  <td data-label="来源"><span class="badge badge--neutral">{{ e.source }}</span></td>
+                  <td data-label="来源">
+                    <span class="badge badge--neutral" :title="e.source">{{ auditSourceLabel(e.source) }}</span>
+                  </td>
                   <td data-label="操作人">{{ e.actor }}</td>
-                  <td class="mono" data-label="动作">{{ e.action }}</td>
+                  <td data-label="动作" :title="e.action">{{ actionLabel(e.action) }}</td>
                   <td data-label="对象">
-                    <div>{{ e.targetType || '—' }}</div>
+                    <div :title="e.targetType || ''">{{ targetTypeLabel(e.targetType) }}</div>
                     <div class="mono muted" style="font-size: var(--fs-small)">{{ shortId(e.targetId) }}</div>
                   </td>
                   <td data-label="详情">
@@ -581,16 +592,24 @@
       <AppModal
         v-model="auditDetailOpen"
         title="审计详情"
-        :subtitle="auditDetail ? `${auditDetail.action} · ${auditDetail.actor}` : ''"
+        :subtitle="auditDetail ? `${actionLabel(auditDetail.action)} · ${auditDetail.actor}` : ''"
         width="720px"
       >
         <div v-if="auditDetail" class="stack">
           <div class="detail-grid">
             <div class="kv"><span>时间</span><strong>{{ dateTime(auditDetail.ts) }}</strong></div>
-            <div class="kv"><span>来源</span><strong>{{ auditDetail.source }}</strong></div>
+            <div class="kv"><span>来源</span><strong>{{ auditSourceLabel(auditDetail.source) }}</strong></div>
             <div class="kv"><span>操作人</span><strong>{{ auditDetail.actor }}</strong></div>
-            <div class="kv"><span>动作</span><strong class="mono">{{ auditDetail.action }}</strong></div>
-            <div class="kv"><span>对象类型</span><strong>{{ auditDetail.targetType || '—' }}</strong></div>
+            <div class="kv">
+              <span>动作</span>
+              <strong>{{ actionLabel(auditDetail.action) }}</strong>
+              <span class="mono muted detail-raw">{{ auditDetail.action }}</span>
+            </div>
+            <div class="kv">
+              <span>对象类型</span>
+              <strong>{{ targetTypeLabel(auditDetail.targetType) }}</strong>
+              <span v-if="auditDetail.targetType" class="mono muted detail-raw">{{ auditDetail.targetType }}</span>
+            </div>
             <div class="kv"><span>对象 ID</span><strong class="mono">{{ auditDetail.targetId || '—' }}</strong></div>
           </div>
           <div class="detail-block">
@@ -623,6 +642,7 @@ import type { AuditEvent, Campus, Dept, OrgRef, RoleRef, UserAccount } from '@/a
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
+import { actionLabel, auditSourceLabel, targetTypeLabel } from '@/utils/auditLabels'
 
 const role = session.roleLabel
 const canReadUsers = computed(() => hasPermission('auth:user:read'))
@@ -1065,7 +1085,7 @@ const auditRows = ref<AuditEvent[]>([])
 const auditTotal = ref(0)
 const auditPage = ref(1)
 const auditLoading = ref(false)
-const auditForm = reactive({ actor: '', action: '', targetType: '', from: '', to: '' })
+const auditForm = reactive({ actor: '', action: '', targetType: '', targetId: '', from: '', to: '' })
 
 const auditPages = computed(() => Math.max(1, Math.ceil(auditTotal.value / AUDIT_PAGE_SIZE)))
 
@@ -1084,6 +1104,7 @@ async function loadAudit() {
       actor: auditForm.actor || undefined,
       action: auditForm.action || undefined,
       targetType: auditForm.targetType || undefined,
+      targetId: auditForm.targetId || undefined,
       from: toIso(auditForm.from),
       to: toIso(auditForm.to),
       page: auditPage.value,
@@ -1118,6 +1139,7 @@ function clearAudit() {
   auditForm.actor = ''
   auditForm.action = ''
   auditForm.targetType = ''
+  auditForm.targetId = ''
   auditForm.from = ''
   auditForm.to = ''
   resetAuditPage()
@@ -1282,6 +1304,11 @@ onMounted(() => {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--s3) var(--s4);
+}
+
+/* 第 242 批：中文名旁边保留原始动作/类型，排查时不至于只能信译文 */
+.detail-raw {
+  font-size: var(--fs-small);
 }
 
 .kv {

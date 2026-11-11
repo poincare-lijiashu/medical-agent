@@ -30,18 +30,19 @@ public class AuditService {
     }
 
     public PageResult<AuditEventResp> search(String actor, String action, String targetType,
-                                             Instant from, Instant to, int page, int size) {
+                                             String targetId, Instant from, Instant to,
+                                             int page, int size) {
         if (from != null && to != null && from.isAfter(to)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始时间不能晚于结束时间");
         }
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), PageResult.MAX_PAGE_SIZE);
-        long total = repo.count(actor, action, targetType, from, to);
+        long total = repo.count(actor, action, targetType, targetId, from, to);
         if (total == 0) {
             return PageResult.of(safePage, safeSize, 0, List.of());
         }
         int offset = (safePage - 1) * safeSize;
         return PageResult.of(safePage, safeSize, total,
-                repo.search(actor, action, targetType, from, to, safeSize, offset));
+                repo.search(actor, action, targetType, targetId, from, to, safeSize, offset));
     }
 }

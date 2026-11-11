@@ -1600,11 +1600,12 @@ export const systemApi = {
   /** 全量替换账号可见院区（至少一个）。 */
   assignCampuses: (id: string, campusIds: string[]) =>
     put<UserAccount>(`/auth/users/${id}/campuses`, { campusIds }),
-  /** 跨域审计（gateway: /api/v2/audit/events → auth /events）。 */
+  /** 跨域审计（gateway: /api/v2/audit/events → auth /events）；targetId 可按单号/主键反查。 */
   auditEvents: (params: {
     actor?: string
     action?: string
     targetType?: string
+    targetId?: string
     from?: string
     to?: string
     page?: number

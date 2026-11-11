@@ -10210,6 +10210,53 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 统一审计页未针对 `PRINT_ANOMALY_REVIEW` 做中文动作名映射（目前显示原始 action）；
 - 处置说明超过 200 字被截断而非拒绝（入口已限制长度，服务端只做兜底）。
 
+## 242. 2026-11-11 跨域审计页可读化与按对象反查（第 242 批）
+
+**问题**
+
+- 统一审计页把 `action` 原样打在表格里（`PRINT_ANOMALY_REVIEW`、`PACS_READING_CLAIM`、
+  `USER_DISABLE`），质控看不懂动作，只能靠猜或去翻代码；
+- 排障只能按“对象类型”筛，不能按单据号反查——想知道“这张票据的结论谁改过”，
+  只能把整段流水人工翻一遍。
+
+**本批做了什么**
+
+1. **中文口径 `utils/auditLabels.ts`**：动词表 + 名词表拼装（`SIGN + RECORD → 签署病历`），
+   少数动宾组合走整串特例（`PRINT_ANOMALY_REVIEW → 核查补打异常`）；
+   来源域也给中文名（`auth → 账号与权限`）。**未识别一律回退原文**——
+   宁可露出 `FOO_BAR`，也不能把“停用账号”错译成“删除账号”。
+   服务端仍只存原始 action：审计是证据，译文只在前端。
+2. **审计页并排展示**：列表动作/对象/来源中文化，原始值放在 `title`；
+   详情弹窗里中文名下面附 `detail-raw` 原文，译文有疑问时能立刻对照。
+3. **按对象 ID 反查**：`AuditController/Service/Repository` 增加 `targetId` 精确过滤；
+   SQL 缓存键扩到 16 种组合，空条件仍**省略**而不是 `(:x = '' OR ...)`（避免索引失效）；
+   筛选区新增「对象 ID」输入，清空条件一并重置。
+4. **回归锁 3 条**（新文件 `tests/test_console_audit_view.py`）：
+   词表与回退语义、界面保留原文、后端 targetId 过滤与缓存键。
+
+**验证**
+
+```
+Java：mvn -pl auth -am -DskipTests compile → 通过
+定向：audit view + print + todo → 31 passed（+3 条新锁）
+前端：npm run typecheck → 通过；npm run build → 通过
+      （入口 95.70 KB gzip / 预算 110；系统页 10.85 KB）
+全量：pytest --ignore=tests/e2e → 1895 passed / 1 skipped
+```
+
+**取舍**
+
+- 不穷举整串映射：各域动作数百个，整串表必然漏；词表拼装让新增动作天然可读；
+- 未识别显示原文而不是“操作”这类模糊词：模糊词会让人以为看懂了；
+- `targetId` 只做精确匹配，不做模糊：模糊反查会让审计表变成慢查询。
+
+**遗留**
+
+- 词表仍有覆盖不到的动作（界面显示英文 + 原文并存，不影响排障）；
+- 动作筛选是手输，缺“可选动作下拉”（需要后端提供 distinct action 字典）；
+- 审计导出仍只导原始值（便于与其他系统对账），未加中文列。
+
+
 
 
 
