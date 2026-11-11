@@ -71,3 +71,6 @@ python scripts\run_eval.py   # 需后端在运行，期望 hit_rate 9/9
 ## 待办（面向受监管生产）
 
 见 `docs/EVAL.md` 的 “Remaining for regulated production”：以院方授权指南库替换演示语料、口令入库+限流+TLS+审计留存、临床验证与签发流程、drugbank/OpenFDA 全量与 BiomedCLIP 影像检索。
+
+商用化 100% 的差距评估、八道验收门槛与分批实施计划见
+[`docs/COMMERCIAL-READINESS-100-PLAN.md`](docs/COMMERCIAL-READINESS-100-PLAN.md)。
