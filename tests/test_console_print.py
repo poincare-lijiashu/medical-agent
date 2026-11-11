@@ -102,6 +102,20 @@ def test_ward_batch_print_uses_single_endpoint():
     assert "page-break-after" in text, "整区打印必须声明按床位分页"
 
 
+def test_print_history_export_csv():
+    """第 236 批：导出必须按当前筛选拉全量（分页），且 CSV 要防注入、带 BOM。"""
+    view = (SRC / "views" / "PrintHistoryView.vue").read_text(encoding="utf-8")
+    assert "exportCsvByFilter(" in view, "留痕页缺少按筛选导出"
+    assert "downloadCsv(" in view, "导出必须走统一 CSV 工具"
+    assert "EXPORT_MAX" in view, "导出必须有上限，避免一次拉全表"
+    assert "filterParams()" in view, "列表与导出必须共用同一套筛选条件"
+
+    csv = (SRC / "utils" / "csv.ts").read_text(encoding="utf-8")
+    assert "\\uFEFF" in csv, "CSV 必须带 UTF-8 BOM（否则 Excel 打开中文乱码）"
+    assert 'replace(/"/g, \'""\')' in csv, "CSV 引号必须双写转义"
+    assert "[=+\\-@" in csv, "CSV 必须防公式注入（= + - @ 开头强制文本）"
+
+
 def test_print_history_page_wired():
     """第 231 批：留痕必须有人能查——页面、路由、导航、文案四处齐全。"""
     view = SRC / "views" / "PrintHistoryView.vue"

@@ -5,6 +5,9 @@
   <div class="page">
     <PageHeader title="打印留痕" sub="票据 / 同意书 / 处方笺 / 输液卡 / 费用汇总单 / 腕带 · 按单号核查补打 · 按院区收敛">
       <template #actions>
+        <button class="btn" type="button" :disabled="exporting || loading" @click="exportCsvByFilter">
+          <AppIcon name="download" :size="15" /> {{ exporting ? '正在导出…' : '导出 CSV' }}
+        </button>
         <button class="btn" type="button" :disabled="loading" @click="load()">
           <AppIcon name="refresh" :size="15" /> 刷新
         </button>
@@ -119,6 +122,7 @@ import { clinicalApi } from '@/api'
 import { errorText, isForbidden } from '@/api/http'
 import type { PrintEvent } from '@/api/types'
 import { toast } from '@/stores/toast'
+import { downloadCsv } from '@/utils/csv'
 import { dateTime } from '@/utils/format'
 
 const DOC_TYPE_OPTIONS = [
@@ -140,10 +144,21 @@ const offset = ref(0)
 const total = ref(0)
 const events = ref<PrintEvent[]>([])
 const loading = ref(false)
+const exporting = ref(false)
 const loadErr = ref('')
 const forbidden = ref(false)
 
 const hasNext = computed(() => offset.value + events.value.length < total.value)
+
+/** 当前筛选条件（列表与导出共用，避免两处条件不一致）。 */
+function filterParams() {
+  return {
+    docType: docType.value || undefined,
+    docNo: docNo.value || undefined,
+    from: from.value || undefined,
+    to: to.value || undefined,
+  }
+}
 
 function docTypeLabel(value: string): string {
   return DOC_TYPE_OPTIONS.find((o) => o.value === value)?.label ?? value
@@ -160,10 +175,7 @@ async function load(reset = true) {
   loadErr.value = ''
   try {
     const page = await clinicalApi.printEvents({
-      docType: docType.value || undefined,
-      docNo: docNo.value || undefined,
-      from: from.value || undefined,
-      to: to.value || undefined,
+      ...filterParams(),
       limit: limit.value,
       offset: offset.value,
     })
@@ -193,6 +205,62 @@ function prevPage() {
 function nextPage() {
   offset.value += limit.value
   void load(false)
+}
+
+/** 导出上限：防止一次导出把浏览器和服务端拖死；超出时明确告知已截断。 */
+const EXPORT_MAX = 5000
+const EXPORT_PAGE = 200
+
+/**
+ * 按当前筛选导出 CSV（不是只导出当前页）。
+ *
+ * <p>逐页拉取到 EXPORT_MAX 条或取完为止；列与页面一致，
+ * 时间用本地格式，方便质控直接筛查补打。
+ */
+async function exportCsvByFilter() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const rows: (string | number | null)[][] = [
+      ['打印时间', '单据类型', '单据号', '患者病案号', '关联对象', '打印人'],
+    ]
+    let pageOffset = 0
+    let fetched = 0
+    let totalCount = 0
+    while (fetched < EXPORT_MAX) {
+      const page = await clinicalApi.printEvents({
+        ...filterParams(),
+        limit: EXPORT_PAGE,
+        offset: pageOffset,
+      })
+      totalCount = page.total
+      for (const e of page.items) {
+        rows.push([
+          dateTime(e.printedAt),
+          docTypeLabel(e.docType),
+          e.docNo,
+          e.patientNo ?? '',
+          e.targetType ? `${e.targetType}${e.targetId ? ` · ${e.targetId}` : ''}` : '',
+          e.actor,
+        ])
+      }
+      fetched += page.items.length
+      pageOffset += page.items.length
+      if (page.items.length === 0 || pageOffset >= page.total) break
+    }
+    if (rows.length === 1) {
+      toast.error('没有可导出的记录', '请调整筛选条件后重试')
+      return
+    }
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')
+    downloadCsv(`打印留痕_${stamp}.csv`, rows)
+    const truncated = totalCount > fetched
+    toast.ok('已导出 CSV', `${rows.length - 1} 条${truncated ? `（超过 ${EXPORT_MAX} 条已截断）` : ''}`)
+  } catch (e) {
+    toast.error('导出失败', errorText(e))
+  } finally {
+    exporting.value = false
+  }
 }
 
 onMounted(() => {
