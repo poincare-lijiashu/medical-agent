@@ -1,0 +1,27 @@
+{
+  "Name": "MedAssist Orthanc",
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "IndexDirectory": "/var/lib/orthanc/db",
+  "DicomAet": "MEDAGENT",
+  "DicomPort": 4242,
+  "HttpPort": 8042,
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": false,
+  "DicomAlwaysAllowEcho": true,
+  "DicomAlwaysAllowFind": true,
+  "DicomAlwaysAllowGet": true,
+  "DicomAlwaysAllowMove": true,
+  "DicomAlwaysAllowStore": true,
+  "Plugins": ["/usr/local/share/orthanc/plugins"],
+  "DicomWeb": {
+    "Enable": true,
+    "Root": "/dicom-web/"
+  },
+  "OrthancExplorer2": {
+    "Enable": true
+  },
+  "OrthancOHIF": {
+    "Enable": true,
+    "Root": "/ohif/"
+  }
+}

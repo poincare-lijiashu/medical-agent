@@ -98,27 +98,21 @@ services:
     depends_on:
       - milvus
 
-  # ---- 影像底座（第 260 批）：Orthanc PACS + OHIF 阅片器 ----
-  # 默认不启动（profiles: imaging），避免每次联调都拉 ~1GB 的阅片器镜像。
-  # 启动：docker compose --profile imaging up -d orthanc ohif
-  # 说明：Orthanc 提供 DIMSE(4242) + DICOMweb(8042/dicom-web)；OHIF 读取同一 DICOMweb。
+  # ---- 影像底座（第 260 批）：Orthanc PACS（含 DICOMweb + OHIF 阅片插件）----
+  # 默认不启动（profiles: imaging）。启动：
+  #   docker compose --profile imaging up -d orthanc
+  # 说明：DIMSE 4242（AE MEDAGENT）、DICOMweb 8042/dicom-web、
+  #      OHIF 阅片器 8042/ohif/viewer（OrthancOHIF 插件自带，无需单独拉 OHIF 镜像）。
   orthanc:
-    image: orthancteam/orthanc:24.3.3
+    image: jodogne/orthanc-plugins:1.12.5
     container_name: medagent_orthanc
     profiles: ["imaging"]
-    environment:
-      ORTHANC__NAME: "MedAssist Orthanc"
-      ORTHANC__DICOM_AET: "MEDAGENT"
-      ORTHANC__DICOM_PORT: "4242"
-      ORTHANC__HTTP_PORT: "8042"
-      # 本地联调：仅绑定回环，关闭认证；生产 PACS 必须启用认证与 TLS
-      ORTHANC__REMOTE_ACCESS_ALLOWED: "true"
-      ORTHANC__AUTHENTICATION_ENABLED: "false"
-      ORTHANC__DICOM_WEB__ENABLE: "true"
     ports:
       - "127.0.0.1:4242:4242"
       - "127.0.0.1:8042:8042"
     volumes:
+      # 显式配置：AE/端口/DICOMweb/OHIF；换院区 PACS 不修改本文件
+      - ./deploy/imaging/orthanc/orthanc.json:/etc/orthanc/orthanc.json:ro
       - medagent_orthanc:/var/lib/orthanc/db
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:8042/system >/dev/null || exit 1"]
@@ -126,18 +120,6 @@ services:
       timeout: 10s
       retries: 5
       start_period: 20s
-
-  ohif:
-    image: ohif/app:v3.9.2
-    container_name: medagent_ohif
-    profiles: ["imaging"]
-    ports:
-      - "127.0.0.1:3000:80"
-    volumes:
-      # 指向本机 Orthanc 的 DICOMweb；换院区 PACS 时改这个文件即可
-      - ./deploy/imaging/ohif/app-config.js:/usr/share/nginx/html/app-config.js:ro
-    depends_on:
-      - orthanc
 
   # ---- 平台底座（P0，计划书 D2.2）：服务注册与配置中心 ----
   # 说明：Nacos 为 Java 微服务（platform/*）的注册发现与配置来源；Python AI 中台经

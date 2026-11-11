@@ -11325,6 +11325,15 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
       （未配置 PACS 时 fail-closed，不返回空结果假装"没有检查"）
 迁移 lint：scanned=253 new=0 PASS
 全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+
+补验（Orthanc 1.12.5，DICOM AET=MEDAGENT，DICOMweb+OrthancOHIF 插件）：
+      C-ECHO status=0，约 50ms
+      C-FIND（AccessionNumber=A-DIMSE-777）→ 1 条 Study
+      C-STORE（694 字节 CT 实例）→ status=0
+      tech DICOMweb → Orthanc：/studies/{uid}/series → source=LIVE，1 序列/1 实例
+      OHIF 深链：http://127.0.0.1:8042/ohif/viewer?StudyInstanceUIDs=...
+      C-MOVE → Orthanc 返回 0xC000（Orthanc 不实现 Move SCP），接口按 503 返回并落 FAILED 审计
+      审计：ECHO/FIND_STUDY/STORE/MOVE 均入 pacs_dimse_log，状态码与耗时正确
 ```
 
 **取舍**
@@ -11341,8 +11350,8 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 
 **遗留**
 
-- 本机网络未能完成 Orthanc/OHIF 镜像拉取（层已下载但镜像未落地），compose 配置已就绪；
-  DICOMweb + OHIF 的端到端复验需在镜像可用后补做；
-- C-MOVE 的真实影像回推需院内 PACS 联调（本批已用内嵌 SCP 验证请求/响应与计数解析）；
+- Orthanc 已用 `jodogne/orthanc-plugins:1.12.5` 实测：DICOMweb QIDO、OHIF 深链、
+  DIMSE C-ECHO/C-FIND/C-STORE 全通；Orthanc 不实现 C-MOVE（0xC000），
+  C-MOVE 真实回推需院方 PACS 联调（本批已用内嵌 SCP 验证请求/响应与计数解析）；
 - 未实现 C-GET、C-STORE SCP、DICOM TLS（院方 PACS 启 TLS 时需补证书与 AE 白名单）；
 - C-FIND 只做患者号/姓名掩码，未做 DICOM 标签级脱敏。

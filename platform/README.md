@@ -99,9 +99,10 @@
 **本地影像底座**（可选 profile，不占默认联调资源）：
 
 ```powershell
-docker compose --profile imaging up -d orthanc ohif
+docker compose --profile imaging up -d orthanc
 # Orthanc: DIMSE 127.0.0.1:4242 (AE MEDAGENT)，DICOMweb http://127.0.0.1:8042/dicom-web
-# OHIF:    http://127.0.0.1:3000/viewer?StudyInstanceUIDs=<uid>
+# OHIF:    http://127.0.0.1:8042/ohif/viewer?StudyInstanceUIDs=<uid>
+#          （由 OrthancOHIF 插件自带，无需单独拉 OHIF 镜像）
 ```
 
 `scripts/run_platform_demo.ps1` 会探测 8042/4242：探测到才注入 `PACS_BASE_URL` /
@@ -111,7 +112,7 @@ docker compose --profile imaging up -d orthanc ohif
 | 变量 | 说明 |
 |---|---|
 | `PACS_BASE_URL` | DICOMweb 根地址（如 `https://pacs/dicom-web`） |
-| `PACS_VIEWER_URL` | OHIF 根地址（深链格式 `?StudyInstanceUIDs=`） |
+| `PACS_VIEWER_URL` | OHIF 查看器根地址（深链格式 `?StudyInstanceUIDs=`；内置插件为 `/ohif/viewer`） |
 | `PACS_DIMSE_ENABLED` / `_HOST` / `_PORT` | DIMSE 开关与目标（远端地址只能来自配置） |
 | `PACS_DIMSE_CALLED_AE` / `_CALLING_AE` | 被叫/本端 AE Title |
 | `PACS_DIMSE_MOVE_DESTINATIONS` | 允许的 C-MOVE 目的地（逗号分隔；为空则全部拒绝） |

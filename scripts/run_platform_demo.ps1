@@ -90,7 +90,8 @@ if (Test-Port 8042) {
         $env:PACS_BASE_URL = "http://127.0.0.1:8042/dicom-web"
     }
     if (-not $env:PACS_VIEWER_URL) {
-        $env:PACS_VIEWER_URL = "http://127.0.0.1:3000/viewer"
+        # OrthancOHIF 插件自带 OHIF，深链格式与独立 OHIF 一致
+        $env:PACS_VIEWER_URL = "http://127.0.0.1:8042/ohif/viewer"
     }
 }
 if (Test-Port 4242) {
