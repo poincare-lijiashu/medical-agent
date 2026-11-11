@@ -431,6 +431,10 @@ public enum ErrorCode {
     INSURANCE_TEMPLATE_INVALID(48422, "报文模板配置不合法（字段映射或必填口径有误）"),
     INSURANCE_TEMPLATE_REQUIRED_MISSING(48423, "报文模板必填字段在清单中取不到值，无法生成报盘"),
     INSURANCE_TEMPLATE_STATUS_INVALID(48424, "当前报文模板状态不允许该操作"),
+    INSURANCE_GROUPER_RULE_SET_NOT_FOUND(48425, "未找到可用的分组规则包，请先导入并启用"),
+    INSURANCE_GROUPER_RULE_INVALID(48426, "分组规则包内容不合法（层级/编码/优先级有误）"),
+    INSURANCE_GROUPER_UNAVAILABLE(48427, "分组服务暂不可用，请稍后重试"),
+    INSURANCE_GROUPER_RESULT_NOT_FOUND(48428, "未找到该就诊的分组结果"),
 
     // ---- 知识库（49xxx）----
     KB_SPACE_NOT_FOUND(49401, "未找到该知识空间"),

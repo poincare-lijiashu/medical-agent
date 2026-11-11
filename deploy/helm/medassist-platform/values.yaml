@@ -636,6 +636,10 @@ insurance:
   #   CHS_MDTRTAREA_ADMVS / CHS_INSUPLC_ADMDVS / CHS_SIGN_TYPE / CHS_SECRET
   #   CHS_INFNO_SETTLE / CHS_INFNO_PRE_SETTLE / CHS_PATH_SETTLE / CHS_PATH_PRE_SETTLE
   # 详见 platform/README.md「医保 CHS 2.0 报文适配（§261）」
+  # DRG/DIP 2.0 分组（§263）：规则包由院方导入；远端分组器地址/令牌用 external Secret：
+  #   INSURANCE_GROUPER_ENGINE / INSURANCE_GROUPER_REMOTE_URL / INSURANCE_GROUPER_REMOTE_TOKEN
+  #   INSURANCE_GROUPER_TIMEOUT / INSURANCE_GROUPER_FALLBACK_LOCAL（默认 false）
+  # 详见 platform/README.md「DRG/DIP 2.0 可配置分组（§263）」
   env: []
   nodeSelector: {}
   tolerations: []

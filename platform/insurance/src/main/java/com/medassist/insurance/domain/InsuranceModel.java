@@ -260,4 +260,94 @@ public final class InsuranceModel {
                                   String diagnosesSource, String proceduresSource,
                                   String inputHash, String createdBy, Instant createdAt) {
     }
+
+    // ---------------------------------------------------------------- 可配置分组引擎（§263）
+
+    /**
+     * 分组规则包（版本化）：国家/省局规则由院方导入，平台不内置权威全量规则。
+     *
+     * <p>同一 code 只允许一个 ACTIVE 版本；ACTIVE + RETIRED 历史保留，
+     * 任何一次分组都能回溯到当时使用的版本与 checksum。
+     */
+    public record GrouperRuleSet(UUID id, String code, String version, String name, String type,
+                                 LocalDate effectiveFrom, String source, String checksum,
+                                 String status, String importedBy, Instant importedAt,
+                                 String activatedBy, Instant activatedAt) {
+
+        public static final String STATUS_DRAFT = "DRAFT";
+        public static final String STATUS_ACTIVE = "ACTIVE";
+        public static final String STATUS_RETIRED = "RETIRED";
+    }
+
+    /** MDC 归并：主诊断落在 [diagFrom, diagTo] 区间（字典序）即归入该 MDC。 */
+    public record GrouperMdcRule(UUID id, UUID ruleSetId, int priority, String mdcCode,
+                                 String mdcName, String diagFrom, String diagTo,
+                                 boolean enabled) {
+    }
+
+    /**
+     * ADRG 匹配规则：同 MDC 内按 priority 升序取首个命中。
+     *
+     * <p>matchType：PROCEDURE 看手术前缀、DIAGNOSIS 看诊断前缀、DIAG_AND_PROC 两者都要。
+     */
+    public record GrouperAdrgRule(UUID id, UUID ruleSetId, int priority, String adrgCode,
+                                  String adrgName, String mdcCode, String matchType,
+                                  String diagPrefix, String procPrefix, boolean enabled) {
+    }
+
+    /** DRG 细分组：ADRG + 严重程度（NONE/CC/MCC）→ 权重。 */
+    public record GrouperDrgDef(UUID ruleSetId, String drgCode, String drgName, String adrgCode,
+                                String severity, BigDecimal weight) {
+    }
+
+    /** 次要诊断的 CC/MCC 判定规则（前缀匹配）。 */
+    public record GrouperCcRule(UUID id, UUID ruleSetId, String severity, String diagPrefix) {
+    }
+
+    /** CC/MCC 排除：主诊断 A 时，次要诊断 B 不计入 CC/MCC。 */
+    public record GrouperCcExclusion(UUID id, UUID ruleSetId, String primaryDiagPrefix,
+                                     String secondaryDiagPrefix) {
+    }
+
+    /** DIP 病种目录：CORE 为核心病种（诊断+操作），COMPOSITE 为综合病种（按诊断兜底）。 */
+    public record GrouperDipCatalog(UUID id, UUID ruleSetId, String dipCode, String dipName,
+                                    String diagCode, String procCode, String type,
+                                    BigDecimal score) {
+
+        public static final String CORE = "CORE";
+        public static final String COMPOSITE = "COMPOSITE";
+    }
+
+    /**
+     * 分组结果快照（追加式）：预分组 / 远端分组 / 省局正式结果统一落这张表。
+     *
+     * @param engine  LOCAL / REMOTE / OFFICIAL
+     * @param trace   命中轨迹 JSON（MDC→ADRG→CC/MCC→DRG 或 DIP 的判定过程）
+     */
+    public record GrouperResult(UUID id, UUID visitId, UUID ruleSetId, String ruleSetCode,
+                                String ruleSetVersion, String engine, String type, String mdcCode,
+                                String adrgCode, String drgCode, String dipCode, String severity,
+                                BigDecimal weight, BigDecimal score, BigDecimal paymentStandard,
+                                boolean matched, String reason, String trace,
+                                String principalDiagnosis, String secondaryDiagnoses,
+                                String procedures, String inputHash, String createdBy,
+                                Instant createdAt) {
+
+        public static final String ENGINE_LOCAL = "LOCAL";
+        public static final String ENGINE_REMOTE = "REMOTE";
+        public static final String ENGINE_OFFICIAL = "OFFICIAL";
+    }
+
+    /** 分组报表：按引擎/类型统计总量、入组数与覆盖就诊数。 */
+    public record GrouperEngineStat(String engine, String type, long total, long matched,
+                                    long visits) {
+    }
+
+    /** 分组报表：按 DRG/DIP 编码统计入组次数。 */
+    public record GrouperCodeCount(String type, String code, long hits) {
+    }
+
+    /** 分组报表：未入组原因排行（病案质控入口）。 */
+    public record GrouperReasonCount(String reason, long hits) {
+    }
 }

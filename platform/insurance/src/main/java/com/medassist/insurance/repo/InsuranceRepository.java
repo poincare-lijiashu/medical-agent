@@ -5,6 +5,17 @@ import com.medassist.insurance.domain.InsuranceModel.ChargeMapping;
 import com.medassist.insurance.domain.InsuranceModel.ExportBatch;
 import com.medassist.insurance.domain.InsuranceModel.ExportMessageTemplate;
 import com.medassist.insurance.domain.InsuranceModel.GroupSimulation;
+import com.medassist.insurance.domain.InsuranceModel.GrouperAdrgRule;
+import com.medassist.insurance.domain.InsuranceModel.GrouperCcExclusion;
+import com.medassist.insurance.domain.InsuranceModel.GrouperCcRule;
+import com.medassist.insurance.domain.InsuranceModel.GrouperCodeCount;
+import com.medassist.insurance.domain.InsuranceModel.GrouperDipCatalog;
+import com.medassist.insurance.domain.InsuranceModel.GrouperDrgDef;
+import com.medassist.insurance.domain.InsuranceModel.GrouperEngineStat;
+import com.medassist.insurance.domain.InsuranceModel.GrouperMdcRule;
+import com.medassist.insurance.domain.InsuranceModel.GrouperReasonCount;
+import com.medassist.insurance.domain.InsuranceModel.GrouperResult;
+import com.medassist.insurance.domain.InsuranceModel.GrouperRuleSet;
 import com.medassist.insurance.domain.InsuranceModel.InsuranceItem;
 import com.medassist.insurance.domain.InsuranceModel.Member;
 import com.medassist.insurance.domain.InsuranceModel.MemberHistory;
@@ -1329,6 +1340,401 @@ public class InsuranceRepository {
                          LIMIT :limit
                         """).param("visitId", visitId).param("limit", limit)
                 .query(SIMULATION_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 分组引擎（§263）
+
+    private static final RowMapper<GrouperRuleSet> RULE_SET_MAPPER = (rs, i) ->
+            new GrouperRuleSet(rs.getObject("id", UUID.class), rs.getString("code"),
+                    rs.getString("version"), rs.getString("name"), rs.getString("type"),
+                    rs.getDate("effective_from").toLocalDate(), rs.getString("source"),
+                    rs.getString("checksum"), rs.getString("status"),
+                    rs.getString("imported_by"), rs.getTimestamp("imported_at").toInstant(),
+                    rs.getString("activated_by"),
+                    rs.getTimestamp("activated_at") == null ? null
+                            : rs.getTimestamp("activated_at").toInstant());
+
+    private static final RowMapper<GrouperMdcRule> MDC_MAPPER = (rs, i) -> new GrouperMdcRule(
+            rs.getObject("id", UUID.class), rs.getObject("rule_set_id", UUID.class),
+            rs.getInt("priority"), rs.getString("mdc_code"), rs.getString("mdc_name"),
+            rs.getString("diag_from"), rs.getString("diag_to"), rs.getBoolean("enabled"));
+
+    private static final RowMapper<GrouperAdrgRule> ADRG_MAPPER = (rs, i) -> new GrouperAdrgRule(
+            rs.getObject("id", UUID.class), rs.getObject("rule_set_id", UUID.class),
+            rs.getInt("priority"), rs.getString("adrg_code"), rs.getString("adrg_name"),
+            rs.getString("mdc_code"), rs.getString("match_type"), rs.getString("diag_prefix"),
+            rs.getString("proc_prefix"), rs.getBoolean("enabled"));
+
+    private static final RowMapper<GrouperDrgDef> DRG_DEF_MAPPER = (rs, i) -> new GrouperDrgDef(
+            rs.getObject("rule_set_id", UUID.class), rs.getString("drg_code"),
+            rs.getString("drg_name"), rs.getString("adrg_code"), rs.getString("severity"),
+            rs.getBigDecimal("weight"));
+
+    private static final RowMapper<GrouperCcRule> CC_RULE_MAPPER = (rs, i) -> new GrouperCcRule(
+            rs.getObject("id", UUID.class), rs.getObject("rule_set_id", UUID.class),
+            rs.getString("severity"), rs.getString("diag_prefix"));
+
+    private static final RowMapper<GrouperCcExclusion> CC_EXCLUSION_MAPPER = (rs, i) ->
+            new GrouperCcExclusion(rs.getObject("id", UUID.class),
+                    rs.getObject("rule_set_id", UUID.class),
+                    rs.getString("primary_diag_prefix"), rs.getString("secondary_diag_prefix"));
+
+    private static final RowMapper<GrouperDipCatalog> DIP_MAPPER = (rs, i) ->
+            new GrouperDipCatalog(rs.getObject("id", UUID.class),
+                    rs.getObject("rule_set_id", UUID.class), rs.getString("dip_code"),
+                    rs.getString("dip_name"), rs.getString("diag_code"), rs.getString("proc_code"),
+                    rs.getString("type"), rs.getBigDecimal("score"));
+
+    private static final RowMapper<GrouperResult> GROUPER_RESULT_MAPPER = (rs, i) ->
+            new GrouperResult(rs.getObject("id", UUID.class), rs.getObject("visit_id", UUID.class),
+                    rs.getObject("rule_set_id", UUID.class), rs.getString("rule_set_code"),
+                    rs.getString("rule_set_version"), rs.getString("engine"),
+                    rs.getString("type"), rs.getString("mdc_code"), rs.getString("adrg_code"),
+                    rs.getString("drg_code"), rs.getString("dip_code"), rs.getString("severity"),
+                    rs.getBigDecimal("weight"), rs.getBigDecimal("score"),
+                    rs.getBigDecimal("payment_standard"), rs.getBoolean("matched"),
+                    rs.getString("reason"), orEmpty(rs.getString("trace")),
+                    rs.getString("principal_diagnosis"),
+                    orEmpty(rs.getString("secondary_diagnoses")),
+                    orEmpty(rs.getString("procedures")),
+                    rs.getString("input_hash"), rs.getString("created_by"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    public Optional<GrouperRuleSet> findRuleSet(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, code, version, name, type, effective_from, source, checksum,
+                               status, imported_by, imported_at, activated_by, activated_at
+                          FROM insurance_svc.grouper_rule_set WHERE id = ?
+                        """).param(id).query(RULE_SET_MAPPER).optional();
+    }
+
+    public Optional<GrouperRuleSet> findRuleSet(String code, String version) {
+        return jdbc.sql("""
+                        SELECT id, code, version, name, type, effective_from, source, checksum,
+                               status, imported_by, imported_at, activated_by, activated_at
+                          FROM insurance_svc.grouper_rule_set
+                         WHERE code = :code AND version = :version
+                        """).param("code", code).param("version", version)
+                .query(RULE_SET_MAPPER).optional();
+    }
+
+    /**
+     * 取生效规则包：可按 code 精确取，也可按 type 取最近生效的一版。
+     */
+    public Optional<GrouperRuleSet> findActiveRuleSet(String type, String code) {
+        return jdbc.sql("""
+                        SELECT id, code, version, name, type, effective_from, source, checksum,
+                               status, imported_by, imported_at, activated_by, activated_at
+                          FROM insurance_svc.grouper_rule_set
+                         WHERE status = 'ACTIVE' AND type = :type
+                           AND (CAST(:code AS text) IS NULL OR code = :code)
+                         ORDER BY effective_from DESC, activated_at DESC
+                         LIMIT 1
+                        """).param("type", type).param("code", code)
+                .query(RULE_SET_MAPPER).optional();
+    }
+
+    /** 按 code 取生效版本（不看 type）：避免先列表再筛选被 LIMIT 截断。 */
+    public Optional<GrouperRuleSet> findActiveByCode(String code) {
+        return jdbc.sql("""
+                        SELECT id, code, version, name, type, effective_from, source, checksum,
+                               status, imported_by, imported_at, activated_by, activated_at
+                          FROM insurance_svc.grouper_rule_set
+                         WHERE status = 'ACTIVE' AND code = :code
+                         ORDER BY effective_from DESC, activated_at DESC
+                         LIMIT 1
+                        """).param("code", code).query(RULE_SET_MAPPER).optional();
+    }
+
+    public List<GrouperRuleSet> listRuleSets(String type) {
+        return jdbc.sql("""
+                        SELECT id, code, version, name, type, effective_from, source, checksum,
+                               status, imported_by, imported_at, activated_by, activated_at
+                          FROM insurance_svc.grouper_rule_set
+                         WHERE (CAST(:type AS text) IS NULL OR type = :type)
+                         ORDER BY effective_from DESC, imported_at DESC
+                         LIMIT 100
+                        """).param("type", type).query(RULE_SET_MAPPER).list();
+    }
+
+    public void insertRuleSet(GrouperRuleSet set) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.grouper_rule_set
+                            (id, code, version, name, type, effective_from, source, checksum,
+                             status, imported_by)
+                        VALUES (:id, :code, :version, :name, :type, :effectiveFrom, :source,
+                                :checksum, 'DRAFT', :importedBy)
+                        """)
+                .param("id", set.id()).param("code", set.code()).param("version", set.version())
+                .param("name", set.name()).param("type", set.type())
+                .param("effectiveFrom", set.effectiveFrom()).param("source", set.source())
+                .param("checksum", set.checksum()).param("importedBy", set.importedBy()).update();
+    }
+
+    /** 停用同 code 的 ACTIVE 版本（激活新版本前调用）。 */
+    public int retireActiveRuleSets(String code) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.grouper_rule_set
+                           SET status = 'RETIRED'
+                         WHERE code = :code AND status = 'ACTIVE'
+                        """).param("code", code).update();
+    }
+
+    public boolean activateRuleSet(UUID id, String actor) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.grouper_rule_set
+                           SET status = 'ACTIVE', activated_by = :actor, activated_at = now()
+                         WHERE id = :id AND status = 'DRAFT'
+                        """).param("actor", actor).param("id", id).update() == 1;
+    }
+
+    public void insertMdcRules(List<GrouperMdcRule> rules) {
+        for (GrouperMdcRule rule : rules) {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.grouper_mdc_rule
+                                (id, rule_set_id, priority, mdc_code, mdc_name, diag_from,
+                                 diag_to, enabled)
+                            VALUES (:id, :setId, :priority, :mdcCode, :mdcName, :from, :to,
+                                    :enabled)
+                            """)
+                    .param("id", rule.id()).param("setId", rule.ruleSetId())
+                    .param("priority", rule.priority()).param("mdcCode", rule.mdcCode())
+                    .param("mdcName", rule.mdcName()).param("from", rule.diagFrom())
+                    .param("to", rule.diagTo()).param("enabled", rule.enabled()).update();
+        }
+    }
+
+    public void insertAdrgRules(List<GrouperAdrgRule> rules) {
+        for (GrouperAdrgRule rule : rules) {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.grouper_adrg_rule
+                                (id, rule_set_id, priority, adrg_code, adrg_name, mdc_code,
+                                 match_type, diag_prefix, proc_prefix, enabled)
+                            VALUES (:id, :setId, :priority, :adrgCode, :adrgName, :mdcCode,
+                                    :matchType, :diag, :proc, :enabled)
+                            """)
+                    .param("id", rule.id()).param("setId", rule.ruleSetId())
+                    .param("priority", rule.priority()).param("adrgCode", rule.adrgCode())
+                    .param("adrgName", rule.adrgName()).param("mdcCode", rule.mdcCode())
+                    .param("matchType", rule.matchType()).param("diag", rule.diagPrefix())
+                    .param("proc", rule.procPrefix()).param("enabled", rule.enabled()).update();
+        }
+    }
+
+    public void insertDrgDefs(List<GrouperDrgDef> defs) {
+        for (GrouperDrgDef def : defs) {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.grouper_drg_def
+                                (rule_set_id, drg_code, drg_name, adrg_code, severity, weight)
+                            VALUES (:setId, :drgCode, :drgName, :adrgCode, :severity, :weight)
+                            """)
+                    .param("setId", def.ruleSetId()).param("drgCode", def.drgCode())
+                    .param("drgName", def.drgName()).param("adrgCode", def.adrgCode())
+                    .param("severity", def.severity()).param("weight", def.weight()).update();
+        }
+    }
+
+    public void insertCcRules(List<GrouperCcRule> rules) {
+        for (GrouperCcRule rule : rules) {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.grouper_cc_rule
+                                (id, rule_set_id, severity, diag_prefix)
+                            VALUES (:id, :setId, :severity, :diag)
+                            """)
+                    .param("id", rule.id()).param("setId", rule.ruleSetId())
+                    .param("severity", rule.severity()).param("diag", rule.diagPrefix()).update();
+        }
+    }
+
+    public void insertCcExclusions(List<GrouperCcExclusion> exclusions) {
+        for (GrouperCcExclusion exclusion : exclusions) {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.grouper_cc_exclusion
+                                (id, rule_set_id, primary_diag_prefix, secondary_diag_prefix)
+                            VALUES (:id, :setId, :primary, :secondary)
+                            """)
+                    .param("id", exclusion.id()).param("setId", exclusion.ruleSetId())
+                    .param("primary", exclusion.primaryDiagPrefix())
+                    .param("secondary", exclusion.secondaryDiagPrefix()).update();
+        }
+    }
+
+    public void insertDipCatalog(List<GrouperDipCatalog> items) {
+        for (GrouperDipCatalog item : items) {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.grouper_dip_catalog
+                                (id, rule_set_id, dip_code, dip_name, diag_code, proc_code,
+                                 type, score)
+                            VALUES (:id, :setId, :dipCode, :dipName, :diag, :proc, :type, :score)
+                            """)
+                    .param("id", item.id()).param("setId", item.ruleSetId())
+                    .param("dipCode", item.dipCode()).param("dipName", item.dipName())
+                    .param("diag", item.diagCode()).param("proc", item.procCode())
+                    .param("type", item.type()).param("score", item.score()).update();
+        }
+    }
+
+    public List<GrouperMdcRule> listMdcRules(UUID ruleSetId) {
+        return jdbc.sql("""
+                        SELECT id, rule_set_id, priority, mdc_code, mdc_name, diag_from, diag_to,
+                               enabled
+                          FROM insurance_svc.grouper_mdc_rule
+                         WHERE rule_set_id = ? ORDER BY priority
+                        """).param(ruleSetId).query(MDC_MAPPER).list();
+    }
+
+    public List<GrouperAdrgRule> listAdrgRules(UUID ruleSetId) {
+        return jdbc.sql("""
+                        SELECT id, rule_set_id, priority, adrg_code, adrg_name, mdc_code,
+                               match_type, diag_prefix, proc_prefix, enabled
+                          FROM insurance_svc.grouper_adrg_rule
+                         WHERE rule_set_id = ? ORDER BY priority
+                        """).param(ruleSetId).query(ADRG_MAPPER).list();
+    }
+
+    public List<GrouperDrgDef> listDrgDefs(UUID ruleSetId) {
+        return jdbc.sql("""
+                        SELECT rule_set_id, drg_code, drg_name, adrg_code, severity, weight
+                          FROM insurance_svc.grouper_drg_def
+                         WHERE rule_set_id = ? ORDER BY drg_code
+                        """).param(ruleSetId).query(DRG_DEF_MAPPER).list();
+    }
+
+    public List<GrouperCcRule> listCcRules(UUID ruleSetId) {
+        return jdbc.sql("""
+                        SELECT id, rule_set_id, severity, diag_prefix
+                          FROM insurance_svc.grouper_cc_rule
+                         WHERE rule_set_id = ? ORDER BY severity DESC, diag_prefix
+                        """).param(ruleSetId).query(CC_RULE_MAPPER).list();
+    }
+
+    public List<GrouperCcExclusion> listCcExclusions(UUID ruleSetId) {
+        return jdbc.sql("""
+                        SELECT id, rule_set_id, primary_diag_prefix, secondary_diag_prefix
+                          FROM insurance_svc.grouper_cc_exclusion WHERE rule_set_id = ?
+                        """).param(ruleSetId).query(CC_EXCLUSION_MAPPER).list();
+    }
+
+    public List<GrouperDipCatalog> listDipCatalog(UUID ruleSetId) {
+        return jdbc.sql("""
+                        SELECT id, rule_set_id, dip_code, dip_name, diag_code, proc_code, type, score
+                          FROM insurance_svc.grouper_dip_catalog WHERE rule_set_id = ?
+                        """).param(ruleSetId).query(DIP_MAPPER).list();
+    }
+
+    public void insertGrouperResult(GrouperResult result) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.grouper_result
+                            (id, visit_id, rule_set_id, rule_set_code, rule_set_version, engine,
+                             type, mdc_code, adrg_code, drg_code, dip_code, severity, weight,
+                             score, payment_standard, matched, reason, trace,
+                             principal_diagnosis, secondary_diagnoses, procedures, input_hash,
+                             created_by)
+                        VALUES (:id, :visitId, :setId, :setCode, :setVersion, :engine, :type,
+                                :mdc, :adrg, :drg, :dip, :severity, :weight, :score, :payment,
+                                :matched, :reason, CAST(:trace AS jsonb), :principal,
+                                CAST(:secondary AS jsonb), CAST(:procedures AS jsonb),
+                                :hash, :actor)
+                        """)
+                .param("id", result.id()).param("visitId", result.visitId())
+                .param("setId", result.ruleSetId()).param("setCode", result.ruleSetCode())
+                .param("setVersion", result.ruleSetVersion()).param("engine", result.engine())
+                .param("type", result.type()).param("mdc", result.mdcCode())
+                .param("adrg", result.adrgCode()).param("drg", result.drgCode())
+                .param("dip", result.dipCode()).param("severity", result.severity())
+                .param("weight", result.weight()).param("score", result.score())
+                .param("payment", result.paymentStandard()).param("matched", result.matched())
+                .param("reason", result.reason()).param("trace", result.trace())
+                .param("principal", result.principalDiagnosis())
+                .param("secondary", result.secondaryDiagnoses())
+                .param("procedures", result.procedures()).param("hash", result.inputHash())
+                .param("actor", result.createdBy()).update();
+    }
+
+    private static final String GROUPER_RESULT_SELECT = """
+            SELECT id, visit_id, rule_set_id, rule_set_code, rule_set_version, engine, type,
+                   mdc_code, adrg_code, drg_code, dip_code, severity, weight, score,
+                   payment_standard, matched, reason, trace::text AS trace,
+                   principal_diagnosis, secondary_diagnoses::text AS secondary_diagnoses,
+                   procedures::text AS procedures, input_hash, created_by, created_at
+              FROM insurance_svc.grouper_result
+            """;
+
+    public Optional<GrouperResult> findLatestGrouperResult(UUID visitId, String engine) {
+        return jdbc.sql(GROUPER_RESULT_SELECT + """
+                         WHERE visit_id = :visitId AND engine = :engine
+                         ORDER BY created_at DESC LIMIT 1
+                        """).param("visitId", visitId).param("engine", engine)
+                .query(GROUPER_RESULT_MAPPER).optional();
+    }
+
+    public List<GrouperResult> listGrouperResults(UUID visitId, int limit) {
+        return jdbc.sql(GROUPER_RESULT_SELECT + """
+                         WHERE visit_id = :visitId
+                         ORDER BY created_at DESC LIMIT :limit
+                        """).param("visitId", visitId).param("limit", limit)
+                .query(GROUPER_RESULT_MAPPER).list();
+    }
+
+    /** 分组报表：按引擎/类型统计（半开区间 [from, to)）。 */
+    public List<GrouperEngineStat> grouperEngineStats(java.time.Instant from,
+                                                      java.time.Instant to) {
+        return jdbc.sql("""
+                        SELECT engine, type, count(*) AS total,
+                               count(*) FILTER (WHERE matched) AS matched,
+                               count(DISTINCT visit_id) AS visits
+                          FROM insurance_svc.grouper_result
+                         WHERE created_at >= :from AND created_at < :to
+                         GROUP BY engine, type
+                         ORDER BY engine, type
+                        """)
+                .param("from", java.sql.Timestamp.from(from))
+                .param("to", java.sql.Timestamp.from(to))
+                .query((rs, i) -> new GrouperEngineStat(rs.getString("engine"),
+                        rs.getString("type"), rs.getLong("total"), rs.getLong("matched"),
+                        rs.getLong("visits")))
+                .list();
+    }
+
+    /** 分组报表：入组次数 Top N（DRG 取 drg_code、DIP 取 dip_code）。 */
+    public List<GrouperCodeCount> grouperTopGroups(java.time.Instant from,
+                                                   java.time.Instant to, int limit) {
+        return jdbc.sql("""
+                        SELECT type, COALESCE(drg_code, dip_code) AS code, count(*) AS hits
+                          FROM insurance_svc.grouper_result
+                         WHERE matched AND created_at >= :from AND created_at < :to
+                         GROUP BY type, COALESCE(drg_code, dip_code)
+                         ORDER BY hits DESC
+                         LIMIT :limit
+                        """)
+                .param("from", java.sql.Timestamp.from(from))
+                .param("to", java.sql.Timestamp.from(to)).param("limit", limit)
+                .query((rs, i) -> new GrouperCodeCount(rs.getString("type"),
+                        rs.getString("code"), rs.getLong("hits")))
+                .list();
+    }
+
+    /** 分组报表：未入组原因 Top N（病案质控入口）。 */
+    public List<GrouperReasonCount> grouperTopReasons(java.time.Instant from,
+                                                      java.time.Instant to, int limit) {
+        return jdbc.sql("""
+                        SELECT COALESCE(reason, '未记录原因') AS reason, count(*) AS hits
+                          FROM insurance_svc.grouper_result
+                         WHERE NOT matched AND created_at >= :from AND created_at < :to
+                         GROUP BY COALESCE(reason, '未记录原因')
+                         ORDER BY hits DESC
+                         LIMIT :limit
+                        """)
+                .param("from", java.sql.Timestamp.from(from))
+                .param("to", java.sql.Timestamp.from(to)).param("limit", limit)
+                .query((rs, i) -> new GrouperReasonCount(rs.getString("reason"),
+                        rs.getLong("hits")))
+                .list();
+    }
+
+    /** jsonb 列读回为 null 时按空数组处理，避免拼出 "null" 字符串。 */
+    private static String orEmpty(String json) {
+        return json == null ? "[]" : json;
     }
 
     // ---------------------------------------------------------------- 审计

@@ -190,6 +190,51 @@ python scripts/chs_sim.py --port 9099
   （CRL/OCSP）由院方 TSA 信任锚在联调时补，不能把"能解析令牌"当作"证书可信"；
 - **不是国密**：`mock` 的 HMAC-SHA256 只用于开发与测试，不替代 `SM2/SM3` 证书体系。
 
+## DRG/DIP 2.0 可配置分组（§263）
+
+分组规则与病种目录由**院方导入**（国家/省局/本地），平台不内置权威全量规则包；
+未导入并激活规则包时，分组接口显式失败（不会猜一个分组）。
+
+| 变量 | 说明 |
+|---|---|
+| `INSURANCE_GROUPER_ENGINE` | `LOCAL`（本地规则引擎）/ `REMOTE`（省局或厂商分组器） |
+| `INSURANCE_GROUPER_REMOTE_URL` | 远端分组器完整地址（REMOTE 必填，JSON over HTTP） |
+| `INSURANCE_GROUPER_REMOTE_TOKEN` | 远端鉴权令牌（可选；以 `Authorization: Bearer` 发送） |
+| `INSURANCE_GROUPER_TIMEOUT` | 远端连接/读取超时（默认 `PT3S`） |
+| `INSURANCE_GROUPER_FALLBACK_LOCAL` | 远端失败是否回落本地，**默认 `false`**（避免两种口径混用） |
+
+规则包结构（一次导入整包，事务内校验）：
+
+- `mdcRules`：MDC 归并区间（主诊断字典序 `[diagFrom, diagTo]`）；
+- `adrgRules`：ADRG 匹配（`PROCEDURE` / `DIAGNOSIS` / `DIAG_AND_PROC`，priority 升序首个命中）；
+- `drgDefs`：ADRG + 严重程度（`NONE` / `CC` / `MCC`）→ 权重；
+- `ccRules` / `ccExclusions`：次要诊断 CC/MCC 判定与排除（主诊断已解释的并发症不再升级）；
+- `dipCatalog`：DIP 病种（`CORE` 诊断+主操作 / `COMPOSITE` 诊断前缀兜底，取最长匹配）。
+
+**API**（`/insurance/grouper/**`）：
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `GET /rule-sets` | `insurance:settlement:read` | 规则包列表（含版本/状态/checksum） |
+| `POST /rule-sets` | `insurance:grouping:manage` | 整包导入，可同时激活；激活时同 code 旧版自动 RETIRED |
+| `POST /rule-sets/{id}/activate` | `insurance:grouping:manage` | 激活 DRAFT 规则包 |
+| `POST /preview` | `insurance:settlement:read` | 院内预分组（LOCAL/REMOTE），落快照与命中轨迹 |
+| `POST /official` | `insurance:grouping:manage` | 登记省局正式分组结果（差异分析基准） |
+| `GET /by-visit/{id}` / `/history` | `insurance:settlement:read` | 最近一次 / 历史分组结果 |
+| `GET /by-visit/{id}/variance` | `insurance:settlement:read` | 预分组 vs 正式分组逐字段差异 |
+| `GET /reports/summary?days=&top=` | `insurance:settlement:read` | 引擎统计、入组 Top 病组、未入组原因 Top（days≤366、top≤50） |
+
+边界与取舍：
+
+- **规则包版本化**：同一 code 只允许一个 ACTIVE；规则包的 `checksum` 与版本随结果落库，
+  任何一次分组都能回答"当时用的是哪版规则"；
+- **缺项不猜**：ADRG 缺少对应严重程度的细分组时回落到 `NONE` 并写回落轨迹；
+  连 `NONE` 都没有则未入组并给出原因；
+- **远端不静默回退**：`REMOTE` 失败默认直接报错；要回落必须显式打开 `fallback-local`，
+  且结果 `engine=LOCAL` 可辨认；
+- **正式结果只读登记**：`OFFICIAL` 结果不参与院内测算，只用于差异分析；
+- **证据追加式**：`grouper_result` 由库级触发器拒绝 UPDATE/DELETE。
+
 ## 构建与运行
 
 ```powershell

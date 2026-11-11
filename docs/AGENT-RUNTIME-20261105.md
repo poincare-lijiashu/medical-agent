@@ -11473,3 +11473,77 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 长期验证（LTV/PAdES）与归档时间戳（ATS 续证）未做，令牌过期后的再签需后续批次；
 - 国密 SM2/SM3 时间戳（GM/T 0033）未做，需院方国密 TSA；
 - 前端暂未展示时间戳证据面板（接口已具备，控制台排期）。
+
+## 263. 2026-11-11 DRG/DIP 2.0 可配置分组（第 263 批）
+
+**问题**
+
+- V7 的"模拟预分组"只有"ICD 前缀 + 优先级"，表达不了 MDC→ADRG→DRG 层级、
+  没有 CC/MCC 升级与排除，达不到 W2.3 的 409/634 核心与细分组口径；
+- 分组规则与病种目录由国家和省局下发，平台既不能内置权威全量规则，
+  也不能写死一套算法——3.0 发布或换统筹区时必须只换规则包、不改代码；
+- 没有"院内预分组 vs 省局正式分组"的差异留痕，病案编码问题无法定位。
+
+**本批做了什么**
+
+1. **规则包版本化**（`grouper_rule_set`，V24）：code + version 唯一，带 checksum、
+   生效日期、来源（NATIONAL/PROVINCIAL/LOCAL/VENDOR）与 DRAFT/ACTIVE/RETIRED 状态；
+   同一 code 只允许一个 ACTIVE（部分唯一索引），激活新版本时旧版自动 RETIRED；
+2. **分层规则载体**：`grouper_mdc_rule`（主诊断字典序区间）、`grouper_adrg_rule`
+   （手术/诊断/两者，priority 升序首个命中）、`grouper_drg_def`（ADRG + NONE/CC/MCC → 权重）、
+   `grouper_cc_rule` / `grouper_cc_exclusion`（MCC 优先、主诊断排除）、
+   `grouper_dip_catalog`（CORE 诊断+主操作 / COMPOSITE 诊断前缀，最长匹配）；
+3. **本地引擎** `LocalGrouperEngine`：MDC→ADRG→CC/MCC→DRG 全链路 + DIP 病种匹配；
+   缺对应严重程度细分组时回落 NONE 并记 `SEVERITY_FALLBACK` 轨迹，连 NONE 都没有则
+   未入组并给出原因；主诊断不在 MDC 区间、ADRG 未命中也分别给出可定位原因；
+4. **远端分组器适配** `RemoteGrouperClient`：JSON over HTTP，映射 drgCode/dipCode/
+   severity/weight/score/trace；失败映射为 48427，**默认不回落本地**，
+   要回落必须显式 `INSURANCE_GROUPER_FALLBACK_LOCAL=true`；
+5. **预分组与正式结果**：`grouper_result` 追加式（库级触发器拒绝改删），
+   统一保存 engine（LOCAL/REMOTE/OFFICIAL）、规则包 code/version/checksum 语义、
+   输入哈希、主/次诊断与手术、命中轨迹；`/variance` 逐字段比较预分组与正式结果；
+6. **导入校验整包拒绝**：ADRG 引用不存在的 MDC、DRG 引用不存在的 ADRG、
+   优先级/编码重复、DRG 包混入 DIP 目录（或反之）、激活时缺层级，全部在写库前失败；
+7. **API**（`/insurance/grouper/**`）：规则包列表/导入/激活、预分组、正式结果登记、
+   最近结果/历史、差异分析；权限沿用 `insurance:grouping:manage` 与
+   `insurance:settlement:read`；
+8. **配置**：`INSURANCE_GROUPER_ENGINE/REMOTE_URL/REMOTE_TOKEN/TIMEOUT/FALLBACK_LOCAL`，
+   默认 LOCAL、远端不回落。
+
+**验证**
+
+```
+后端：mvn -pl insurance -am test → 通过（含既有目录/结算/报盘/实时结算测试）
+      LocalGrouperEngineTest 12 条：手术/CC/MCC/排除/回落/未入组、DIP 精确/无操作/最长综合/未命中
+      RemoteGrouperClientTest 3 条：真实 HTTP 往返、500 明确失败、未配置地址拒绝
+      GrouperServiceTest 10 条 + GrouperControllerPermissionTest 5 条：导入校验、
+          远端不回退/显式回退、差异分析、正式结果必填、报表窗口收敛、权限
+迁移 lint：scanned=255 new=0 PASS
+真实库（dev，重启 insurance）：flyway v24 success
+接口联调（admin01，网关 8080）：
+      POST /insurance/grouper/rule-sets → ACTIVE（mdc=1、drg=1）
+      POST /preview → engine=LOCAL、drgCode=DRG-B1A、weight=1.5000
+      POST /official（DRG-XYZ、2.0）→ 登记成功
+      GET /variance → consistent=false，列出 drgCode/weight 等 5 项差异
+      GET /reports/summary?days=7 → LOCAL/OFFICIAL 各 1 次、Top 病组 DRG-B1A/DRG-XYZ
+库内核对：update grouper_result 被触发器拒绝（"分组结果证据表，禁止 UPDATE"）
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **不内置规则数据**：国家/省局规则有版权与版本口径，内置一份等于把"过期规则"
+  卖成"官方分组"；平台只提供引擎与导入/版本/审计能力；
+- **区间用字典序**：MDC 归并按 ICD-10 编码字典序区间，能覆盖绝大多数章节归并，
+  但不对"跨区间共病"做临床推断——那属于规则包内容，不是引擎职责；
+- **缺项回落只落一级**：CC 缺失回落到 NONE，不尝试相邻 ADRG；宁可少算，
+  也不把病人分到错误的高权重组；
+- **远端与本地结果分开标记**：`engine` 落库，差异分析与审计能区分"预分组用的哪条路径"；
+- **正式结果不反哺引擎**：OFFICIAL 只做基准，避免"用结果反推规则"造成口径自证。
+
+**遗留**
+
+- 未内置/导入真实 409/634 核心与细分组、DIP 9520 核心病种，需院方提供规则包后抽样测；
+- 未实现 DRG/DIP 3.0 差异比对报告（导入两版规则包后可做字段级 diff，本批未做）；
+- CC/MCC 只按次要诊断前缀匹配，未做"主诊断-次要诊断组合表"级别的排除逻辑；
+- 未按月/科室/医师维度出分组差异报表与超支预警（W2.5/W2.6 后续批次）。

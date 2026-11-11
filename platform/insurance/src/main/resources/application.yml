@@ -99,6 +99,16 @@ insurance:
       SETTLE:
         infno: ${CHS_INFNO_SETTLE:2201}
         path: ${CHS_PATH_SETTLE:}
+  # ---- DRG/DIP 2.0 可配置分组引擎（第 263 批）----
+  # 规则包由院方导入（国家/省局/本地），平台不内置权威全量规则。
+  # LOCAL：本地规则驱动引擎；REMOTE：省局/厂商分组器（HTTP）。
+  # fallback-local 默认 false：远端失败不回落，避免两种口径混用。
+  grouper:
+    engine: ${INSURANCE_GROUPER_ENGINE:LOCAL}
+    remote-url: ${INSURANCE_GROUPER_REMOTE_URL:}
+    remote-token: ${INSURANCE_GROUPER_REMOTE_TOKEN:}
+    timeout: ${INSURANCE_GROUPER_TIMEOUT:PT3S}
+    fallback-local: ${INSURANCE_GROUPER_FALLBACK_LOCAL:false}
 
 management:
   endpoints:
