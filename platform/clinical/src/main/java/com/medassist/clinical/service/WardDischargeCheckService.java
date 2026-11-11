@@ -6,6 +6,7 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.DischargeReadinessSummary;
+import com.medassist.clinical.web.ClinicalDtos.WardDischargeCount;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadiness;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadinessView;
 import com.medassist.common.api.ErrorCode;
@@ -18,7 +19,6 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -130,18 +130,37 @@ public class WardDischargeCheckService {
      *
      * <p>只回计数、**不写审计**：角标是周期性刷新，每次都记一条会把审计刷成噪音；
      * 详情页（{@link #check}）仍保留“谁看了哪个病区”的留痕。
+     *
+     * <p>一次分组 SQL 同时得到合计与病区明细：驾驶舱要回答“哪个病区压着人”，
+     * 但汇总接口又被待办角标高频调用，不能为了下钻再跑第二遍重查询。
+     * 明细只含有在院患者的病区，受阻多的在前，口径与合计完全同源。
      */
-    public DischargeReadinessSummary summary(Collection<UUID> wardIds) {
-        if (wardIds == null || wardIds.isEmpty()) {
-            return new DischargeReadinessSummary(0, 0, 0, 0);
+    public DischargeReadinessSummary summary(List<Ward> wards) {
+        if (wards == null || wards.isEmpty()) {
+            return new DischargeReadinessSummary(0, 0, 0, 0, List.of());
         }
-        int total = repo.countActiveAdmissionsByWards(wardIds);
-        if (total == 0) {
-            return new DischargeReadinessSummary(wardIds.size(), 0, 0, 0);
+        List<UUID> wardIds = wards.stream().map(Ward::id).toList();
+        Map<UUID, ClinicalRepository.WardDischargeCounts> counts = repo.countDischargeByWards(
+                wardIds, BusinessTime.today(), BusinessTime.zone().getId());
+        int total = 0;
+        int blocked = 0;
+        List<WardDischargeCount> rows = new ArrayList<>(wards.size());
+        for (Ward ward : wards) {
+            ClinicalRepository.WardDischargeCounts c = counts.get(ward.id());
+            int wardTotal = c == null ? 0 : c.total();
+            int wardBlocked = c == null ? 0 : c.blocked();
+            total += wardTotal;
+            blocked += wardBlocked;
+            if (wardTotal > 0) {
+                rows.add(new WardDischargeCount(ward.id(), ward.name(),
+                        wardTotal, wardBlocked, wardTotal - wardBlocked));
+            }
         }
-        int blocked = repo.countDischargeBlockedByWards(wardIds, BusinessTime.today(),
-                BusinessTime.zone().getId());
-        return new DischargeReadinessSummary(wardIds.size(), total, blocked, total - blocked);
+        rows.sort(Comparator.comparing(WardDischargeCount::blocked).reversed()
+                .thenComparing(WardDischargeCount::total, Comparator.reverseOrder())
+                .thenComparing(WardDischargeCount::name));
+        return new DischargeReadinessSummary(wards.size(), total, blocked, total - blocked,
+                List.copyOf(rows));
     }
 
     // ---------------------------------------------------------------- 内部

@@ -351,8 +351,20 @@ public final class ClinicalDtos {
      * @param total     在院患者数（只算 IN_HOSPITAL，不含登记未入科）
      * @param blocked   出院受阻人数（账单/医嘱三类阻断；不含“状态异常”）
      * @param ready     可出院人数（total − blocked）
+     * @param wards     按病区下钻（只含有在院患者的病区，受阻多的在前）
      */
-    public record DischargeReadinessSummary(int wardCount, int total, int blocked, int ready) {
+    public record DischargeReadinessSummary(int wardCount, int total, int blocked, int ready,
+                                            List<WardDischargeCount> wards) {
+    }
+
+    /**
+     * 汇总里的病区一行：驾驶舱据此列出"哪个病区压着人"。
+     *
+     * @param total   该病区在院患者数
+     * @param blocked 该病区出院受阻人数
+     * @param ready   该病区可出院人数（total − blocked）
+     */
+    public record WardDischargeCount(UUID wardId, String name, int total, int blocked, int ready) {
     }
 
     // ---------------------------------------------------------------- 护理执行记录

@@ -477,6 +477,17 @@ export interface DischargeReadinessSummary {
   total: number
   blocked: number
   ready: number
+  /** 病区下钻：只含有在院患者的病区，受阻多的在前。 */
+  wards: WardDischargeCount[]
+}
+
+/** 汇总里的病区一行（驾驶舱据此列出“哪个病区压着人”）。 */
+export interface WardDischargeCount {
+  wardId: string
+  name: string
+  total: number
+  blocked: number
+  ready: number
 }
 
 /** 护理执行记录（长嘱逐日执行，追加式）。 */

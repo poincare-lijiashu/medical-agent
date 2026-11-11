@@ -200,12 +200,12 @@ class InpatientControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
 
-        when(service.listWards(any(), any())).thenReturn(List.of(
-                new com.medassist.clinical.domain.ClinicalModel.Ward(wardId, "W01", "内科一病区",
-                        UUID.randomUUID(), true)));
+        var ward = new com.medassist.clinical.domain.ClinicalModel.Ward(wardId, "W01",
+                "内科一病区", UUID.randomUUID(), true);
+        when(service.listWards(any(), any())).thenReturn(List.of(ward));
         controller.dischargeReadinessSummary("inpatient:read", scope);
 
-        verify(wardCheckService).summary(List.of(wardId));
+        verify(wardCheckService).summary(List.of(ward));
     }
 
     @Test

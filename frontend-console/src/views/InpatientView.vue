@@ -466,34 +466,63 @@
           </span>
         </div>
         <div v-if="readiness.items.length === 0" class="hint">该病区暂无在院患者。</div>
-        <div v-else class="readiness-list">
-          <div v-for="it in readiness.items" :key="it.admissionId" class="readiness-row">
-            <span class="badge" :class="it.ready ? 'badge--ok' : 'badge--danger'">
-              {{ it.ready ? '可出院' : `${it.blockerCount} 项阻断` }}
-            </span>
-            <div class="check-body">
-              <div class="check-title">
-                <span class="mono">{{ it.bedNo || '未分床' }}</span> ·
-                <span class="mono">{{ it.patientNo }}</span>
-                <span class="muted"> {{ it.admissionNo }}</span>
-              </div>
-              <div class="readiness-flags">
-                <span v-for="c in it.blockers" :key="c" class="badge badge--danger">
-                  {{ checkCodeLabel(c) }}
-                </span>
-                <span v-for="c in it.warnings" :key="c" class="badge badge--warn">
-                  {{ checkCodeLabel(c) }}
-                </span>
-                <span v-if="!it.blockers.length && !it.warnings.length" class="hint">无待处理项</span>
-              </div>
+        <template v-else>
+          <div class="readiness-toolbar">
+            <div class="seg" role="tablist" aria-label="预检筛选">
+              <button
+                v-for="f in READINESS_FILTERS"
+                :key="f.value"
+                class="seg-btn"
+                :class="{ active: readinessFilter === f.value }"
+                type="button"
+                @click="readinessFilter = f.value"
+              >
+                {{ f.label }} {{ readinessCounts[f.value] }}
+              </button>
             </div>
-            <button class="btn btn--sm" type="button" @click="openDischargeFromReadiness(it)">处理</button>
+            <span class="spacer" />
+            <span class="hint">当前显示 {{ readinessRows.length }} / {{ readiness.items.length }} 人</span>
           </div>
-        </div>
+          <div v-if="readinessRows.length === 0" class="hint">
+            当前筛选条件下没有患者，切换筛选可查看其余条目。
+          </div>
+          <div v-else class="readiness-list">
+            <div v-for="it in readinessRows" :key="it.admissionId" class="readiness-row">
+              <span class="badge" :class="it.ready ? 'badge--ok' : 'badge--danger'">
+                {{ it.ready ? '可出院' : `${it.blockerCount} 项阻断` }}
+              </span>
+              <div class="check-body">
+                <div class="check-title">
+                  <span class="mono">{{ it.bedNo || '未分床' }}</span> ·
+                  <span class="mono">{{ it.patientNo }}</span>
+                  <span class="muted"> {{ it.admissionNo }}</span>
+                </div>
+                <div class="readiness-flags">
+                  <span v-for="c in it.blockers" :key="c" class="badge badge--danger">
+                    {{ checkCodeLabel(c) }}
+                  </span>
+                  <span v-for="c in it.warnings" :key="c" class="badge badge--warn">
+                    {{ checkCodeLabel(c) }}
+                  </span>
+                  <span v-if="!it.blockers.length && !it.warnings.length" class="hint">无待处理项</span>
+                </div>
+              </div>
+              <button class="btn btn--sm" type="button" @click="openDischargeFromReadiness(it)">处理</button>
+            </div>
+          </div>
+        </template>
       </div>
       <p v-else class="hint">预检加载失败（{{ readinessError || '网络异常' }}），请稍后重试。</p>
       <template #footer>
         <button class="btn" type="button" :disabled="readinessLoading" @click="loadReadiness">重新预检</button>
+        <button
+          class="btn"
+          type="button"
+          :disabled="!readiness || readinessRows.length === 0"
+          @click="exportReadinessCsv"
+        >
+          导出 CSV
+        </button>
         <button
           class="btn"
           type="button"
@@ -616,6 +645,7 @@ import type {
 } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
+import { downloadCsv } from '@/utils/csv'
 import { ageOf, dateTime, genderLabel, money, todayIso } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
@@ -1118,6 +1148,28 @@ const readinessLoading = ref(false)
 const readiness = ref<WardDischargeReadinessView | null>(null)
 const readinessError = ref('')
 
+/** 预检筛选：护士站通常只关心"还走不了的人"，全部/可出院用于核对与导出。 */
+type ReadinessFilter = 'all' | 'blocked' | 'ready'
+const READINESS_FILTERS: { value: ReadinessFilter; label: string }[] = [
+  { value: 'all', label: '全部' },
+  { value: 'blocked', label: '只看受阻' },
+  { value: 'ready', label: '只看可出院' },
+]
+const readinessFilter = ref<ReadinessFilter>('all')
+
+const readinessCounts = computed<Record<ReadinessFilter, number>>(() => {
+  const items = readiness.value?.items ?? []
+  const blocked = items.filter((i) => !i.ready).length
+  return { all: items.length, blocked, ready: items.length - blocked }
+})
+
+const readinessRows = computed(() => {
+  const items = readiness.value?.items ?? []
+  if (readinessFilter.value === 'blocked') return items.filter((i) => !i.ready)
+  if (readinessFilter.value === 'ready') return items.filter((i) => i.ready)
+  return items
+})
+
 const wardLabel = computed(() =>
   currentWard.value ? `${currentWard.value.name}（${currentWard.value.code}）` : '',
 )
@@ -1139,6 +1191,7 @@ function checkCodeLabel(code: string): string {
 
 function openReadiness() {
   readinessOpen.value = true
+  readinessFilter.value = 'all'
   void loadReadiness()
 }
 
@@ -1160,6 +1213,30 @@ async function loadReadiness() {
 function openDischargeFromReadiness(it: WardDischargeReadiness) {
   readinessOpen.value = false
   openDischarge({ id: it.admissionId, admissionNo: it.admissionNo, patientNo: it.patientNo })
+}
+
+/**
+ * 导出当前筛选结果（所见即所得）。
+ *
+ * <p>只导机器码翻译后的中文，不导内部码：这张表是给护士站交接与线下核对用的，
+ * 不是给系统对接用的；需要机器码请走 API。
+ */
+function exportReadinessCsv() {
+  const data = readiness.value
+  const ward = currentWard.value
+  if (!data || !ward || readinessRows.value.length === 0) return
+  const rows: string[][] = [['床位', '住院号', '病案号', '结论', '阻断项', '建议项']]
+  for (const it of readinessRows.value) {
+    rows.push([
+      it.bedNo || '未分床',
+      it.admissionNo,
+      it.patientNo,
+      it.ready ? '可出院' : `${it.blockerCount} 项阻断`,
+      it.blockers.map((c) => checkCodeLabel(c)).join('、') || '—',
+      it.warnings.map((c) => checkCodeLabel(c)).join('、') || '—',
+    ])
+  }
+  downloadCsv(`出院预检-${ward.code}-${todayIso()}.csv`, rows)
 }
 
 /* ---------- 交接单打印（第 250 批） ---------- */
@@ -1585,6 +1662,13 @@ onMounted(async () => {
 }
 
 /* 病区出院预检：一人一行，机器码徽章横向排 */
+.readiness-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .readiness-list {
   display: flex;
   flex-direction: column;

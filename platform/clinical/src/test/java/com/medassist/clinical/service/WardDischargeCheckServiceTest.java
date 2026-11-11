@@ -6,6 +6,7 @@ import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalDtos.WardDischargeCount;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadiness;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadinessView;
 import org.junit.jupiter.api.BeforeEach;
@@ -162,31 +163,59 @@ class WardDischargeCheckServiceTest {
     }
 
     @Test
-    @DisplayName("汇总：可出院 = 在院 − 受阻；口径与体检一致（一条阻断 SQL）")
+    @DisplayName("汇总：分组计数一次取回，合计与病区明细同源")
     void summaryCountsBlockedInOneQuery() {
-        when(repo.countActiveAdmissionsByWards(any())).thenReturn(10);
-        when(repo.countDischargeBlockedByWards(any(), any(), any())).thenReturn(3);
+        UUID otherWard = UUID.randomUUID();
+        when(repo.countDischargeByWards(any(), any(), any())).thenReturn(Map.of(
+                wardId, new ClinicalRepository.WardDischargeCounts(wardId, 10, 3),
+                otherWard, new ClinicalRepository.WardDischargeCounts(otherWard, 2, 0)));
 
-        var summary = service.summary(List.of(wardId, UUID.randomUUID()));
+        var summary = service.summary(List.of(ward, ward(otherWard, "W02", "外科一病区")));
 
         assertThat(summary.wardCount()).isEqualTo(2);
-        assertThat(summary.total()).isEqualTo(10);
+        assertThat(summary.total()).isEqualTo(12);
         assertThat(summary.blocked()).isEqualTo(3);
-        assertThat(summary.ready()).isEqualTo(7);
-        verify(repo, times(1)).countDischargeBlockedByWards(any(), any(), any());
+        assertThat(summary.ready()).isEqualTo(9);
+        assertThat(summary.wards()).extracting(WardDischargeCount::wardId)
+                .containsExactly(wardId, otherWard);
+        assertThat(summary.wards().get(0).ready()).isEqualTo(7);
+        verify(repo, times(1)).countDischargeByWards(any(), any(), any());
     }
 
     @Test
-    @DisplayName("汇总：没有在院患者时不再查阻断项；没有可见病区直接回 0")
-    void summaryShortCircuits() {
-        when(repo.countActiveAdmissionsByWards(any())).thenReturn(0);
-        var empty = service.summary(List.of(wardId));
-        assertThat(empty.total()).isZero();
-        verify(repo, times(0)).countDischargeBlockedByWards(any(), any(), any());
+    @DisplayName("汇总明细：受阻多的在前，同数按在院多、再按病区名；没有在院的病区不入明细")
+    void summaryWardRowsSortedAndFiltered() {
+        UUID w2 = UUID.randomUUID();
+        UUID w3 = UUID.randomUUID();
+        UUID emptyWard = UUID.randomUUID();
+        when(repo.countDischargeByWards(any(), any(), any())).thenReturn(Map.of(
+                wardId, new ClinicalRepository.WardDischargeCounts(wardId, 10, 3),
+                w2, new ClinicalRepository.WardDischargeCounts(w2, 6, 3),
+                w3, new ClinicalRepository.WardDischargeCounts(w3, 5, 5),
+                emptyWard, new ClinicalRepository.WardDischargeCounts(emptyWard, 0, 0)));
 
+        var summary = service.summary(List.of(
+                ward, ward(w2, "W02", "外科一病区"), ward(w3, "W03", "儿科病区"),
+                ward(emptyWard, "W04", "空病区")));
+
+        assertThat(summary.wardCount()).isEqualTo(4);
+        assertThat(summary.total()).isEqualTo(21);
+        assertThat(summary.blocked()).isEqualTo(11);
+        assertThat(summary.ready()).isEqualTo(10);
+        assertThat(summary.wards()).extracting(WardDischargeCount::wardId)
+                .containsExactly(w3, wardId, w2);
+        assertThat(summary.wards()).extracting(WardDischargeCount::ready)
+                .containsExactly(0, 7, 3);
+    }
+
+    @Test
+    @DisplayName("汇总：没有可见病区直接回 0，不打库")
+    void summaryShortCircuits() {
         var noWard = service.summary(List.of());
+
         assertThat(noWard.wardCount()).isZero();
-        verify(repo, times(1)).countActiveAdmissionsByWards(any());
+        assertThat(noWard.wards()).isEmpty();
+        verify(repo, times(0)).countDischargeByWards(any(), any(), any());
     }
 
     // ---------------------------------------------------------------- 构造
@@ -194,6 +223,10 @@ class WardDischargeCheckServiceTest {
     private WardDischargeReadiness item(WardDischargeReadinessView view, UUID admissionId) {
         return view.items().stream().filter(i -> admissionId.equals(i.admissionId()))
                 .findFirst().orElseThrow();
+    }
+
+    private Ward ward(UUID id, String code, String name) {
+        return new Ward(id, code, name, deptId, true);
     }
 
     private Admission admission(String status, UUID bedId) {

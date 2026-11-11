@@ -215,11 +215,9 @@ public class InpatientController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
-        List<UUID> wardIds = service.listWards(scope.campusFilter(),
-                        scope.allDepartments() ? null : scope.deptCodes()).stream()
-                .map(Ward::id)
-                .toList();
-        return ApiResponse.ok(wardCheckService.summary(wardIds));
+        List<Ward> wards = service.listWards(scope.campusFilter(),
+                scope.allDepartments() ? null : scope.deptCodes());
+        return ApiResponse.ok(wardCheckService.summary(wards));
     }
 
     /**
