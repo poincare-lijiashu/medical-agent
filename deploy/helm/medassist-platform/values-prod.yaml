@@ -270,6 +270,12 @@ fhir:
   # FHIR Bundle 的 fullUrl/self 必须是对外可回查地址（见 deployment-fhir.yaml）
   baseUrl: https://medassist.hospital.local/api/v2/fhir
 
+masterdata:
+  replicaCount: 2
+  image: {repository: platform-masterdata, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: production}
+
 serviceMonitor:
   enabled: true
   interval: 30s

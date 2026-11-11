@@ -1,0 +1,72 @@
+server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
+  port: 8091
+  # 优雅停机：滚动/灰度期在途的导入/同步处理完再退出
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-masterdata
+
+  datasource:
+    # 主数据服务读写自己的 mdm_svc；对临床/药事/医技/物资/账号 schema 只做 SELECT（源表同步）。
+    # 生产建议：mdm_svc 用读写账号，源 schema 用只读账号（见 platform/README.md「主数据治理」）。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: mdm-pool
+      maximum-pool-size: 8
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: mdm_svc
+    default-schema: mdm_svc
+    locations: classpath:db/migration/masterdata
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+medassist:
+  masterdata:
+    # 分页与导入上限是安全边界：见 MasterDataProperties 注释
+    default-page-size: ${MDM_DEFAULT_PAGE_SIZE:20}
+    max-page-size: ${MDM_MAX_PAGE_SIZE:200}
+    max-import-rows: ${MDM_MAX_IMPORT_ROWS:5000}
+    preview-sample-rows: ${MDM_PREVIEW_SAMPLE_ROWS:20}
+    max-version-page-size: ${MDM_MAX_VERSION_PAGE_SIZE:100}
+    sync-stale-days: ${MDM_SYNC_STALE_DAYS:7}
+    audit-list-default: ${MDM_AUDIT_LIST_DEFAULT:50}
+    audit-list-max: ${MDM_AUDIT_LIST_MAX:200}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: INFO

@@ -11,6 +11,8 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -98,6 +100,27 @@ public abstract class AbstractApiExceptionHandler {
         log.debug("request.unreadable reason={}", e.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResponse.fail(ErrorCode.BAD_REQUEST, "请求体格式不正确或缺失"));
+    }
+
+    /**
+     * 响应格式协商失败 → 406。
+     *
+     * <p>典型场景：导出 CSV 的接口被客户端以 {@code Accept: application/json} 调用。
+     * 此前没有处理器，会落进兜底 500，把"客户端要错格式"误报成服务端故障。
+     */
+    @ExceptionHandler(HttpMediaTypeNotAcceptableException.class)
+    public ResponseEntity<ApiResponse<Void>> handleNotAcceptable(HttpMediaTypeNotAcceptableException e) {
+        log.debug("request.not_acceptable reason={}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_ACCEPTABLE)
+                .body(ApiResponse.fail(ErrorCode.NOT_ACCEPTABLE));
+    }
+
+    /** 请求体类型不受支持（如给 text/csv 接口发 JSON）→ 415。 */
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleUnsupportedMedia(HttpMediaTypeNotSupportedException e) {
+        log.debug("request.unsupported_media reason={}", e.getMessage());
+        return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
+                .body(ApiResponse.fail(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
     }
 
     /** 缺少必填查询参数 → 400。 */

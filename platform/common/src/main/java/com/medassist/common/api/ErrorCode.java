@@ -15,7 +15,8 @@ package com.medassist.common.api;
  *   <li>43xxx 药事与物资——药事占 4340x–4352x，物资占 4345x–4351x，两者交错是历史遗留，
  *       新增物资码请从 4355x 起，避免再插进药事段；</li>
  *   <li>44xxx 医嘱 / 临床路径 / 出院带药 / 急诊 / 体检 / 慢病 / 移动护理 / 输血 / CA；</li>
- *   <li>45xxx 收费与票据；46xxx 医技；47xxx 病案与知情同意书；48xxx 医保；49xxx 知识库。</li>
+ *   <li>45xxx 收费与票据；46xxx 医技；47xxx 病案与知情同意书；48xxx 医保；49xxx 知识库；
+ *       50xxx 主数据与字典映射。</li>
  * </ul>
  *
  * <p>新增码后必须同步在该服务的 {@code GlobalExceptionHandler#statusOf} 里显式映射，
@@ -30,6 +31,8 @@ public enum ErrorCode {
     UNAUTHORIZED(40100, "未认证：请先登录"),
     FORBIDDEN(40300, "无权限执行该操作"),
     NOT_FOUND(40400, "请求的资源不存在"),
+    NOT_ACCEPTABLE(40600, "请求的响应格式不被支持，请检查 Accept 头"),
+    UNSUPPORTED_MEDIA_TYPE(41500, "请求内容类型不被支持，请检查 Content-Type"),
     CONFLICT(40900, "数据已被他人修改，请刷新后重试"),
     VALIDATION_FAILED(42200, "提交内容不符合校验规则"),
     TOO_MANY_REQUESTS(42900, "操作过于频繁，请稍后再试"),
@@ -465,7 +468,28 @@ public enum ErrorCode {
     KB_DOCUMENT_STATUS_INVALID(49412, "当前文档状态不允许该操作"),
     KB_QUERY_INVALID(49413, "检索词为空或不合法，请调整后重试"),
     KB_PARSE_UNSUPPORTED(49414, "该文件格式暂不支持解析，请转为纯文本或 Markdown 后入库"),
-    KB_EMBEDDING_UNAVAILABLE(49420, "向量模型未配置，当前仅支持关键词检索");
+    KB_EMBEDDING_UNAVAILABLE(49420, "向量模型未配置，当前仅支持关键词检索"),
+
+    // ---- 主数据与字典映射（50xxx，§269）----
+    MDM_DOMAIN_NOT_FOUND(50401, "未找到该主数据域，或该域已停用"),
+    MDM_ITEM_NOT_FOUND(50402, "未找到该主数据条目"),
+    MDM_MAPPING_NOT_FOUND(50403, "未找到该外部编码映射"),
+    MDM_CHANGE_REQUEST_NOT_FOUND(50404, "未找到该主数据变更申请"),
+    MDM_IMPORT_NOT_FOUND(50405, "未找到该导入批次"),
+    MDM_EXTERNAL_SYSTEM_NOT_FOUND(50406, "未找到该外部系统，或该系统已停用"),
+    MDM_ITEM_DUPLICATE(50409, "该域下已存在相同本地编码的主数据条目"),
+    MDM_MAPPING_DUPLICATE(50410, "该本地编码在此系统下已存在相同外部编码的映射"),
+    MDM_CHANGE_REQUEST_STATUS_INVALID(50411, "当前变更申请状态不允许该操作"),
+    MDM_CHANGE_REQUEST_SELF_REVIEW(50412, "不能审批自己提交的变更申请，请由其他数据治理员复核"),
+    MDM_IMPORT_CHECKSUM_MISMATCH(50413, "导入内容与预检批次不一致，请重新预检后再应用"),
+    MDM_CHANGE_REQUEST_INVALID(50414, "变更申请内容不合法（编码/字段/状态/目标条目有误）"),
+    MDM_MAPPING_INVALID(50415, "映射内容不合法（外部系统、外部编码、映射类型或主映射冲突）"),
+    MDM_IMPORT_INVALID(50416, "导入内容不合法（行数超限、域未知、编码重复或字段缺失）"),
+    MDM_ITEM_STATUS_INVALID(50417, "当前条目状态不允许该操作（源同步条目由同步维护）"),
+    MDM_SYNC_FAILED(50418, "源字典同步失败，请检查源服务与数据库权限后重试"),
+    MDM_DOMAIN_NOT_SYNCABLE(50419, "该主数据域不支持从源表同步"),
+    MDM_REASON_REQUIRED(50420, "变更或驳回必须填写原因（至少 2 个字符）"),
+    MDM_ACTOR_REQUIRED(50421, "主数据变更必须带真实操作人，禁止匿名写入");
 
     private final int code;
     private final String defaultMessage;

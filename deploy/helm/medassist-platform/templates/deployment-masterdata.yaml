@@ -1,0 +1,117 @@
+{{- if .Values.masterdata.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "masterdata") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "masterdata") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "masterdata") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "masterdata") | nindent 4 }}
+spec:
+  {{- if not .Values.masterdata.autoscaling.enabled }}
+  replicas: {{ .Values.masterdata.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.masterdata.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "masterdata") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "masterdata") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "masterdata") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.masterdata.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: masterdata
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.masterdata.image) }}
+          imagePullPolicy: {{ .Values.masterdata.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.masterdata.service.port }}
+              protocol: TCP
+          env:
+            # 主数据服务不签发/校验 JWT（网关已认证），也不直连其他业务服务：
+            # 对源字典 schema 只做 SELECT（生产建议用只读账号，见 platform/README.md）。
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "masterdata" "jwt" false "empi" false) | nindent 12 }}
+            - name: MDM_DEFAULT_PAGE_SIZE
+              value: {{ .Values.masterdata.defaultPageSize | quote }}
+            - name: MDM_MAX_PAGE_SIZE
+              value: {{ .Values.masterdata.maxPageSize | quote }}
+            - name: MDM_MAX_IMPORT_ROWS
+              value: {{ .Values.masterdata.maxImportRows | quote }}
+            {{- with .Values.masterdata.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.masterdata.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.masterdata.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.masterdata.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.masterdata.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.masterdata.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.masterdata.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.masterdata.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.masterdata.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.masterdata.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.masterdata.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.masterdata.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.masterdata.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.masterdata.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "masterdata") | nindent 6 }}
+{{- end }}

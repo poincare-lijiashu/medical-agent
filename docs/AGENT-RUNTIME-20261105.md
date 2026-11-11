@@ -11878,3 +11878,77 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 30 分钟 soak、PG 主备切换、Redis/Nacos/LLM 网关故障演练；
 - 集成 ACK/DEAD 与 AI 首包/完整响应的真实 provider 维度统计；
 - SLO 月度报表自动生成（当前为文档 + PromQL，报表自动化待接）。
+
+## 269. 2026-11-11 主数据与字典映射治理（第 269 批）
+
+**问题**
+
+- 各域字典（科室/收费/诊断/手术/药品/检查检验/耗材/班次/组织/院区）各存各的，
+  没有统一的主数据视图，无法回答"一物一码、这个编码对应 HIS/医保哪个编码"；
+- 医保对照散落在保险域，HIS/LIS/PACS 对照没有载体，编码变更没有审批与版本；
+- 批量导入多为"直接写库"，预检与应用不一致、失败半截落库、重复导入重复记账；
+- 质量口径缺失：多少条目没有映射、一源多码、同名两码、源表已消失，没人能看到。
+
+**本批做了什么**
+
+1. **新增模块 `platform-masterdata`（8091，`mdm_svc`）**：不复制业务数据，
+   在既有字典之上做治理层；独立服务避免"某个业务域替别的域做主"；
+2. **10 个主数据域注册**：DEPT / CHARGE_ITEM / DIAGNOSIS / OPERATION / DRUG /
+   EXAM_ITEM / CONSUMABLE / SHIFT / ORG / CAMPUS，记录来源服务/表/适配器与必需外部系统；
+3. **条目与版本链**：`md_item`（域+编码唯一，状态 ACTIVE/INACTIVE/MISSING_IN_SOURCE，
+   生效区间、属性快照、内容指纹）；`md_item_version` 追加式，记录变更前后快照、
+   字段级 diff、原因、操作人、单据号与 `prev_checksum → checksum` 哈希链；
+4. **外部编码映射**：`md_external_system`（HIS/LIS/PACS/EMR/国家医保/省医保/区域平台）、
+   `md_external_map`（一码多源/一源多码，同域同系统最多一个生效主映射）、
+   `md_mapping_version`（CREATE/UPDATE/RETIRE 留痕，停用不物理删除）；
+5. **源表同步**：适配器 SQL 固定在服务端（不接受表名参数），按内容指纹去抖；
+   源表消失置 MISSING 不删除；手工/导入条目与源冲突记 conflicts 不覆盖；
+   `dryRun` 只算差异；失败在独立事务记录 FAILED（不会随外层回滚把失败痕迹抹掉）；
+6. **变更申请与审批**：提交人 ≠ 审批人；申请固化 `_baseVersion`，审批时版本已变即拒绝，
+   杜绝"审 A 批 B"；IN_HOUSE 条目内容只能改源表后重新同步，映射由主数据域维护；
+7. **批量导入**：JSON 主数据（可带映射）与 CSV 映射两种；预检给出
+   CREATE/UPDATE/UNCHANGED/CONFLICT/ERROR 与逐行原因；应用必须与预检校验和一致、
+   预检无错误/冲突、动作未变化；同内容重复应用幂等；有错误整批拒绝（不做半截导入）；
+8. **质量看板**：按域统计条目规模、映射覆盖、缺必需系统映射、同名两码、一源多码、
+   源缺失与同步过期（默认 7 天）；`GET /mappings/export.csv` 导出对照（BOM，上限 2 万行）；
+9. **权限**（auth V87）：`mdm:read` / `mdm:write` / `mdm:approve` / `mdm:import` /
+   `mdm:audit:read`；新增 `DATA_STEWARD`（录入/同步/导入）与 `DATA_GOVERNOR`（审批/审计）；
+   所有写操作要求真实 X-Actor，缺失或 system 一律 403；
+10. **顺带修复平台级错误壳**：`Accept` 不匹配此前落兜底 500，现返回 406；
+    `Content-Type` 不支持返回 415（`AbstractApiExceptionHandler` 统一处理）。
+
+**验证**
+
+```
+迁移安全 lint：scanned=263 known=10 new=0 PASS（无新增阻塞式 NOT NULL）
+模块测试：masterdata 34 tests / common 111 tests，0 failures / 0 errors
+全量 pytest：1897 passed / 1 skipped（无 Python 改动，回归通过）
+真实库迁移：mdm_svc V1 成功；auth V87 成功；种子 10 域 / 7 个外部系统
+真实同步（首次）：DEPT 5、CHARGE_ITEM 22、DIAGNOSIS 12、OPERATION 10、DRUG 38、
+  EXAM_ITEM 3、CONSUMABLE 33、SHIFT 3、ORG 15、CAMPUS 3 → 共 144 条；0 conflict
+真实同步（二次）：create=0 / unchanged=144（指纹去抖与幂等成立）
+API 冒烟（真实网关 8080 + 真实库，SMOKE PASS）：
+  10 域查询；源表同步 dryRun/apply；条目详情与版本链校验 ok；
+  变更提交 → 数据管理员审批 403 → 治理员审批 APPLIED；
+  映射提交/审批/反查唯一；CSV 映射预检→应用→重复应用幂等；
+  JSON 导入预检→应用；管理员自审 409；治理员通过管理员申请；
+  质量看板 10 域；CSV 导出 200 + BOM；审计查询 20 条；数据管理员查审计 403
+```
+
+**取舍**
+
+- **不内置权威目录**：ICD-10/ICD-9-CM-3、药品、耗材目录由院方导入，平台不猜；
+- **不覆盖源同步条目**：导入遇到 IN_HOUSE 条目内容变化直接 CONFLICT，避免
+  "批量导入悄悄改掉药价/收费项目"；映射仍可批量维护；
+- **解析不自动选择**：一源多码返回全部候选并标 ambiguous，调用方必须显式处理；
+- **版本链不做外锚**：能发现单条被改/被删/被重排，整链重写需要 WORM/独立审计外锚（G5 后续）；
+- **导入只支持 JSON 主数据 + CSV 映射**：XML 报文与 Excel 多 sheet 模板放到 §270 实施迁移工具，
+  避免在主数据服务里堆文件格式适配。
+
+**遗留**
+
+- §270：实施迁移工具（模板、字段映射、迁移前后校验报告、回滚）；
+- LOINC/SNOMED/UDI 标准术语映射与医保目录批量核对（当前映射体系已就绪，缺院方对照内容）；
+- 主数据变更通知订阅（业务域缓存刷新）与前端主数据管理页面；
+- 版本链尾哈希每日外锚到独立审计/WORM；
+- 与 §263 分组规则包、§261 医保目录的联动校验（同一项目在两侧口径不一致时阻断）。

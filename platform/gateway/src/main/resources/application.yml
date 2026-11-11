@@ -155,6 +155,18 @@ spring:
               metadata:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 response-timeout: ${GATEWAY_RESPONSE_TIMEOUT_MS:30000}
+            # 主数据与字典映射治理（域/条目/版本链/外部编码映射/变更审批/导入）
+            # 控制器自带 /mdm 前缀，因此剥 2 段：/api/v2/mdm/domains → /mdm/domains
+            - id: platform-masterdata-v2
+              uri: ${PLATFORM_MASTERDATA_URI:http://127.0.0.1:8091}
+              predicates:
+                - Path=/api/v2/mdm/**
+              filters:
+                - StripPrefix=2
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                # 导入预检/应用可能处理数千行，单次请求放宽到 60s（与知识库同级）
+                response-timeout: ${GATEWAY_MDM_RESPONSE_TIMEOUT_MS:60000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -278,6 +290,9 @@ medassist:
           qps: ${SENTINEL_QPS_INSURANCE:100}
         - path: /api/v2/kb
           qps: ${SENTINEL_QPS_KB:60}
+        # 主数据以查询与批量导入为主：低频但单次较重，独立限流避免挤占临床桶
+        - path: /api/v2/mdm
+          qps: ${SENTINEL_QPS_MDM:60}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
       # 熔断规则（慢调用比例）：慢下游不要靠排队硬扛，直接快速失败并给下游恢复窗口。
@@ -304,6 +319,13 @@ medassist:
         # 知识库问答本身慢（解析/检索/引用拼装），阈值放宽，但仍有上限
         - path: /api/v2/kb
           slow-rt-ms: ${SENTINEL_DEGRADE_KB_RT_MS:15000}
+          slow-ratio: 0.6
+          min-request-amount: 5
+          stat-interval-ms: 10000
+          time-window-sec: 20
+        # 主数据导入/同步是长事务，阈值放宽但仍设上限，防止连接池被单次导入拖死
+        - path: /api/v2/mdm
+          slow-rt-ms: ${SENTINEL_DEGRADE_MDM_RT_MS:20000}
           slow-ratio: 0.6
           min-request-amount: 5
           stat-interval-ms: 10000

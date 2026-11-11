@@ -34,6 +34,7 @@
 | `platform-kb` | 8088 | 知识库：知识空间、文档解析与切片、企业检索 | 已交付 |
 | `platform-material` | 8089 | 物资耗材：目录、批次库存、出库、高值追溯与召回 | 已交付 |
 | `platform-fhir` | 8090 | FHIR R4 只读开放层：Patient / Encounter / Observation / MedicationRequest + CapabilityStatement | 已交付（§259） |
+| `platform-masterdata` | 8091 | 主数据治理：域注册、条目版本链、外部编码映射、变更审批、批量导入与质量看板 | 已交付（§269） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -49,11 +50,13 @@
 /api/v2/kb/**           → http://127.0.0.1:8088   （StripPrefix=2，控制器自带 /kb 前缀）
 /api/v2/material/**     → http://127.0.0.1:8089   （StripPrefix=2，控制器自带 /material 前缀）
 /api/v2/fhir/**         → http://127.0.0.1:8090   （**不剥前缀**：Bundle 链接必须是对端可回查的路径）
+/api/v2/mdm/**          → http://127.0.0.1:8091   （StripPrefix=2，控制器自带 /mdm 前缀）
 ```
 
 路由目标可用环境变量覆盖：`AI_CORE_URI` / `PLATFORM_AUTH_URI` / `PLATFORM_EMPI_URI` /
 `PLATFORM_CLINICAL_URI` / `PLATFORM_PHARMACY_URI` / `PLATFORM_TECH_URI` / `PLATFORM_EMR_URI` /
-`PLATFORM_INSURANCE_URI` / `PLATFORM_KB_URI` / `PLATFORM_MATERIAL_URI` / `PLATFORM_FHIR_URI`。
+`PLATFORM_INSURANCE_URI` / `PLATFORM_KB_URI` / `PLATFORM_MATERIAL_URI` / `PLATFORM_FHIR_URI` /
+`PLATFORM_MASTERDATA_URI`。
 
 ## FHIR R4 开放层（§259）
 
@@ -414,6 +417,96 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\perf\slo_capacity.ps
 0 错误/0 限流；8 并发 252.6 RPS 时出现约 1.9% 429，说明**网关限流先于应用饱和**。
 按 150 RPS × 2 倍余量规划，单副本 125 RPS 至少需要 **3 个临床副本**；生产必须在
 准生产环境复测，不能把开发机数字当容量承诺。
+
+## 主数据与字典映射治理（§269）
+
+**定位**：不复制业务数据，也不取代各域字典表，而是在既有字典之上做治理层：
+统一域注册、一物一码索引、外部编码对照、版本链、变更审批与批量导入校验。
+业务表仍是各域真源（价格在 clinical、库存在 pharmacy/material、排班在 clinical）。
+
+| 表（`mdm_svc`） | 作用 | 关键约束 |
+|---|---|---|
+| `md_domain` | 主数据域注册（来源服务/表、适配器、必须对照的外部系统） | 10 个域：DEPT / CHARGE_ITEM / DIAGNOSIS / OPERATION / DRUG / EXAM_ITEM / CONSUMABLE / SHIFT / ORG / CAMPUS |
+| `md_item` | 条目索引（域 + 本地编码唯一，别名/分类/规格/状态/生效区间/属性快照） | 源表消失置 `MISSING_IN_SOURCE`，**不删除**，映射与历史保留 |
+| `md_item_version` | 条目版本（追加式） | `prev_checksum → checksum` 哈希链；触发器拒绝 UPDATE/DELETE |
+| `md_external_system` | 外部编码体系（HIS/LIS/PACS/EMR/国家医保/省医保/区域平台） | 只登记真实对端，不预置院方编码 |
+| `md_external_map` | 编码映射 | 一码多源/一源多码；同域同系统同本地编码最多一个生效主映射（部分唯一索引） |
+| `md_mapping_version` | 映射版本（CREATE/UPDATE/RETIRE） | 追加式；停用不物理删除 |
+| `md_change_request` | 变更申请与审批 | `SUBMITTED → APPLIED / REJECTED / CANCELLED`；提交人 ≠ 审批人；同条目只允许一个待审批条目申请 |
+| `md_import_batch` / `md_import_row` | 导入预检/应用批次与逐行结果 | 应用必须与预检校验和一致；有 ERROR/CONFLICT 时整批拒绝 |
+| `md_change_log` | 审计 | 追加式；不落患者明文 |
+
+**源表同步**（`POST /mdm/domains/{code}/sync?dryRun=`）：
+
+- 适配器 SQL 固定在本服务，不接受调用方传表名（防注入）；生产建议给本服务一个
+  只授予源字典表 `SELECT` 的账号，`mdm_svc` 用读写账号；
+- 内容变化才写版本（按内容指纹去抖），`dryRun=true` 只算差异不落库；
+- 手工/导入条目与源表编码冲突时记入 `conflicts`，**不覆盖**；
+- 源表读取失败在独立事务记录 `FAILED` 与错误摘要，不会因外层回滚把失败痕迹一起抹掉。
+
+**变更审批**：条目/映射的单条变更一律走申请，审核时校验：
+
+1. 提交人不能审批自己的申请（驳回也不行，只能撤回）；
+2. 申请里保存了提交时的 `_baseVersion`，审批时条目/映射版本已变则拒绝，避免"审 A 批 B"；
+3. `IN_HOUSE`（源同步）条目的内容不允许手工修改，只能改源表后重新同步；映射可由 MDM 维护。
+
+**批量导入**：
+
+| 接口 | 说明 |
+|---|---|
+| `POST /mdm/imports/json/preview` | JSON 主数据（可带映射）预检：CREATE/UPDATE/UNCHANGED/CONFLICT/ERROR |
+| `POST /mdm/imports/json/apply?previewBatchNo=` | 应用（校验和一致、预检无错误/冲突、动作未变化；同内容重复应用幂等） |
+| `POST /mdm/imports/csv/preview` | 映射 CSV 预检（`Content-Type: text/csv` 或 `text/plain`） |
+| `POST /mdm/imports/csv/apply?previewBatchNo=` | 映射 CSV 应用 |
+| `GET /mdm/imports/{id}?limit=&offset=` | 批次与逐行结果（行号/编码/动作/原因） |
+
+CSV 表头至少包含 `域编码,本地编码,系统编码,外部编码`；可选 `外部名称,映射类型,主映射,状态,生效起,生效止,备注`。
+`状态=INACTIVE` 的映射导入会被拒绝（停用映射请走变更申请 `MAPPING_DELETE`），避免"导入顺手关对照"。
+
+**API 一览**（`/api/v2/mdm/**`，控制器自带 `/mdm`）：
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| `GET` | `/domains` | `mdm:read` | 域清单 + 规模/映射覆盖统计 |
+| `POST` | `/domains/{code}/sync?dryRun=` | `mdm:import` | 源表同步（预演/应用） |
+| `GET` | `/external-systems` | `mdm:read` | 外部系统清单 |
+| `GET` | `/items?domainCode=&keyword=&status=&hasMapping=&page=&size=` | `mdm:read` | 条目检索（分页上限 200） |
+| `GET` | `/items/{domain}/{code}` | `mdm:read` | 详情（条目 + 映射 + 最近 20 条版本） |
+| `GET` | `/items/{domain}/{code}/versions` | `mdm:read` | 版本分页 |
+| `GET` | `/items/{domain}/{code}/versions/verify` | `mdm:read` | 重算哈希链，返回断点版本 |
+| `POST` | `/change-requests/item-create/{domain}/{code}` | `mdm:write` | 提交新建 |
+| `POST` | `/change-requests/item-update/{domain}/{code}` | `mdm:write` | 提交修改（字段补丁） |
+| `POST` | `/change-requests/item-status/{domain}/{code}` | `mdm:write` | 提交启停 |
+| `POST` | `/change-requests/mapping-upsert/{domain}/{code}` | `mdm:write` | 提交映射新增/修订 |
+| `POST` | `/change-requests/mapping-delete/{domain}/{code}` | `mdm:write` | 提交映射停用 |
+| `GET` | `/change-requests`、`/{id}` | `mdm:read` | 申请列表/详情 |
+| `POST` | `/change-requests/{id}/approve` | `mdm:approve` | 审批通过并应用 |
+| `POST` | `/change-requests/{id}/reject` | `mdm:approve` | 驳回（必须写原因） |
+| `POST` | `/change-requests/{id}/cancel` | `mdm:write` | 撤回（仅提交人） |
+| `GET` | `/mappings/resolve?systemCode=&externalCode=` | `mdm:read` | 反查；多义返回全部候选 + `ambiguous=true`，无候选 404 |
+| `GET` | `/mappings/export.csv` | `mdm:read` | 映射导出（BOM，最多 2 万行） |
+| `GET` | `/quality` | `mdm:read` | 质量看板（未映射/缺必需系统/重名/一源多码/源缺失/同步过期） |
+| `GET` | `/audit?domainCode=&actor=&action=&limit=` | `mdm:audit:read` | 主数据审计 |
+
+**权限**（auth V87）：`mdm:read` / `mdm:write` / `mdm:approve` / `mdm:import` / `mdm:audit:read`；
+新增角色 `DATA_STEWARD`（主数据管理员：录入/同步/导入）与 `DATA_GOVERNOR`（数据治理员：审批/审计）。
+所有写操作要求真实 `X-Actor`，缺失或 `system` 一律 403。
+
+| 变量 | 说明 |
+|---|---|
+| `MDM_DEFAULT_PAGE_SIZE` / `MDM_MAX_PAGE_SIZE` | 分页默认/上限（默认 20 / 200） |
+| `MDM_MAX_IMPORT_ROWS` | 单次导入最大行数（默认 5000） |
+| `MDM_PREVIEW_SAMPLE_ROWS` | 预检响应返回的样例行数（默认 20） |
+| `MDM_MAX_VERSION_PAGE_SIZE` | 版本分页上限（默认 100） |
+| `MDM_SYNC_STALE_DAYS` | 同步过期阈值（默认 7 天，质量看板标记 stale） |
+| `MDM_AUDIT_LIST_DEFAULT` / `MDM_AUDIT_LIST_MAX` | 审计查询默认/上限（50 / 200） |
+
+**边界与已知缺口**：
+
+- 不内置院方完整 ICD-10/ICD-9-CM-3、药品、耗材目录；上线前由院方导入（`§270` 实施迁移工具会提供模板与回滚）；
+- 未建立 LOINC/SNOMED/UDI 的标准术语映射，映射体系已就绪（`system_code` 可扩展），但对照内容需院方提供；
+- 版本链能发现单条被改/被删/被重排；整条链被一起重写需要把链尾哈希外锚（WORM/独立审计），列为 G5 后续；
+- 映射解析不会自动选择：返回候选并标 `ambiguous`，业务系统必须显式处理，避免"随便挑一个"导致收费/医保错配。
 
 ## 构建与运行
 

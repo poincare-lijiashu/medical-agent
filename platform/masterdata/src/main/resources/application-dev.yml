@@ -1,0 +1,9 @@
+# ============================================================================
+# 本地开发专用覆盖（严禁用于 staging/prod）
+#
+# 用法：java -jar platform-masterdata.jar --spring.profiles.active=dev
+# ============================================================================
+
+logging:
+  level:
+    com.medassist: DEBUG
