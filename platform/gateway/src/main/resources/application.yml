@@ -179,6 +179,16 @@ spring:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 # 批量预检 5000 行、应用/回滚均在单次请求内完成，单独放宽到 120s
                 response-timeout: ${GATEWAY_MIGRATION_RESPONSE_TIMEOUT_MS:120000}
+            # 运营支撑（服务目录/SLA/工单/看板）：控制器自带 /ops 前缀，剥 2 段
+            - id: platform-ops-v2
+              uri: ${PLATFORM_OPS_URI:http://127.0.0.1:8093}
+              predicates:
+                - Path=/api/v2/ops/**
+              filters:
+                - StripPrefix=2
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_OPS_RESPONSE_TIMEOUT_MS:30000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2

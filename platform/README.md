@@ -36,6 +36,7 @@
 | `platform-fhir` | 8090 | FHIR R4 只读开放层：Patient / Encounter / Observation / MedicationRequest + CapabilityStatement | 已交付（§259） |
 | `platform-masterdata` | 8091 | 主数据治理：域注册、条目版本链、外部编码映射、变更审批、批量导入与质量看板 | 已交付（§269） |
 | `platform-migration` | 8092 | 历史数据迁移：目标/字段字典、可复用映射档案、预检校验、分批应用、版本反向回滚、迁移对账 | 已交付（§270） |
+| `platform-ops` | 8093 | 运营支撑：服务目录、SLA 策略与营业日历、工单全生命周期、超时扫描与运营看板 | 已交付（§271） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -567,6 +568,60 @@ CSV 表头至少包含 `域编码,本地编码,系统编码,外部编码`；可�
 - 不迁移历史病历正文、影像、医保结算清单（涉及不同的业务不变量，后续按域单独扩展目标）；
 - 患者 `MERGED` 状态不允许直接导入（需先 ACTIVE 再走合并流程，保留合并指针与留痕）；
 - 迁移批次按自然键 UPSERT；同一自然键在源文件内重复会在预检阶段报 ERROR，不做"后一条覆盖前一条"。
+
+## 运营支撑：SLA 与工单（§271）
+
+**定位**：系统上线后真正决定"能不能长期用"的是故障响应：谁接、多久响应、多久解决、
+超时谁升级、事后怎么复盘。本服务把这一层做成可审计的系统能力，而不是微信群 + Excel。
+
+| 能力 | 实现 |
+|---|---|
+| 服务目录 | `ops_service_catalog`：17 个服务（13 个平台服务 + 数据库/网络/监控/安全），带责任组与优先级 |
+| 营业日历 | `ops_calendar`：工作日、上下班时间、节假日；预置 7×24 与工作日 8×5 |
+| SLA 策略 | `ops_sla_policy`：按「服务 × P1–P4」配置响应/解决/升级时限，可按营业时间计算 |
+| 工单 | `ops_ticket`：创建 → 派单 → 接单 → 处理 ⇄ 挂起 → 解决 → 关闭/重开；任意未完成可取消 |
+| 轨迹 | `ops_ticket_event`：每次状态变化、评论、SLA 违约都追加一条（触发器拒绝改删） |
+| 超时扫描 | 每 60s 扫描一次；首响/解决超时只记一次 `SLA_*_BREACH` 事件，可统计违约率 |
+| 看板 | 积压/超期、按优先级与服务拆解、近 30 天首响与 MTTR、满意度、14 天新建/解决趋势 |
+| 审计 | `ops_change_log` 追加式，记录谁在何时改了什么 |
+
+**SLA 口径**：
+- 7×24 策略直接加自然分钟；营业时间策略只累计工作日/工作时段，周末与节假日跳过；
+- 挂起会暂停 SLA，恢复时把暂停分钟顺延到截止时间（`sla_paused_total_minutes` 可审计）；
+- 首响只在责任人或接单人动作时记录，报告人补充说明不算响应；
+- 解决时若已超过截止时间，立即补记违约事件，不等定时扫描。
+
+**API 一览**（`/api/v2/ops/**`，控制器自带 `/ops`）：
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| `GET` | `/services`、`/calendars`、`/sla/policies` | `ops:read` | 服务目录、日历、SLA 策略 |
+| `POST` | `/services`、`/calendars`、`/sla/policies` | `ops:sla:manage` | 维护服务/SLA/日历（对外承诺） |
+| `POST` | `/tickets` | `ops:ticket:create` | 建单（报告人取 X-Actor） |
+| `GET` | `/tickets?status=&priority=&serviceCode=&assignee=&keyword=&overdue=&page=&size=` | `ops:read` | 工单分页检索 |
+| `GET` | `/tickets/{id}?eventLimit=` | `ops:read` | 详情 + 轨迹 |
+| `POST` | `/tickets/{id}/assign` | `ops:ticket:write` | 派单 |
+| `POST` | `/tickets/{id}/accept` | `ops:ticket:write` | 接单（记首响） |
+| `POST` | `/tickets/{id}/progress` | `ops:ticket:write` | 处理进展 |
+| `POST` | `/tickets/{id}/comments` | `ops:ticket:write` | 追加评论 |
+| `POST` | `/tickets/{id}/pending`、`/resume` | `ops:ticket:write` | 挂起 / 恢复（顺延 SLA） |
+| `POST` | `/tickets/{id}/resolve` | `ops:ticket:write` | 解决（必须写结论） |
+| `POST` | `/tickets/{id}/close` | `ops:ticket:write` | 关闭（可带满意度） |
+| `POST` | `/tickets/{id}/reopen` | `ops:ticket:write` | 重开（重算解决时限） |
+| `POST` | `/tickets/{id}/cancel`、`/priority` | `ops:ticket:write` | 取消 / 调整优先级 |
+| `GET` | `/dashboard?trendDays=` | `ops:read` | 运营看板 |
+| `POST` | `/sla/scan` | `ops:ticket:write` | 手动触发超时扫描 |
+| `GET` | `/audit?limit=` | `ops:audit:read` | 运营审计 |
+
+**权限**（auth V89）：`ops:read` / `ops:ticket:create` / `ops:ticket:write` /
+`ops:sla:manage` / `ops:audit:read`；角色 `OPS_AGENT`（一线：建单/处理/查询）与
+`OPS_MANAGER`（经理：额外维护 SLA/目录、查审计）。**SLA 修改不能让一线自己做**，
+否则"承诺"随时可被放宽。
+
+**边界**：
+- 不替代监控告警（Prometheus/SkyWalking）和即时通讯；本服务接收告警转单，
+  并成为"告警之后人的处理过程"的真源；
+- 值班表、事件（Incident）与复盘（Postmortem）在 §272 交付，本批先把 SLA/工单闭环做扎实。
 
 ## 构建与运行
 

@@ -1,0 +1,68 @@
+server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
+  port: 8093
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-ops
+
+  datasource:
+    # 运营支撑只读写自己的 ops_svc；服务目录里的 service_code 与平台服务名对齐，
+    # 不跨 schema 读业务表（避免运维服务获得"看全院数据"的权限）。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: ops-pool
+      maximum-pool-size: 8
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: ops_svc
+    default-schema: ops_svc
+    locations: classpath:db/migration/ops
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+medassist:
+  ops:
+    # 超时扫描周期（毫秒）：默认 60s，与 SLA 的分钟粒度匹配
+    sla-scan-ms: ${OPS_SLA_SCAN_MS:60000}
+    preview-rows: ${OPS_PREVIEW_ROWS:100}
+    max-page-size: ${OPS_MAX_PAGE_SIZE:200}
+    audit-list-default: ${OPS_AUDIT_LIST_DEFAULT:50}
+    audit-list-max: ${OPS_AUDIT_LIST_MAX:200}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: INFO

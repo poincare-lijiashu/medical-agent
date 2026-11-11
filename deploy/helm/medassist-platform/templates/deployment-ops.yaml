@@ -1,0 +1,114 @@
+{{- if .Values.ops.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "ops") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "ops") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "ops") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "ops") | nindent 4 }}
+spec:
+  {{- if not .Values.ops.autoscaling.enabled }}
+  replicas: {{ .Values.ops.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.ops.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "ops") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "ops") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "ops") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.ops.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: ops
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.ops.image) }}
+          imagePullPolicy: {{ .Values.ops.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.ops.service.port }}
+              protocol: TCP
+          env:
+            # 运营服务只读写 ops_svc，不签发/校验 JWT、不直连其他业务服务
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "ops" "jwt" false "empi" false) | nindent 12 }}
+            - name: OPS_SLA_SCAN_MS
+              value: {{ .Values.ops.slaScanMs | quote }}
+            - name: OPS_PREVIEW_ROWS
+              value: {{ .Values.ops.previewRows | quote }}
+            {{- with .Values.ops.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.ops.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.ops.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.ops.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.ops.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.ops.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.ops.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.ops.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.ops.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.ops.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.ops.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.ops.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.ops.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ops.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "ops") | nindent 6 }}
+{{- end }}

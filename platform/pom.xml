@@ -63,6 +63,7 @@
     <module>fhir</module>
     <module>masterdata</module>
     <module>migration</module>
+    <module>ops</module>
   </modules>
 
   <dependencyManagement>

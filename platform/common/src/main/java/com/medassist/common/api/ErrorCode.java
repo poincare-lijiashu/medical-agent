@@ -506,7 +506,24 @@ public enum ErrorCode {
     MIG_PROFILE_INVALID(51412, "映射档案内容不合法（源列/目标字段/转换规则有误）"),
     MIG_PAYLOAD_UNREADABLE(51413, "迁移行加密载荷无法解密，请确认 EMPI_FIELD_KEY 未被更换"),
     MIG_RECONCILIATION_FAILED(51414, "迁移对账未通过：目标行数或金额与批次台账不一致"),
-    MIG_REASON_REQUIRED(51415, "回滚必须填写原因（至少 2 个字符）");
+    MIG_REASON_REQUIRED(51415, "回滚必须填写原因（至少 2 个字符）"),
+
+    // ---- 运营支撑（52xxx，§271）----
+    OPS_SERVICE_NOT_FOUND(52401, "未找到该服务目录项，或该服务已停用"),
+    OPS_TICKET_NOT_FOUND(52402, "未找到该工单"),
+    OPS_TICKET_STATUS_INVALID(52403, "当前工单状态不允许该操作"),
+    OPS_TICKET_TRANSITION_INVALID(52404, "工单状态流转不合法（例如未解决不能关闭）"),
+    OPS_TICKET_ASSIGNEE_REQUIRED(52405, "派单或接单必须指定处理人"),
+    OPS_TICKET_RESOLUTION_REQUIRED(52406, "解决工单必须填写处理结论（至少 2 个字符）"),
+    OPS_TICKET_VERSION_CONFLICT(52407, "工单已被他人更新，请刷新后重试"),
+    OPS_SLA_POLICY_NOT_FOUND(52408, "该服务与优先级没有可用的 SLA 策略"),
+    OPS_CALENDAR_NOT_FOUND(52409, "未找到营业日历"),
+    OPS_SLA_INVALID(52410, "SLA 策略不合法（时限必须为正，营业时间模式必须绑定日历）"),
+    OPS_CALENDAR_INVALID(52411, "营业日历不合法（工作日不能为空，结束时间必须晚于开始时间）"),
+    OPS_ACTOR_REQUIRED(52412, "运营操作必须带真实操作人，禁止匿名写入"),
+    OPS_REASON_REQUIRED(52413, "挂起、重开或取消必须填写原因（至少 2 个字符）"),
+    OPS_TICKET_PAUSED(52414, "工单处于挂起状态，请先恢复后再处理"),
+    OPS_SLA_SCAN_FAILED(52415, "SLA 超时扫描失败，请检查数据库后重试");
 
     private final int code;
     private final String defaultMessage;

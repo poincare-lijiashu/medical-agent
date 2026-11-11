@@ -282,6 +282,12 @@ dataMigration:
   env:
     - {name: NACOS_NAMESPACE, value: production}
 
+ops:
+  replicaCount: 2
+  image: {repository: platform-ops, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: production}
+
 serviceMonitor:
   enabled: true
   interval: 30s

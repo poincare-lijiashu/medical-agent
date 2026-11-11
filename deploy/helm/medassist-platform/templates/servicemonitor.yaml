@@ -34,7 +34,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: ["gateway", "auth", "empi", "clinical", "pharmacy", "material", "tech", "emr", "insurance", "kb", "fhir", "masterdata", "migration"]
+        values: ["gateway", "auth", "empi", "clinical", "pharmacy", "material", "tech", "emr", "insurance", "kb", "fhir", "masterdata", "migration", "ops"]
   endpoints:
     - port: http
       path: /actuator/prometheus

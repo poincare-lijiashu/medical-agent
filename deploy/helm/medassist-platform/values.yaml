@@ -573,6 +573,42 @@ dataMigration:
   tolerations: []
   affinity: {}
 
+# ---- 运营支撑（服务目录/SLA/工单/看板；计划书 G7）----
+ops:
+  enabled: true
+  image:
+    repository: platform-ops
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8093
+  resources:
+    requests: {cpu: 150m, memory: 384Mi}
+    limits: {cpu: 500m, memory: 768Mi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # SLA 超时扫描周期（毫秒）：默认 60s，与分钟级 SLA 粒度匹配
+  slaScanMs: 60000
+  previewRows: 100
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- 医技域（检查/检验申请、标本、报告、危急值）----
 tech:
   enabled: true

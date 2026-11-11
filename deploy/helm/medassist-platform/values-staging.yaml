@@ -111,6 +111,12 @@ dataMigration:
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
+ops:
+  replicaCount: 2
+  image: {repository: platform-ops, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: staging}
+
 auth:
   replicaCount: 2
   image: {repository: platform-auth, tag: "0.1.0", pullPolicy: IfNotPresent}
