@@ -296,6 +296,74 @@ python scripts/chs_sim.py --port 9099
   便于质控看到"谁在什么时间提交了不完整核查"；
 - **只认最新一条**：同一时点多次提交以最新一条为当前结论，历史提交全部保留。
 
+## 护理敏感质量指标（§266）
+
+把"护理不良事件"从纸质登记变成可核验的指标链路：事件采集 → 跨日班次归属 → 分母计算 →
+科室周期上报（月/季/年）→ 审核闭环。
+
+| 表 | 作用 | 约束 |
+|---|---|---|
+| `nursing_indicator_def` | 指标字典（9 项：跌倒/压疮/非计划拔管/给药错误/导管感染/CRBSI/上报及时率/床护比/护患比） | 口径由服务端固定，客户端只能选编码 |
+| `nursing_indicator_event` | 不良事件证据（发生时间、班次、等级、详情） | 追加式，触发器拒绝 UPDATE/DELETE |
+| `nursing_indicator_denominator` | 设备日分母（呼吸机/尿管/中心静脉导管） | 追加式；同日同类型取最新一条 |
+| `nursing_indicator_report` | 科室周期上报快照 | `DRAFT → SUBMITTED → ACCEPTED/RETURNED`，同科室同周期唯一 |
+
+**班次归属（跨日）**：
+
+- 以 `nursing_shift.start_time/end_time` 解析事件发生时间；`cross_midnight=true` 的班次，
+  午夜后（早于结束时间）发生的事件归属到**班次开始日**，因此 02:30 的夜班事件算前一天；
+- 不填班次时自动匹配；时间不落在任何班次窗、或指定班次与时间不匹配，一律 422，
+  不允许为了指标好看把事件挪到别的班次；
+- 班次看板 `GET /indicator-shifts?deptId=&date=` 按业务日返回各班次在岗护士与事件数。
+
+**指标口径（分母诚实）**：
+
+| 指标 | 分子 | 分母 | 单位 |
+|---|---|---|---|
+| 跌倒/压疮/给药错误 | 可计数事件（不含 `NEAR_MISS`） | 住院床日（按本地日切分在院区间） | ‰ |
+| 非计划拔管 / 导管感染 / CRBSI | 可计数事件 | 设备日（科室按日录入） | ‰ |
+| 上报及时率 | 发生至上报 ≤ 配置窗口的事件数 | 全部事件 | % |
+| 床护比 | 开放床位（停用床除外） | 周期平均在岗护士数 | 床/护 |
+| 护患比 | 周期平均在院人数 | 周期平均在岗护士数 | 患/护 |
+
+分母为 0 时返回 `value=null`、`dataComplete=false` 并给出 warning，**不会输出 0 冒充零发生**；
+`NEAR_MISS` 不计入发生率分子，但计入上报及时率。
+
+| 变量 | 说明 |
+|---|---|
+| `CLINICAL_NURSING_INDICATOR_REPORT_WINDOW_HOURS` | 多少小时内上报算及时（默认 24，范围 1~168） |
+| `CLINICAL_NURSING_INDICATOR_MAX_BACK_DAYS` | 事件/设备日可补录天数（默认 365，范围 1~3650） |
+| `CLINICAL_NURSING_INDICATOR_MAX_QUERY_DAYS` | 看板/列表单次查询最长天数（默认 92，范围 1~366） |
+
+**API**（`/clinical/nursing/**`）：
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| `GET` | `/indicators` | `inpatient:nursing:read` | 指标字典 |
+| `POST` | `/indicator-events` | `inpatient:nursing:indicator` | 上报不良事件（自动/指定班次） |
+| `GET` | `/indicator-events?deptId=&from=&to=` | `inpatient:nursing:read` | 事件列表 |
+| `POST` | `/indicator-denominators` | `inpatient:nursing:indicator` | 设备日批量录入（追加） |
+| `GET` | `/indicator-denominators?deptId=&from=&to=` | `inpatient:nursing:read` | 设备日列表 |
+| `GET` | `/indicator-board?deptId=&from=&to=` | `inpatient:nursing:read` | 指标看板（含班次密度与数据缺口） |
+| `GET` | `/indicator-shifts?deptId=&date=` | `inpatient:nursing:read` | 某业务日班次明细 |
+| `POST` | `/indicator-reports` | `inpatient:nursing:indicator:manage` | 生成/重新生成周期快照 |
+| `GET` | `/indicator-reports`、`/{id}` | `inpatient:nursing:read` | 上报列表/详情 |
+| `POST` | `/indicator-reports/{id}/submit` | `inpatient:nursing:indicator:manage` | 提交（仅 DRAFT） |
+| `POST` | `/indicator-reports/{id}/review` | `inpatient:nursing:indicator:review` | 通过/退回（退回必须写原因） |
+
+权限分工：`inpatient:nursing:indicator` 授予责任护士（事件/设备日录入）；
+`inpatient:nursing:indicator:manage` 授予护士长（周期报表生成/提交）；
+`inpatient:nursing:indicator:review` 授予护理质量管理角色（审核）。
+床护比/护患比只统计**已发布**排班，草稿排班不计入实际人力。
+
+边界：
+
+- **上报考核职责分离**：`submitted_by` 与审核人相同直接 409，服务层与 SQL 双重校验；
+- **重新生成清空审核痕迹**：DRAFT/RETURNED 可重新生成，状态回到 DRAFT 并清空提交/审核字段，
+  避免"改完数据还保留上一轮通过结论"；已提交/已通过必须先退回；
+- **周期唯一**：同科室 + 周期类型 + 周期键唯一，重复生成走版本 CAS 更新；
+- **不自动回写病历/医嘱/收费**：指标是质量测量，事件采集不产生执行动作。
+
 ## 构建与运行
 
 ```powershell

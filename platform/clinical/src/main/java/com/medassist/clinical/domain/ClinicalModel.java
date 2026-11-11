@@ -666,6 +666,101 @@ public final class ClinicalModel {
     public record NursingCoverageRow(LocalDate workDate, String shiftCode, long count) {
     }
 
+    /**
+     * 护理敏感指标字典（§266）。
+     *
+     * <p>口径由服务端固定：{@code calcType} 决定怎么算，{@code denominatorType} 决定分母来源，
+     * 客户端只提交指标编码与事件事实，不能改写公式。
+     */
+    public record NursingIndicatorDef(UUID id, String code, String name, String category,
+                                      String calcType, String denominatorType, String deviceType,
+                                      String unit, String direction, BigDecimal targetValue,
+                                      int sortNo, boolean enabled, long version) {
+
+        public static final String CALC_EVENT_RATE = "EVENT_RATE";
+        public static final String CALC_STRUCTURE = "STRUCTURE";
+        public static final String CALC_TIMELINESS = "TIMELINESS";
+
+        public static final String DENOM_PATIENT_DAYS = "PATIENT_DAYS";
+        public static final String DENOM_DEVICE_DAYS = "DEVICE_DAYS";
+        public static final String DENOM_NURSE_COUNT = "NURSE_COUNT";
+        public static final String DENOM_EVENT_COUNT = "EVENT_COUNT";
+
+        public static final String LOWER_BETTER = "LOWER_BETTER";
+        public static final String HIGHER_BETTER = "HIGHER_BETTER";
+        public static final String NONE = "NONE";
+
+        public boolean eventBased() {
+            return CALC_EVENT_RATE.equals(calcType);
+        }
+    }
+
+    /** 护理不良事件（§266，追加式）：班次归属使用业务日 + 班次编码。 */
+    public record NursingIndicatorEvent(UUID id, String eventNo, String indicatorCode,
+                                        String indicatorName, UUID deptId, String deptName,
+                                        UUID wardId, String wardName, UUID admissionId,
+                                        String patientNo, Instant occurredAt,
+                                        Instant discoveredAt, Instant reportedAt,
+                                        LocalDate shiftDate, String shiftCode, String shiftName,
+                                        String shiftSource, String severity, String detail,
+                                        String note, String reportedBy, Instant createdAt) {
+
+        public static final String SHIFT_AUTO = "AUTO";
+        public static final String SHIFT_SPECIFIED = "SPECIFIED";
+        public static final String SEVERITY_NEAR_MISS = "NEAR_MISS";
+    }
+
+    /** 指标事件计数（§266）：total 含近似差错，countable 为计入发生率分子的数量。 */
+    public record NursingIndicatorEventCount(String indicatorCode, long total, long countable) {
+    }
+
+    /** 上报及时性计数（§266）：窗口内上报为 timely。 */
+    public record NursingTimelinessCount(long total, long timely) {
+    }
+
+    /** 每日在岗护士数（§266）：按未取消排班去重统计。 */
+    public record NursingNurseDayCount(LocalDate workDate, long nurses) {
+    }
+
+    /** 排班班次数（§266）：按班次聚合，用于班次维度事件密度。 */
+    public record NursingShiftNurseCount(String shiftCode, long nurseShifts) {
+    }
+
+    /** 班次事件计数（§266）。 */
+    public record NursingShiftEventCount(String shiftCode, long total, long countable) {
+    }
+
+    /** 住院床日计算所需的在院区间（§266）。 */
+    public record NursingAdmissionStay(Instant admittedAt, Instant dischargedAt) {
+    }
+
+    /** 设备日分母（§266，追加式）：同一日期/类型以最新记录为当前值。 */
+    public record NursingIndicatorDenominator(UUID id, UUID deptId, LocalDate statDate,
+                                              String deviceType, BigDecimal count, String note,
+                                              String recordedBy, Instant recordedAt) {
+    }
+
+    /** 护理指标周期上报（§266）：DRAFT → SUBMITTED → ACCEPTED / RETURNED。 */
+    public record NursingIndicatorReport(UUID id, String reportNo, UUID deptId, String deptName,
+                                         String periodType, String periodKey,
+                                         LocalDate periodStart, LocalDate periodEnd,
+                                         String status, BigDecimal patientDays, long eventCount,
+                                         long timelyCount, BigDecimal nurseDays, String metrics,
+                                         String warnings, String generatedBy, Instant generatedAt,
+                                         String submittedBy, Instant submittedAt,
+                                         String reviewedBy, Instant reviewedAt,
+                                         String reviewNote, long version) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String RETURNED = "RETURNED";
+
+        public static final String PERIOD_MONTH = "MONTH";
+        public static final String PERIOD_QUARTER = "QUARTER";
+        public static final String PERIOD_YEAR = "YEAR";
+    }
+
     /** 病区入出量（G27）：按病区+科室聚合，用于同比与下钻。 */
     public record WardAdmissionRow(String wardCode, String wardName, String deptName,
                                    long admitted, long discharged) {

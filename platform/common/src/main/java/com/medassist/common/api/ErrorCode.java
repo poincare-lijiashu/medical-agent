@@ -207,6 +207,17 @@ public enum ErrorCode {
     OPERATION_LEVEL_INVALID(44571, "默认分级只能是 1~4 级，且手术编码必须存在并处于启用状态"),
     OPERATION_LEVEL_CONFLICT(44572, "默认分级已被他人修改，请刷新后重试"),
 
+    // ---- 护理敏感质量指标（44xxx 续，§266）----
+    NURSING_INDICATOR_NOT_FOUND(44580, "未找到该护理敏感指标，或指标已停用"),
+    NURSING_INDICATOR_EVENT_INVALID(44581, "护理不良事件内容不合法（指标/时间/科室/患者归属）"),
+    NURSING_INDICATOR_SHIFT_INVALID(44583, "发生时间无法归属到有效班次，请选择班次或核对时间"),
+    NURSING_INDICATOR_DENOMINATOR_INVALID(44584, "设备日数据不合法（类型/日期/数量）"),
+    NURSING_INDICATOR_REPORT_NOT_FOUND(44585, "未找到该护理指标上报记录"),
+    NURSING_INDICATOR_REPORT_STATUS_INVALID(44586, "当前上报状态不允许该操作"),
+    NURSING_INDICATOR_REPORT_RETURN_REASON_REQUIRED(44587, "退回上报必须填写原因"),
+    NURSING_INDICATOR_SELF_REVIEW(44588, "上报审核不能由提交人本人完成，请由其他人复核"),
+    NURSING_INDICATOR_PERIOD_INVALID(44589, "上报周期不合法（格式/未来周期/超出可追溯范围）"),
+
     // ---- 知情同意书（47xxx 续，G44）----
     CONSENT_NOT_FOUND(47420, "未找到该知情同意书"),
     CONSENT_TEMPLATE_NOT_FOUND(47421, "未找到该同意书模板，或模板未发布"),

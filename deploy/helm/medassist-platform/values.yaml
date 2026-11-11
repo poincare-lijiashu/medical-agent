@@ -385,6 +385,9 @@ clinical:
   # 手术安全核查（§265）：生产保持默认 true；仅历史演练可关闭
   #   SURGERY_SAFETY_CHECKLIST_REQUIRED
   # 详见 platform/README.md「手术安全核查三时点（§265）」
+  # 护理敏感指标（§266）：上报及时窗口/补录上限/查询上限，默认 24h/365d/92d
+  #   CLINICAL_NURSING_INDICATOR_REPORT_WINDOW_HOURS / MAX_BACK_DAYS / MAX_QUERY_DAYS
+  # 详见 platform/README.md「护理敏感质量指标（§266）」
   env: []
   nodeSelector: {}
   tolerations: []

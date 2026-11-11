@@ -70,6 +70,16 @@ import com.medassist.clinical.domain.ClinicalModel.OperationLevel;
 import com.medassist.clinical.domain.ClinicalModel.OperationLevelRow;
 import com.medassist.clinical.domain.ClinicalModel.OrderRefund;
 import com.medassist.clinical.domain.ClinicalModel.NursingCoverageRow;
+import com.medassist.clinical.domain.ClinicalModel.NursingAdmissionStay;
+import com.medassist.clinical.domain.ClinicalModel.NursingIndicatorDef;
+import com.medassist.clinical.domain.ClinicalModel.NursingIndicatorDenominator;
+import com.medassist.clinical.domain.ClinicalModel.NursingIndicatorEvent;
+import com.medassist.clinical.domain.ClinicalModel.NursingIndicatorEventCount;
+import com.medassist.clinical.domain.ClinicalModel.NursingIndicatorReport;
+import com.medassist.clinical.domain.ClinicalModel.NursingNurseDayCount;
+import com.medassist.clinical.domain.ClinicalModel.NursingShiftEventCount;
+import com.medassist.clinical.domain.ClinicalModel.NursingShiftNurseCount;
+import com.medassist.clinical.domain.ClinicalModel.NursingTimelinessCount;
 import com.medassist.clinical.domain.ClinicalModel.NursingSchedule;
 import com.medassist.clinical.domain.ClinicalModel.NursingShift;
 import com.medassist.clinical.domain.ClinicalModel.NursingWorkloadRow;
@@ -8278,6 +8288,413 @@ public class ClinicalRepository {
                          WHERE case_id = ?
                          ORDER BY checked_at, created_at
                         """).param(caseId).query(SAFETY_CHECK_MAPPER).list();
+    }
+
+    // ---------------------------------------------------------------- 护理敏感指标（§266）
+
+    private static final RowMapper<NursingIndicatorDef> NURSING_INDICATOR_DEF_MAPPER = (rs, i) ->
+            new NursingIndicatorDef(rs.getObject("id", UUID.class), rs.getString("code"),
+                    rs.getString("name"), rs.getString("category"), rs.getString("calc_type"),
+                    rs.getString("denominator_type"), rs.getString("device_type"),
+                    rs.getString("unit"), rs.getString("direction"),
+                    rs.getBigDecimal("target_value"), rs.getInt("sort_no"),
+                    rs.getBoolean("enabled"), rs.getLong("version"));
+
+    private static final RowMapper<NursingIndicatorEvent> NURSING_INDICATOR_EVENT_MAPPER =
+            (rs, i) -> new NursingIndicatorEvent(rs.getObject("id", UUID.class),
+                    rs.getString("event_no"), rs.getString("indicator_code"),
+                    rs.getString("indicator_name"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getObject("ward_id", UUID.class),
+                    rs.getString("ward_name"), rs.getObject("admission_id", UUID.class),
+                    rs.getString("patient_no"), instantOf(rs, "occurred_at"),
+                    instantOf(rs, "discovered_at"), instantOf(rs, "reported_at"),
+                    rs.getDate("shift_date").toLocalDate(), rs.getString("shift_code"),
+                    rs.getString("shift_name"), rs.getString("shift_source"),
+                    rs.getString("severity"), rs.getString("detail"), rs.getString("note"),
+                    rs.getString("reported_by"), instantOf(rs, "created_at"));
+
+    private static final String NURSING_INDICATOR_EVENT_COLUMNS = """
+            e.id, e.event_no, e.indicator_code, def.name AS indicator_name,
+            e.dept_id, dp.name AS dept_name, e.ward_id, wd.name AS ward_name,
+            e.admission_id, e.patient_no, e.occurred_at, e.discovered_at, e.reported_at,
+            e.shift_date, e.shift_code, sh.name AS shift_name, e.shift_source, e.severity,
+            e.detail::text AS detail, e.note, e.reported_by, e.created_at
+            """;
+
+    private static final RowMapper<NursingIndicatorDenominator>
+            NURSING_INDICATOR_DENOMINATOR_MAPPER = (rs, i) ->
+            new NursingIndicatorDenominator(rs.getObject("id", UUID.class),
+                    rs.getObject("dept_id", UUID.class),
+                    rs.getDate("stat_date").toLocalDate(), rs.getString("device_type"),
+                    rs.getBigDecimal("count"), rs.getString("note"),
+                    rs.getString("recorded_by"), instantOf(rs, "recorded_at"));
+
+    private static final RowMapper<NursingIndicatorReport> NURSING_INDICATOR_REPORT_MAPPER =
+            (rs, i) -> new NursingIndicatorReport(rs.getObject("id", UUID.class),
+                    rs.getString("report_no"), rs.getObject("dept_id", UUID.class),
+                    rs.getString("dept_name"), rs.getString("period_type"),
+                    rs.getString("period_key"), rs.getDate("period_start").toLocalDate(),
+                    rs.getDate("period_end").toLocalDate(), rs.getString("status"),
+                    rs.getBigDecimal("patient_days"), rs.getLong("event_count"),
+                    rs.getLong("timely_count"), rs.getBigDecimal("nurse_days"),
+                    rs.getString("metrics"), rs.getString("warnings"),
+                    rs.getString("generated_by"), instantOf(rs, "generated_at"),
+                    rs.getString("submitted_by"), instantOf(rs, "submitted_at"),
+                    rs.getString("reviewed_by"), instantOf(rs, "reviewed_at"),
+                    rs.getString("review_note"), rs.getLong("version"));
+
+    public List<NursingIndicatorDef> listNursingIndicatorDefs() {
+        return jdbc.sql("""
+                        SELECT id, code, name, category, calc_type, denominator_type, device_type,
+                               unit, direction, target_value, sort_no, enabled, version
+                          FROM clinical_svc.nursing_indicator_def
+                         WHERE enabled
+                         ORDER BY sort_no, code
+                        """).query(NURSING_INDICATOR_DEF_MAPPER).list();
+    }
+
+    public Optional<NursingIndicatorDef> findNursingIndicatorDef(String code) {
+        return jdbc.sql("""
+                        SELECT id, code, name, category, calc_type, denominator_type, device_type,
+                               unit, direction, target_value, sort_no, enabled, version
+                          FROM clinical_svc.nursing_indicator_def
+                         WHERE code = ?
+                        """).param(code).query(NURSING_INDICATOR_DEF_MAPPER).optional();
+    }
+
+    /** 护理不良事件号 NEYYYYMMDD######。 */
+    public String nextNursingIndicatorEventNo() {
+        return nextNo("clinical_svc.nursing_indicator_event_no_seq", "NE");
+    }
+
+    /** 护理指标上报号 NRYYYYMMDD######。 */
+    public String nextNursingIndicatorReportNo() {
+        return nextNo("clinical_svc.nursing_indicator_report_no_seq", "NR");
+    }
+
+    public void insertNursingIndicatorEvent(NursingIndicatorEvent e) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_indicator_event
+                            (id, event_no, indicator_code, dept_id, ward_id, admission_id,
+                             patient_no, occurred_at, discovered_at, reported_at, shift_date,
+                             shift_code, shift_source, severity, detail, note, reported_by)
+                        VALUES (:id, :eventNo, :code, :deptId, CAST(:wardId AS uuid),
+                                CAST(:admissionId AS uuid), CAST(:patientNo AS text),
+                                :occurredAt, :discoveredAt, :reportedAt, :shiftDate,
+                                :shiftCode, :shiftSource, :severity, CAST(:detail AS jsonb),
+                                CAST(:note AS text), :reportedBy)
+                        """)
+                .param("id", e.id()).param("eventNo", e.eventNo())
+                .param("code", e.indicatorCode()).param("deptId", e.deptId())
+                .param("wardId", e.wardId()).param("admissionId", e.admissionId())
+                .param("patientNo", e.patientNo()).param("occurredAt", ts(e.occurredAt()))
+                .param("discoveredAt", ts(e.discoveredAt()))
+                .param("reportedAt", ts(e.reportedAt())).param("shiftDate", e.shiftDate())
+                .param("shiftCode", e.shiftCode()).param("shiftSource", e.shiftSource())
+                .param("severity", e.severity()).param("detail", e.detail())
+                .param("note", e.note()).param("reportedBy", e.reportedBy()).update();
+    }
+
+    /** 事件列表：按发生时间倒序；科室必填，其余条件可选。 */
+    public List<NursingIndicatorEvent> listNursingIndicatorEvents(UUID deptId, Instant from,
+                                                                  Instant to, String indicatorCode,
+                                                                  String shiftCode, int limit) {
+        return jdbc.sql("SELECT " + NURSING_INDICATOR_EVENT_COLUMNS + """
+                          FROM clinical_svc.nursing_indicator_event e
+                          JOIN clinical_svc.nursing_indicator_def def ON def.code = e.indicator_code
+                          JOIN clinical_svc.md_dept dp ON dp.id = e.dept_id
+                          LEFT JOIN clinical_svc.ward wd ON wd.id = e.ward_id
+                          JOIN clinical_svc.nursing_shift sh ON sh.code = e.shift_code
+                         WHERE e.dept_id = :deptId
+                           AND e.occurred_at >= :fromTs AND e.occurred_at < :toTs
+                           AND (CAST(:indicatorCode AS text) IS NULL
+                                OR e.indicator_code = CAST(:indicatorCode AS text))
+                           AND (CAST(:shiftCode AS text) IS NULL
+                                OR e.shift_code = CAST(:shiftCode AS text))
+                         ORDER BY e.occurred_at DESC, e.created_at DESC
+                         LIMIT :limit
+                        """)
+                .param("deptId", deptId).param("fromTs", ts(from)).param("toTs", ts(to))
+                .param("indicatorCode", indicatorCode).param("shiftCode", shiftCode)
+                .param("limit", limit).query(NURSING_INDICATOR_EVENT_MAPPER).list();
+    }
+
+    public List<NursingIndicatorEventCount> countNursingIndicatorEvents(UUID deptId, Instant from,
+                                                                        Instant to) {
+        return jdbc.sql("""
+                        SELECT indicator_code, count(*) AS total,
+                               count(*) FILTER (WHERE severity <> 'NEAR_MISS') AS countable
+                          FROM clinical_svc.nursing_indicator_event
+                         WHERE dept_id = :deptId
+                           AND occurred_at >= :fromTs AND occurred_at < :toTs
+                         GROUP BY indicator_code
+                        """)
+                .param("deptId", deptId).param("fromTs", ts(from)).param("toTs", ts(to))
+                .query((rs, i) -> new NursingIndicatorEventCount(rs.getString("indicator_code"),
+                        rs.getLong("total"), rs.getLong("countable"))).list();
+    }
+
+    public NursingTimelinessCount countNursingTimeliness(UUID deptId, Instant from, Instant to,
+                                                         int windowHours) {
+        return jdbc.sql("""
+                        SELECT count(*) AS total,
+                               count(*) FILTER (
+                                   WHERE reported_at <= occurred_at
+                                         + (CAST(:hours AS integer) * interval '1 hour')
+                               ) AS timely
+                          FROM clinical_svc.nursing_indicator_event
+                         WHERE dept_id = :deptId
+                           AND occurred_at >= :fromTs AND occurred_at < :toTs
+                        """)
+                .param("deptId", deptId).param("fromTs", ts(from)).param("toTs", ts(to))
+                .param("hours", windowHours)
+                .query((rs, i) -> new NursingTimelinessCount(rs.getLong("total"),
+                        rs.getLong("timely"))).single();
+    }
+
+    /** 设备日列表（追加式，按记录时间倒序，最新一条在前）。 */
+    public List<NursingIndicatorDenominator> listNursingIndicatorDenominators(UUID deptId,
+                                                                              LocalDate from,
+                                                                              LocalDate to) {
+        return jdbc.sql("""
+                        SELECT id, dept_id, stat_date, device_type, count, note, recorded_by,
+                               recorded_at
+                          FROM clinical_svc.nursing_indicator_denominator
+                         WHERE dept_id = :deptId
+                           AND stat_date >= :fromDate AND stat_date <= :toDate
+                         ORDER BY stat_date DESC, device_type, recorded_at DESC
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query(NURSING_INDICATOR_DENOMINATOR_MAPPER).list();
+    }
+
+    public void insertNursingIndicatorDenominator(UUID id, UUID deptId, LocalDate statDate,
+                                                  String deviceType, BigDecimal count, String note,
+                                                  String actor) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_indicator_denominator
+                            (id, dept_id, stat_date, device_type, count, note, recorded_by)
+                        VALUES (:id, :deptId, :statDate, :deviceType, :count,
+                                CAST(:note AS text), :actor)
+                        """)
+                .param("id", id).param("deptId", deptId).param("statDate", statDate)
+                .param("deviceType", deviceType).param("count", count)
+                .param("note", note).param("actor", actor).update();
+    }
+
+    /** 某类设备日合计：同一日期/类型取最新一条，避免修正记录被重复累加。 */
+    public BigDecimal sumNursingDeviceDays(UUID deptId, LocalDate from, LocalDate to,
+                                           String deviceType) {
+        BigDecimal total = jdbc.sql("""
+                        SELECT coalesce(sum(cnt), 0)
+                          FROM (
+                              SELECT DISTINCT ON (stat_date, device_type) count AS cnt
+                                FROM clinical_svc.nursing_indicator_denominator
+                               WHERE dept_id = :deptId AND device_type = :deviceType
+                                 AND stat_date >= :fromDate AND stat_date <= :toDate
+                               ORDER BY stat_date, device_type, recorded_at DESC, id DESC
+                          ) latest
+                        """)
+                .param("deptId", deptId).param("deviceType", deviceType)
+                .param("fromDate", from).param("toDate", to)
+                .query(BigDecimal.class).single();
+        return total == null ? BigDecimal.ZERO : total;
+    }
+
+    /** 统计周期内与区间相交的在院登记（住院床日由服务层按本地日切分）。 */
+    public List<NursingAdmissionStay> listNursingAdmissionStays(UUID deptId, Instant from,
+                                                                Instant to) {
+        return jdbc.sql("""
+                        SELECT a.admitted_at, a.discharged_at
+                          FROM clinical_svc.admission a
+                          JOIN clinical_svc.ward wd ON wd.id = a.ward_id
+                         WHERE wd.dept_id = :deptId
+                           AND a.status <> 'CANCELLED'
+                           AND a.admitted_at < :toTs
+                           AND (a.discharged_at IS NULL OR a.discharged_at >= :fromTs)
+                        """)
+                .param("deptId", deptId).param("fromTs", ts(from)).param("toTs", ts(to))
+                .query((rs, i) -> new NursingAdmissionStay(instantOf(rs, "admitted_at"),
+                        instantOf(rs, "discharged_at"))).list();
+    }
+
+    /** 科室开放床位（停用床不计入）。 */
+    public int countDeptBeds(UUID deptId) {
+        Integer count = jdbc.sql("""
+                        SELECT count(*)
+                          FROM clinical_svc.bed b
+                          JOIN clinical_svc.ward wd ON wd.id = b.ward_id
+                         WHERE wd.dept_id = ? AND b.status <> 'DISABLED'
+                        """).param(deptId).query(Integer.class).single();
+        return count == null ? 0 : count;
+    }
+
+    /** 每日在岗护士数：已发布排班按 nurse_no/姓名去重（草稿不计入实际人力）。 */
+    public List<NursingNurseDayCount> listNursingNurseDays(UUID deptId, LocalDate from,
+                                                           LocalDate to) {
+        return jdbc.sql("""
+                        SELECT work_date, count(DISTINCT coalesce(nurse_no, nurse_name)) AS nurses
+                          FROM clinical_svc.nursing_schedule
+                         WHERE dept_id = :deptId
+                           AND work_date >= :fromDate AND work_date <= :toDate
+                           AND status = 'PUBLISHED'
+                         GROUP BY work_date
+                         ORDER BY work_date
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query((rs, i) -> new NursingNurseDayCount(rs.getDate("work_date").toLocalDate(),
+                        rs.getLong("nurses"))).list();
+    }
+
+    /** 周期内各班次已发布排班人次（用于班次事件密度）。 */
+    public List<NursingShiftNurseCount> countNursingShiftNurses(UUID deptId, LocalDate from,
+                                                                LocalDate to) {
+        return jdbc.sql("""
+                        SELECT shift_code, count(*) AS nurse_shifts
+                          FROM clinical_svc.nursing_schedule
+                         WHERE dept_id = :deptId
+                           AND work_date >= :fromDate AND work_date <= :toDate
+                           AND status = 'PUBLISHED'
+                         GROUP BY shift_code
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query((rs, i) -> new NursingShiftNurseCount(rs.getString("shift_code"),
+                        rs.getLong("nurse_shifts"))).list();
+    }
+
+    /** 周期内各班次事件数（按业务班次日归属后聚合）。 */
+    public List<NursingShiftEventCount> countNursingShiftEvents(UUID deptId, LocalDate from,
+                                                                LocalDate to) {
+        return jdbc.sql("""
+                        SELECT shift_code, count(*) AS total,
+                               count(*) FILTER (WHERE severity <> 'NEAR_MISS') AS countable
+                          FROM clinical_svc.nursing_indicator_event
+                         WHERE dept_id = :deptId
+                           AND shift_date >= :fromDate AND shift_date <= :toDate
+                         GROUP BY shift_code
+                        """)
+                .param("deptId", deptId).param("fromDate", from).param("toDate", to)
+                .query((rs, i) -> new NursingShiftEventCount(rs.getString("shift_code"),
+                        rs.getLong("total"), rs.getLong("countable"))).list();
+    }
+
+    private static final String NURSING_INDICATOR_REPORT_COLUMNS = """
+            r.id, r.report_no, r.dept_id, dp.name AS dept_name, r.period_type, r.period_key,
+            r.period_start, r.period_end, r.status, r.patient_days, r.event_count,
+            r.timely_count, r.nurse_days, r.metrics::text AS metrics,
+            r.warnings::text AS warnings, r.generated_by, r.generated_at, r.submitted_by,
+            r.submitted_at, r.reviewed_by, r.reviewed_at, r.review_note, r.version
+            """;
+
+    public Optional<NursingIndicatorReport> findNursingIndicatorReport(UUID id) {
+        return jdbc.sql("SELECT " + NURSING_INDICATOR_REPORT_COLUMNS + """
+                          FROM clinical_svc.nursing_indicator_report r
+                          JOIN clinical_svc.md_dept dp ON dp.id = r.dept_id
+                         WHERE r.id = ?
+                        """).param(id).query(NURSING_INDICATOR_REPORT_MAPPER).optional();
+    }
+
+    public Optional<NursingIndicatorReport> findNursingIndicatorReportByPeriod(UUID deptId,
+                                                                               String periodType,
+                                                                               String periodKey) {
+        return jdbc.sql("SELECT " + NURSING_INDICATOR_REPORT_COLUMNS + """
+                          FROM clinical_svc.nursing_indicator_report r
+                          JOIN clinical_svc.md_dept dp ON dp.id = r.dept_id
+                         WHERE r.dept_id = :deptId AND r.period_type = :periodType
+                           AND r.period_key = :periodKey
+                        """)
+                .param("deptId", deptId).param("periodType", periodType)
+                .param("periodKey", periodKey)
+                .query(NURSING_INDICATOR_REPORT_MAPPER).optional();
+    }
+
+    public void insertNursingIndicatorReport(NursingIndicatorReport r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.nursing_indicator_report
+                            (id, report_no, dept_id, period_type, period_key, period_start,
+                             period_end, status, patient_days, event_count, timely_count,
+                             nurse_days, metrics, warnings, generated_by, generated_at)
+                        VALUES (:id, :reportNo, :deptId, :periodType, :periodKey, :periodStart,
+                                :periodEnd, 'DRAFT', :patientDays, :eventCount, :timelyCount,
+                                :nurseDays, CAST(:metrics AS jsonb), CAST(:warnings AS jsonb),
+                                :generatedBy, :generatedAt)
+                        """)
+                .param("id", r.id()).param("reportNo", r.reportNo()).param("deptId", r.deptId())
+                .param("periodType", r.periodType()).param("periodKey", r.periodKey())
+                .param("periodStart", r.periodStart()).param("periodEnd", r.periodEnd())
+                .param("patientDays", r.patientDays()).param("eventCount", r.eventCount())
+                .param("timelyCount", r.timelyCount()).param("nurseDays", r.nurseDays())
+                .param("metrics", r.metrics()).param("warnings", r.warnings())
+                .param("generatedBy", r.generatedBy()).param("generatedAt", ts(r.generatedAt()))
+                .update();
+    }
+
+    /** 重新生成：仅 DRAFT/RETURNED 可覆盖，状态回到 DRAFT，版本 CAS。 */
+    public boolean updateNursingIndicatorReport(NursingIndicatorReport r, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_indicator_report
+                           SET period_start = :periodStart, period_end = :periodEnd,
+                               status = 'DRAFT', patient_days = :patientDays,
+                               event_count = :eventCount, timely_count = :timelyCount,
+                               nurse_days = :nurseDays, metrics = CAST(:metrics AS jsonb),
+                               warnings = CAST(:warnings AS jsonb),
+                               generated_by = :generatedBy, generated_at = :generatedAt,
+                               submitted_by = NULL, submitted_at = NULL,
+                               reviewed_by = NULL, reviewed_at = NULL, review_note = NULL,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                           AND status IN ('DRAFT', 'RETURNED')
+                        """)
+                .param("id", r.id()).param("periodStart", r.periodStart())
+                .param("periodEnd", r.periodEnd()).param("patientDays", r.patientDays())
+                .param("eventCount", r.eventCount()).param("timelyCount", r.timelyCount())
+                .param("nurseDays", r.nurseDays()).param("metrics", r.metrics())
+                .param("warnings", r.warnings()).param("generatedBy", r.generatedBy())
+                .param("generatedAt", ts(r.generatedAt())).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    public List<NursingIndicatorReport> listNursingIndicatorReports(UUID deptId, String periodType,
+                                                                    String status, int limit) {
+        return jdbc.sql("SELECT " + NURSING_INDICATOR_REPORT_COLUMNS + """
+                          FROM clinical_svc.nursing_indicator_report r
+                          JOIN clinical_svc.md_dept dp ON dp.id = r.dept_id
+                         WHERE (CAST(:deptId AS uuid) IS NULL OR r.dept_id = CAST(:deptId AS uuid))
+                           AND (CAST(:periodType AS text) IS NULL
+                                OR r.period_type = CAST(:periodType AS text))
+                           AND (CAST(:status AS text) IS NULL
+                                OR r.status = CAST(:status AS text))
+                         ORDER BY r.period_start DESC, dp.name
+                         LIMIT :limit
+                        """)
+                .param("deptId", deptId).param("periodType", periodType).param("status", status)
+                .param("limit", limit).query(NURSING_INDICATOR_REPORT_MAPPER).list();
+    }
+
+    public boolean submitNursingIndicatorReport(UUID id, String actor, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_indicator_report
+                           SET status = 'SUBMITTED', submitted_by = :actor, submitted_at = now(),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'DRAFT'
+                        """)
+                .param("id", id).param("actor", actor).param("version", expectedVersion)
+                .update() > 0;
+    }
+
+    /** 审核：只允许 SUBMITTED → ACCEPTED/RETURNED，且审核人不能是提交人。 */
+    public boolean reviewNursingIndicatorReport(UUID id, String targetStatus, String actor,
+                                                String note, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.nursing_indicator_report
+                           SET status = :status, reviewed_by = :actor, reviewed_at = now(),
+                               review_note = CAST(:note AS text),
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'SUBMITTED'
+                           AND submitted_by <> :actor
+                        """)
+                .param("id", id).param("status", targetStatus).param("actor", actor)
+                .param("note", note).param("version", expectedVersion).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计
