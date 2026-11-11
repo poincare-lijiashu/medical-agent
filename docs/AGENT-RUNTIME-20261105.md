@@ -11758,3 +11758,64 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 未接入国家护理质量数据平台的上报文件格式（本期落库与审核闭环，导出适配下一批）；
 - 未做指标目标值维护与同比/环比（字典已留 `target_value` 与方向，等基线数据后启用）；
 - 未把不良事件与病历/医嘱做关联校验（例如给药错误关联具体医嘱），当前以结构化详情承载。
+
+## 267. 2026-11-11 等保三级差距整改包（第 267 批）
+
+**问题**
+
+- 平台已有 RBAC、审计、CA 签名、备份、网络策略，但没有一份**按 GB/T 22239—2019 控制项逐条对照**的
+  差距清单，测评前无法快速回答"哪些满足、哪些缺、证据在哪"；
+- 网关只做了鉴权与限流，没有统一安全响应头（CSP/X-Frame-Options/nosniff/Referrer-Policy/
+  Permissions-Policy），认证响应也没有禁止缓存；
+- 审计表虽为追加式，但 `change_log` 没有 `ts` 索引，测评时查"最早审计时间"会全表扫描；
+- 保留期、端口暴露、TLS、备份新鲜度等证据靠人工整理，容易漏项且不可复现。
+
+**本批做了什么**
+
+1. **差距清单**（`docs/COMPLIANCE-L3-GAP-20261111.md`）：64 项控制项逐条给出
+   结论（PASS 17 / PARTIAL 24 / GAP 13 / INHERITED 10）、现状、证据路径与整改建议，
+   覆盖安全物理环境、通信网络、区域边界、计算环境、管理中心、管理制度、密评与数据安全；
+2. **网关统一安全响应头**（`SecurityHeadersFilter`，order=-110，早于鉴权过滤器）：
+   - `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、
+     `Permissions-Policy`、CSP `default-src 'none'; frame-ancestors 'none'`；
+   - HSTS 仅在 HTTPS 或 `X-Forwarded-Proto=https` 时输出（本地 HTTP 不会污染浏览器缓存）；
+   - `/api/v2/auth/**` 响应 `Cache-Control: no-store` + `Pragma: no-cache`；
+   - 配置前缀 `medassist.gateway.security-headers`，支持环境变量覆盖，默认全开；
+3. **审计保留期索引**（auth `V86__audit_retention_index.sql`）：`change_log(ts DESC)`，
+   让最早/最晚审计时间与保留期证据查询走索引；
+4. **自动化证据包**（`scripts/compliance/l3_evidence.ps1`）：一次采集 13 项证据——
+   提交基线、网关健康、安全响应头、HSTS、36 个追加式触发器、审计保留期、账号/RBAC、
+   JWT TTL、JWT 密钥来源、端口暴露、生产 Ingress TLS、Flyway 版本、备份新鲜度；
+   输出 Markdown，`-Strict` 下 FAIL 退出码 1，可作为测评前门禁；
+5. **生产模板注释**：Helm values 明确安全头环境变量与"关闭需书面审批"。
+
+**验证**
+
+```
+后端：mvn -pl gateway -am test → 55 passed（含新增 SecurityHeadersFilterTest 4 条）
+      真实网关 401 响应头：nosniff / DENY / no-referrer / Permissions-Policy / CSP 全部存在
+      HTTP 探测不输出 HSTS（预期）；X-Forwarded-Proto=https 单测输出 max-age=31536000; includeSubDomains
+      登录响应：Cache-Control=no-store，Pragma=no-cache
+迁移 lint：scanned=261 known=10 new=0 PASS
+真实库（重启 auth）：flyway v85→v86 success（audit ts 索引）
+证据脚本：scripts/compliance/l3_evidence.ps1 → PASS=10 WARN=3 FAIL=0
+      输出 docs/compliance/evidence/L3-EVIDENCE-20261111.md
+      WARN：HSTS 需在 HTTPS 入口复验；审计环境不足 180 天；开发环境端口绑定 ::（生产 NetworkPolicy/ClusterIP 收敛）
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **证据脚本不伪造结论**：物理环境、宿主机 EDR、WAF/IDS、SIEM、密评、恢复演练
+  不在脚本可证明范围，清单明确标为 INHERITED/GAP，不用"自动 PASS"掩盖；
+- **HSTS 不在 HTTP 输出**：本地联调若也发 HSTS，浏览器会把 localhost 记成强制 HTTPS，
+  影响后续开发；生产由 Ingress 终止 TLS 时用转发协议识别；
+- **安全头放在网关**：下游服务各自加会出现"有的接口有、有的没有"，测评无法给统一证据；
+- **不做自动清理审计**：保留期不足时只告警，不删除；是否归档/扩容由院方存储策略决定。
+
+**遗留**
+
+- P0：特权账号 MFA（TOTP/OIDC）、依赖/镜像 CVE 扫描 + SBOM + 镜像签名、集中审计/SIEM 与安全告警；
+- P1：系统/安全/审计三权分立、恢复演练与 RTO/RPO、数据分类分级与 PIA、WAF/IDS 接入；
+- P2：密评与国密改造评估、内网 mTLS、制度/培训/供应链评估文档包；
+- 证据脚本当前通过 `docker exec` 访问本地库，生产需增加直连 DSN 参数或改为在库侧执行。

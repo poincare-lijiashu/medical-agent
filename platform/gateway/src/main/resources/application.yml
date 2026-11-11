@@ -235,6 +235,15 @@ medassist:
         - /docs/**
         - /redoc/**
         - /openapi.json
+    # 安全响应头（§267，等保三级）：对所有响应统一注入，HSTS 只在 HTTPS 时输出。
+    # 生产保持 enabled=true；任何关闭动作都必须有院方书面审批。
+    security-headers:
+      enabled: ${SECURITY_HEADERS_ENABLED:true}
+      hsts-enabled: ${SECURITY_HSTS_ENABLED:true}
+      hsts-max-age-seconds: ${SECURITY_HSTS_MAX_AGE:31536000}
+      hsts-include-subdomains: ${SECURITY_HSTS_INCLUDE_SUBDOMAINS:true}
+      trust-forwarded-proto: ${SECURITY_TRUST_FORWARDED_PROTO:true}
+      no-store-for-auth-paths: ${SECURITY_NO_STORE_AUTH:true}
     # 入口限流（Sentinel 核心 API，路径前缀维度）。登录失败的账号维度限速在 auth 服务内实现。
     # 必须用列表：Map 键中的 "/" 会被 Spring 宽松绑定吞掉（实测 /api/v2/auth → apiv2auth）
     sentinel:

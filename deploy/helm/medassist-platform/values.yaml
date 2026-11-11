@@ -281,6 +281,10 @@ gateway:
     # 部署在 Ingress 之后时应填 Ingress/节点网段，否则审计与 IP 限速看到的是 Ingress 地址（M3）。
     - name: GATEWAY_TRUSTED_PROXIES
       value: ""
+    # 安全响应头（§267，等保三级）：默认全部开启；HSTS 仅在 HTTPS/转发协议为 https 时输出。
+    #   SECURITY_HEADERS_ENABLED / SECURITY_HSTS_ENABLED / SECURITY_TRUST_FORWARDED_PROTO
+    #   SECURITY_NO_STORE_AUTH（认证响应 no-store）
+    # 关闭任何一项都必须有院方书面审批，详见 docs/COMPLIANCE-L3-GAP-20261111.md
   nodeSelector: {}
   tolerations: []
   affinity: {}

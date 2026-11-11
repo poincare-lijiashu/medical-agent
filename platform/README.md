@@ -364,6 +364,33 @@ python scripts/chs_sim.py --port 9099
 - **周期唯一**：同科室 + 周期类型 + 周期键唯一，重复生成走版本 CAS 更新；
 - **不自动回写病历/医嘱/收费**：指标是质量测量，事件采集不产生执行动作。
 
+## 等保三级技术整改与证据包（§267）
+
+等保三级（GB/T 22239—2019）差距清单见 [COMPLIANCE-L3-GAP-20261111.md](../docs/COMPLIANCE-L3-GAP-20261111.md)，
+自动技术证据包由 `scripts/compliance/l3_evidence.ps1` 生成（默认输出到
+`docs/compliance/evidence/L3-EVIDENCE-YYYYMMDD.md`）。
+
+| 技术整改 | 落点 | 说明 |
+|---|---|---|
+| 统一安全响应头 | `gateway/filter/SecurityHeadersFilter` | 所有响应注入 `X-Content-Type-Options` / `X-Frame-Options` / `Referrer-Policy` / `Permissions-Policy` / CSP；顺序早于鉴权过滤器，401 也带头 |
+| HSTS | 同上 | 只在 `https` 或 `X-Forwarded-Proto=https` 时输出，避免本地 HTTP 被浏览器缓存 |
+| 认证响应禁缓存 | 同上 | `/api/v2/auth/**` 返回 `Cache-Control: no-store`、`Pragma: no-cache` |
+| 审计保留期查询 | auth `V86__audit_retention_index.sql` | `change_log(ts DESC)` 索引，支持最早/最晚审计时间证据 |
+
+| 变量 | 说明 |
+|---|---|
+| `SECURITY_HEADERS_ENABLED` | 安全头总开关（默认 `true`；生产关闭需书面审批） |
+| `SECURITY_HSTS_ENABLED` / `SECURITY_HSTS_MAX_AGE` | HSTS 开关与有效期（默认 1 年） |
+| `SECURITY_HSTS_INCLUDE_SUBDOMAINS` | 是否覆盖子域（默认 `true`） |
+| `SECURITY_TRUST_FORWARDED_PROTO` | 信任 Ingress 的 `X-Forwarded-Proto`（默认 `true`，TLS 在 Ingress 终止时必需） |
+| `SECURITY_NO_STORE_AUTH` | 认证响应禁止缓存（默认 `true`） |
+
+证据脚本检查项（12 项）：网关健康、安全响应头、HSTS、审计追加式触发器、
+审计保留期、账号/RBAC、JWT TTL 与密钥来源、端口暴露、生产 Ingress TLS、
+数据库迁移版本、备份新鲜度、提交基线。`-Strict` 下存在 FAIL 时退出码为 1，
+可作为测评前门禁。**脚本只证明应用与数据库技术控制项，不替代第三方测评**
+（物理环境、宿主机 EDR、WAF/IDS、SIEM、密评、恢复演练仍需院方或测评机构完成）。
+
 ## 构建与运行
 
 ```powershell
