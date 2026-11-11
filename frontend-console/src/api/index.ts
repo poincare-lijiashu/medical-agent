@@ -2,6 +2,7 @@ import { download, get, post, put, request, upload } from './http'
 import type {
   AdmissionView,
   Bed,
+  BedReservationView,
   BillingPreview,
   CaBoard,
   CaSignature,
@@ -374,6 +375,20 @@ export const clinicalApi = {
   beds: (wardId: string) => get<Bed[]>(`/clinical/wards/${wardId}/beds`),
   createBeds: (wardId: string, bedNos: string[]) =>
     post<Bed[]>(`/clinical/wards/${wardId}/beds`, { bedNos }),
+  bedReservations: (wardId: string) =>
+    get<BedReservationView[]>(`/clinical/wards/${wardId}/bed-reservations`),
+  reserveBed: (
+    wardId: string,
+    body: {
+      bedId: string
+      patientId?: string
+      patientNo?: string
+      reason?: string
+      reservedUntil?: string
+    },
+  ) => post<BedReservationView>(`/clinical/wards/${wardId}/bed-reservations`, body),
+  releaseBedReservation: (wardId: string, id: string, reason?: string) =>
+    post<void>(`/clinical/wards/${wardId}/bed-reservations/${id}/release`, { reason }),
   admissions: (wardId: string, status?: string) =>
     get<AdmissionView[]>(`/clinical/wards/${wardId}/admissions`, { status }),
   admit: (body: { patientId: string; wardId: string; bedId?: string; attendingDoctor: string }) =>

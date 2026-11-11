@@ -58,6 +58,16 @@
       </span>
       <span class="spacer" />
       <button
+        v-if="canAssignBed && selectedWardId"
+        class="btn btn--sm"
+        type="button"
+        :disabled="reservationsLoading"
+        @click="openReservations"
+      >
+        床位预留
+        <span v-if="reservedCount > 0" class="badge badge--neutral">{{ reservedCount }}</span>
+      </button>
+      <button
         v-if="selectedWardId"
         class="btn btn--sm"
         type="button"
@@ -108,8 +118,9 @@
           <div class="card-head">
             <span class="card-title">床位看板</span>
             <span class="badge badge--neutral num">{{ freeBeds.length }} 空 / {{ beds.length }} 总</span>
+            <span v-if="reservedCount > 0" class="badge badge--warn">{{ reservedCount }} 预留</span>
             <span class="spacer" />
-            <span class="hint">点击空床直接入院；点击在床患者可转床</span>
+            <span class="hint">点击空床直接入院；点击在床患者可转床；点击预留床可查看/解除预留</span>
           </div>
           <div v-if="beds.length === 0" class="hint pad">
             该病区还没有床位。拥有 inpatient:ward:manage 权限的账号可批量建床后再入院。
@@ -590,6 +601,140 @@
       </template>
     </AppModal>
 
+    <!-- 床位预留 -->
+    <AppModal v-model="reservationsOpen" title="床位预留" :subtitle="wardLabel" width="720px">
+      <div v-if="reservationsLoading" class="loading">
+        <div v-for="i in 3" :key="i" class="skeleton" style="height: 40px" />
+      </div>
+      <div v-else class="stack">
+        <p v-if="reservationErr" class="hint is-danger">{{ reservationErr }}</p>
+        <EmptyState
+          v-if="reservations.length === 0"
+          title="暂无有效预留"
+          desc="择期入院、转科或急诊留床可先预留床位；到期后后台任务自动释放。"
+        />
+        <div v-else class="reservation-list">
+          <div v-for="r in reservations" :key="r.id" class="reservation-row">
+            <span class="badge" :class="r.expired ? 'badge--warn' : 'badge--ok'">
+              {{ r.expired ? '已过期 · 待释放' : '预留中' }}
+            </span>
+            <div class="check-body">
+              <div class="check-title">
+                <span class="mono">{{ r.bedNo }}</span> ·
+                <span class="mono">{{ r.patientNo || '机动预留' }}</span>
+                <span class="muted"> {{ r.reservedBy }}</span>
+              </div>
+              <div class="hint">
+                <span v-if="r.reason">{{ r.reason }} · </span>
+                至 {{ dateTime(r.reservedUntil) || '未设置' }}
+              </div>
+            </div>
+            <template v-if="releaseCandidateId === r.id">
+              <button
+                class="btn btn--sm btn--danger"
+                type="button"
+                :disabled="releasingId === r.id"
+                @click="releaseReservation(r)"
+              >
+                {{ releasingId === r.id ? '解除中…' : '确认解除' }}
+              </button>
+              <button class="btn btn--sm" type="button" @click="releaseCandidateId = ''">取消</button>
+            </template>
+            <button
+              v-else-if="canAssignBed"
+              class="btn btn--sm"
+              type="button"
+              @click="releaseCandidateId = r.id"
+            >
+              解除
+            </button>
+          </div>
+        </div>
+
+        <div v-if="canAssignBed" class="reserve-form">
+          <div class="card-head">
+            <span class="card-title">新增预留</span>
+            <span class="spacer" />
+            <span class="hint">预留不改变入院/出院门禁；同一床位同时只有一条有效预留</span>
+          </div>
+          <div v-if="freeBeds.length === 0" class="hint">
+            当前没有空闲床位可预留；请先腾床或等出院手续完成。
+          </div>
+          <template v-else>
+            <div class="form-grid">
+              <label class="field">
+                <span class="label">床位 <span class="req">*</span></span>
+                <select v-model="reserveForm.bedId" class="select">
+                  <option value="">选择空闲床位</option>
+                  <option v-for="b in freeBeds" :key="b.id" :value="b.id">{{ b.bedNo }}</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="label">保留至 <span class="req">*</span></span>
+                <input v-model="reserveUntil" type="datetime-local" class="input" />
+                <span class="hint">到期后自动释放床位，默认 24 小时。</span>
+              </label>
+            </div>
+            <div class="search-row">
+              <input
+                v-model.trim="reserveKeyword"
+                class="input"
+                placeholder="患者姓名或病案号（留空即机动预留）"
+                @keydown.enter="searchReservePatients"
+              />
+              <button class="btn" type="button" :disabled="reserveSearching" @click="searchReservePatients">
+                检索
+              </button>
+            </div>
+            <div v-if="reserveResults.length" class="patient-results">
+              <button
+                v-for="p in reserveResults"
+                :key="p.id"
+                class="patient-row"
+                type="button"
+                @click="chooseReservePatient(p)"
+              >
+                <span class="is-strong">{{ p.name }}</span>
+                <span class="muted">{{ genderLabel(p.gender) }} · {{ ageOf(p.birthDate) }}</span>
+                <span class="mono muted">{{ p.patientNo }}</span>
+                <span class="spacer" />
+                <AppIcon name="chevron-right" :size="14" class="muted" />
+              </button>
+            </div>
+            <div v-if="reservePatient" class="picked-patient">
+              <span class="is-strong">{{ reservePatient.name }}</span>
+              <span class="mono muted">{{ reservePatient.patientNo }}</span>
+              <button class="link-btn" type="button" @click="clearReservePatient">改为机动预留</button>
+            </div>
+            <label class="field">
+              <span class="label">原因</span>
+              <input
+                v-model.trim="reserveForm.reason"
+                class="input"
+                maxlength="200"
+                placeholder="如：择期手术 / 转科留床 / 急诊留床"
+              />
+            </label>
+          </template>
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" :disabled="reservationsLoading" @click="loadReservations">
+          刷新
+        </button>
+        <button
+          v-if="canAssignBed"
+          class="btn btn--primary"
+          type="button"
+          :disabled="reserving || !reserveForm.bedId || !reserveUntil"
+          @click="submitReserve"
+        >
+          {{ reserving ? '提交中…' : '预留床位' }}
+        </button>
+        <button class="btn" type="button" @click="reservationsOpen = false">关闭</button>
+      </template>
+    </AppModal>
+
     <!-- 预计出院日（出院计划） -->
     <AppModal
       v-model="planOpen"
@@ -728,6 +873,7 @@ import { errorText } from '@/api/http'
 import type {
   AdmissionView,
   Bed,
+  BedReservationView,
   DepositView,
   Dept,
   DischargeCheckItem,
@@ -772,6 +918,7 @@ const alerts = ref<InpatientAlert[]>([])
 
 const currentWard = computed(() => wards.value.find((w) => w.id === selectedWardId.value))
 const freeBeds = computed(() => beds.value.filter((b) => b.status === 'FREE'))
+const reservedCount = computed(() => beds.value.filter((b) => b.status === 'RESERVED').length)
 const activeCount = computed(() => admissions.value.length)
 const pendingAdmitCount = computed(() => admissions.value.filter((a) => a.status === 'ADMITTED').length)
 const unassignedCount = computed(() => admissions.value.filter((a) => !a.bedId).length)
@@ -1539,9 +1686,138 @@ async function submitBeds() {
   }
 }
 
+/* ------------------------------ 床位预留 ------------------------------ */
+
+const reservationsOpen = ref(false)
+const reservationsLoading = ref(false)
+const reservations = ref<BedReservationView[]>([])
+const reservationErr = ref('')
+const reserving = ref(false)
+const releasingId = ref('')
+const releaseCandidateId = ref('')
+const reserveForm = reactive({ bedId: '', reason: '' })
+const reserveUntil = ref('')
+const reserveKeyword = ref('')
+const reserveResults = ref<Patient[]>([])
+const reserveSearching = ref(false)
+const reservePatient = ref<Patient | null>(null)
+
+/** datetime-local 需要本地时区的 `YYYY-MM-DDTHH:mm`，不能用 toISOString（会变 UTC）。 */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+/** 默认保留 24 小时：床位无限期被占在运营上不可接受，界面仍可改。 */
+function defaultReserveUntil(): string {
+  return toLocalInput(new Date(Date.now() + 24 * 3600 * 1000))
+}
+
+function openReservations() {
+  reservationsOpen.value = true
+  releaseCandidateId.value = ''
+  reserveForm.bedId = ''
+  reserveForm.reason = ''
+  reserveUntil.value = defaultReserveUntil()
+  clearReservePatient()
+  void loadReservations()
+}
+
+async function loadReservations() {
+  if (!selectedWardId.value) return
+  reservationsLoading.value = true
+  reservationErr.value = ''
+  try {
+    reservations.value = await clinicalApi.bedReservations(selectedWardId.value)
+  } catch (e) {
+    reservations.value = []
+    reservationErr.value = `预留列表加载失败：${errorText(e)}`
+  } finally {
+    reservationsLoading.value = false
+  }
+}
+
+async function searchReservePatients() {
+  const kw = reserveKeyword.value.trim()
+  if (!kw) return
+  reserveSearching.value = true
+  try {
+    const looksLikeNo = /^[A-Za-z]{1,4}\d{2,}$/.test(kw)
+    const res = looksLikeNo ? await empiApi.searchByNo(kw) : await empiApi.searchByName(kw)
+    reserveResults.value = res.items
+    if (res.items.length === 0) toast.info('未找到患者', '请核对姓名或用完整病案号检索')
+  } catch (e) {
+    toast.error('患者检索失败', errorText(e))
+  } finally {
+    reserveSearching.value = false
+  }
+}
+
+function chooseReservePatient(p: Patient) {
+  reservePatient.value = p
+  reserveKeyword.value = `${p.name} · ${p.patientNo}`
+  reserveResults.value = []
+}
+
+function clearReservePatient() {
+  reservePatient.value = null
+  reserveKeyword.value = ''
+  reserveResults.value = []
+}
+
+async function submitReserve() {
+  const wardId = selectedWardId.value
+  if (!wardId || !reserveForm.bedId || !reserveUntil.value || reserving.value) return
+  const until = new Date(reserveUntil.value)
+  if (Number.isNaN(until.getTime())) {
+    toast.error('保留时间格式不正确', '请重新选择日期时间')
+    return
+  }
+  reserving.value = true
+  try {
+    const created = await clinicalApi.reserveBed(wardId, {
+      bedId: reserveForm.bedId,
+      patientId: reservePatient.value?.id,
+      patientNo: reservePatient.value?.patientNo,
+      reason: reserveForm.reason || undefined,
+      reservedUntil: until.toISOString(),
+    })
+    toast.ok('床位已预留', `${created.bedNo} 床${created.patientNo ? ` · ${created.patientNo}` : ' · 机动预留'}`)
+    reserveForm.bedId = ''
+    reserveForm.reason = ''
+    reserveUntil.value = defaultReserveUntil()
+    clearReservePatient()
+    await Promise.all([loadReservations(), reloadWard()])
+  } catch (e) {
+    toast.error('预留失败', errorText(e))
+  } finally {
+    reserving.value = false
+  }
+}
+
+async function releaseReservation(r: BedReservationView) {
+  const wardId = selectedWardId.value
+  if (!wardId || releasingId.value) return
+  releasingId.value = r.id
+  try {
+    await clinicalApi.releaseBedReservation(wardId, r.id, '护士站解除预留')
+    releaseCandidateId.value = ''
+    toast.ok('预留已解除', `${r.bedNo} 床已释放`)
+    await Promise.all([loadReservations(), reloadWard()])
+  } catch (e) {
+    toast.error('解除预留失败', errorText(e))
+  } finally {
+    releasingId.value = ''
+  }
+}
+
 /* ------------------------------ 床位点击 ------------------------------ */
 
 function onBedClick(b: Bed) {
+  if (b.status === 'RESERVED') {
+    openReservations()
+    return
+  }
   if (b.status === 'OCCUPIED') {
     const admission = patientOfBed(b.id)
     if (admission && canAssignBed.value) openAssign(admission)
@@ -1866,6 +2142,30 @@ onMounted(async () => {
 /* 预计出院日：单元格内是“日期 + 调整”的紧凑组合，避免操作列继续变长 */
 .plan-summary strong {
   font-weight: 600;
+}
+
+/* 床位预留 */
+.reservation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reservation-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.reserve-form {
+  border-top: 1px solid var(--line);
+  padding-top: var(--s3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
 }
 
 .plan-cell {

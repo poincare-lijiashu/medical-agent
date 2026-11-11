@@ -81,6 +81,10 @@ clinical:
 
 # ---- 报表订阅投递（G19–G23）----
 medassist:
+  # 床位预留到期回收（第 253 批）：多实例各扫各的，默认每分钟一批
+  bed-reservation:
+    sweep-ms: ${BED_RESERVATION_SWEEP_MS:60000}
+    sweep-initial-ms: ${BED_RESERVATION_SWEEP_INITIAL_MS:15000}
   report-delivery:
     # 出站 WEBHOOK / IM 域名白名单（逗号分隔），未配置时禁止创建此类订阅
     allowed-hosts: ${REPORT_DELIVERY_ALLOWED_HOSTS:}

@@ -3,6 +3,7 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.domain.ClinicalModel.WardOccupancy;
+import com.medassist.clinical.service.BedReservationService;
 import com.medassist.clinical.service.DischargeCheckService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
@@ -12,6 +13,9 @@ import com.medassist.clinical.service.WardDischargeCheckService;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
+import com.medassist.clinical.web.ClinicalDtos.BedReleaseReq;
+import com.medassist.clinical.web.ClinicalDtos.BedReservationView;
+import com.medassist.clinical.web.ClinicalDtos.BedReserveReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateBedsReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateWardReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositReq;
@@ -82,16 +86,19 @@ public class InpatientController {
     private final NursingService nursingService;
     private final DischargeCheckService checkService;
     private final WardDischargeCheckService wardCheckService;
+    private final BedReservationService reservationService;
     private final VisitAccessGuard guard;
 
     public InpatientController(InpatientService service, InpatientFinanceService financeService,
                                NursingService nursingService, DischargeCheckService checkService,
-                               WardDischargeCheckService wardCheckService, VisitAccessGuard guard) {
+                               WardDischargeCheckService wardCheckService,
+                               BedReservationService reservationService, VisitAccessGuard guard) {
         this.service = service;
         this.financeService = financeService;
         this.nursingService = nursingService;
         this.checkService = checkService;
         this.wardCheckService = wardCheckService;
+        this.reservationService = reservationService;
         this.guard = guard;
     }
 
@@ -157,6 +164,53 @@ public class InpatientController {
         Permissions.require(permissions, READ);
         guard.requireWard(scope, wardId);
         return ApiResponse.ok(service.listBeds(wardId));
+    }
+
+    /**
+     * 床位预留列表（择期入院 / 转科 / 急诊留床）。
+     *
+     * <p>读权限即可看：预留是床位协调信息，与出院预检同属“看看谁占着床”的范畴。
+     */
+    @GetMapping("/wards/{wardId}/bed-reservations")
+    public ApiResponse<List<BedReservationView>> listBedReservations(
+            @PathVariable UUID wardId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(reservationService.list(wardId));
+    }
+
+    /**
+     * 预留床位：与分床同权限（都是护理站调度床位）。
+     *
+     * <p>不绑定患者时为机动预留；绑定患者后只有该患者能直接入住。
+     */
+    @PostMapping("/wards/{wardId}/bed-reservations")
+    public ApiResponse<BedReservationView> reserveBed(
+            @PathVariable UUID wardId,
+            @Valid @RequestBody BedReserveReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, BED_ASSIGN);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(reservationService.create(wardId, req, actor));
+    }
+
+    /** 解除预留：释放床位并留痕（原因可选）。 */
+    @PostMapping("/wards/{wardId}/bed-reservations/{id}/release")
+    public ApiResponse<Void> releaseBedReservation(
+            @PathVariable UUID wardId,
+            @PathVariable UUID id,
+            @RequestBody(required = false) BedReleaseReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, BED_ASSIGN);
+        guard.requireWard(scope, wardId);
+        reservationService.release(wardId, id, req == null ? null : req.reason(), actor);
+        return ApiResponse.ok(null);
     }
 
     @GetMapping("/wards/{wardId}/admissions")

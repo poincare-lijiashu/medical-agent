@@ -3,6 +3,7 @@ package com.medassist.clinical.service;
 import com.medassist.clinical.client.PatientClient;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
+import com.medassist.clinical.domain.ClinicalModel.BedReservation;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
@@ -366,29 +367,81 @@ class InpatientServiceTest {
         verify(repo, never()).updatePlannedDischargeDate(any(), any(), anyLong());
     }
 
+    // ---------------------------------------------------------------- 床位预留消费
+
     @Test
-    @DisplayName("预计出院日：已出院不可改；并发版本冲突转 409")
-    void planDischargeRejectsInactiveAndStale() {
-        UUID admissionId = UUID.randomUUID();
-        Admission discharged = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1",
-                wardId, null, "doctor01", Admission.DISCHARGED, Instant.now(), Instant.now(), 2L);
-        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(discharged));
+    @DisplayName("入院用预留床：同一患者的预留被消费，床位 RESERVED → OCCUPIED")
+    void admitConsumesOwnReservation() {
+        UUID bedId = UUID.randomUUID();
+        UUID reservationId = UUID.randomUUID();
+        UUID visitId = UUID.randomUUID();
+        BedReservation reservation = new BedReservation(reservationId, bedId, wardId, patientId,
+                "P1", "择期手术", "nurse01", Instant.now().plusSeconds(3600),
+                BedReservation.ACTIVE, Instant.now(), 0L);
 
-        assertThatThrownBy(() -> service.planDischarge(admissionId, BusinessTime.today(), "doctor01"))
+        when(repo.nextVisitNo()).thenReturn("V20261031000011");
+        when(repo.nextChargeNo()).thenReturn("C20261031000011");
+        when(repo.nextAdmissionNo()).thenReturn("A20261031000002");
+        when(repo.lockBed(bedId)).thenReturn(Optional.of(
+                new Bed(bedId, wardId, "01", Bed.RESERVED, 2L)));
+        when(repo.lockActiveBedReservation(bedId)).thenReturn(Optional.of(reservation));
+        when(repo.updateBedReservationStatus(reservationId, BedReservation.ACTIVE,
+                BedReservation.CONSUMED, 0L)).thenReturn(true);
+        when(repo.occupyReservedBed(bedId, 2L)).thenReturn(true);
+        when(repo.findAdmission(any())).thenAnswer(inv -> Optional.of(new Admission(
+                inv.getArgument(0), "A20261031000002", visitId, patientId, "P1", wardId, bedId,
+                "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 0L)));
+        when(repo.findVisit(any())).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+        when(repo.findBed(bedId)).thenReturn(Optional.of(
+                new Bed(bedId, wardId, "01", Bed.OCCUPIED, 3L)));
+
+        AdmissionView v = service.admit(new AdmitReq(patientId, wardId, bedId, "doctor01"), "clerk01");
+
+        assertThat(v.status()).isEqualTo(Admission.IN_HOSPITAL);
+        verify(repo).updateBedReservationStatus(reservationId, BedReservation.ACTIVE,
+                BedReservation.CONSUMED, 0L);
+        verify(repo).occupyReservedBed(bedId, 2L);
+        verify(repo, never()).occupyBed(any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("入院用别人预留的床：409，且不消费预留、不落住院登记")
+    void admitRejectsReservationForOtherPatient() {
+        UUID bedId = UUID.randomUUID();
+        BedReservation reservation = new BedReservation(UUID.randomUUID(), bedId, wardId,
+                UUID.randomUUID(), "P9", "择期", "nurse01", Instant.now().plusSeconds(3600),
+                BedReservation.ACTIVE, Instant.now(), 0L);
+        when(repo.lockBed(bedId)).thenReturn(Optional.of(
+                new Bed(bedId, wardId, "01", Bed.RESERVED, 2L)));
+        when(repo.lockActiveBedReservation(bedId)).thenReturn(Optional.of(reservation));
+
+        assertThatThrownBy(() -> service.admit(new AdmitReq(patientId, wardId, bedId, "doctor01"),
+                "clerk01"))
                 .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已预留给其他患者")
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONFLICT);
-        verify(repo, never()).updatePlannedDischargeDate(any(), any(), anyLong());
+        verify(repo, never()).updateBedReservationStatus(any(), anyString(), anyString(), anyLong());
+        verify(repo, never()).insertAdmission(any());
+    }
 
-        Admission active = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1",
-                wardId, null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 3L);
-        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(active));
-        when(repo.updatePlannedDischargeDate(admissionId, null, 3L)).thenReturn(false);
+    @Test
+    @DisplayName("床位空闲却仍有生效预留：状态不一致，拒绝入住而不是挤掉预留患者")
+    void admitRejectsInconsistentFreeBedWithReservation() {
+        UUID bedId = UUID.randomUUID();
+        when(repo.lockBed(bedId)).thenReturn(Optional.of(
+                new Bed(bedId, wardId, "01", Bed.FREE, 2L)));
+        when(repo.findActiveBedReservation(bedId)).thenReturn(Optional.of(
+                new BedReservation(UUID.randomUUID(), bedId, wardId, UUID.randomUUID(), "P9",
+                        "择期", "nurse01", Instant.now().plusSeconds(3600),
+                        BedReservation.ACTIVE, Instant.now(), 0L)));
 
-        assertThatThrownBy(() -> service.planDischarge(admissionId, null, "doctor01"))
+        assertThatThrownBy(() -> service.admit(new AdmitReq(patientId, wardId, bedId, "doctor01"),
+                "clerk01"))
                 .isInstanceOf(BusinessException.class)
-                .hasMessageContaining("已被他人修改")
+                .hasMessageContaining("预留状态异常")
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).occupyBed(any(), anyLong());
     }
 }

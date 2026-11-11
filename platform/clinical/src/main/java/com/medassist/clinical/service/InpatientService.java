@@ -3,6 +3,7 @@ package com.medassist.clinical.service;
 import com.medassist.clinical.client.PatientClient;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
+import com.medassist.clinical.domain.ClinicalModel.BedReservation;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.Deposit;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
@@ -25,6 +26,7 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -151,10 +153,7 @@ public class InpatientService {
 
         Bed bed = null;
         if (req.bedId() != null) {
-            bed = lockFreeBed(req.bedId(), ward.id());
-            if (!repo.occupyBed(bed.id(), bed.version())) {
-                throw new BusinessException(ErrorCode.CONFLICT, "床位已被占用，请刷新后重试");
-            }
+            bed = lockAndTakeBed(req.bedId(), ward.id(), patient.id());
         }
 
         // 住院就诊：状态直接 IN_TREATMENT（入院即可开医嘱），复用门诊的就诊/医嘱/收费模型
@@ -213,10 +212,7 @@ public class InpatientService {
         if (req.bedId().equals(a.bedId())) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "目标床位与当前床位相同");
         }
-        Bed target = lockFreeBed(req.bedId(), a.wardId());
-        if (!repo.occupyBed(target.id(), target.version())) {
-            throw new BusinessException(ErrorCode.CONFLICT, "床位已被占用，请刷新后重试");
-        }
+        Bed target = lockAndTakeBed(req.bedId(), a.wardId(), a.patientId());
         if (!repo.updateAdmissionBed(a.id(), target.id(), a.version())) {
             // 事务回滚会同时撤销上面那次占床
             throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");
@@ -462,18 +458,74 @@ public class InpatientService {
         return ward;
     }
 
-    /** 锁床位并校验：存在、属于目标病区、状态 FREE。 */
-    private Bed lockFreeBed(UUID bedId, UUID wardId) {
+    /**
+     * 锁床并占床（入院与转床共用）。
+     *
+     * <p>空闲床直接占；**预留床**只在预留患者一致时消费：
+     * <ul>
+     *   <li>绑定患者的预留：只有同一患者能直接入住，别人来住必须先去解除预留；</li>
+     *   <li>机动预留（patientId 为空）：任何患者都可消费，因为“留床”本身就是给临时来的人；</li>
+     *   <li>预留已过期：拒绝入住（后台任务会在 1 分钟内释放），避免和清理任务抢同一张床。</li>
+     * </ul>
+     *
+     * <p>加锁顺序：床位 → 预留，与解除预留、到期清理保持一致，避免死锁。
+     */
+    private Bed lockAndTakeBed(UUID bedId, UUID wardId, UUID patientId) {
+        Bed bed = lockBedAndValidateBed(bedId, wardId);
+        if (bed.free()) {
+            if (repo.findActiveBedReservation(bed.id()).isPresent()) {
+                // 床位空闲但还有生效预留：状态已不一致，宁可让用户刷新也不要把预留患者挤掉
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "床位 " + bed.bedNo() + " 预留状态异常，请刷新后重试");
+            }
+            if (!repo.occupyBed(bed.id(), bed.version())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "床位已被占用，请刷新后重试");
+            }
+            return bed;
+        }
+        if (Bed.RESERVED.equals(bed.status())) {
+            BedReservation reservation = repo.lockActiveBedReservation(bed.id())
+                    .orElseThrow(() -> new BusinessException(ErrorCode.CONFLICT,
+                            "床位 " + bed.bedNo() + " 预留状态异常，请刷新后重试"));
+            if (reservation.reservedUntil() != null
+                    && !reservation.reservedUntil().isAfter(Instant.now())) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "床位 " + bed.bedNo() + " 的预留已过期，请刷新后重试");
+            }
+            if (reservation.patientId() != null && !reservation.patientId().equals(patientId)) {
+                throw new BusinessException(ErrorCode.CONFLICT,
+                        "床位 " + bed.bedNo() + " 已预留给其他患者，请先解除预留或选择其他床位");
+            }
+            if (!repo.updateBedReservationStatus(reservation.id(), BedReservation.ACTIVE,
+                    BedReservation.CONSUMED, reservation.version())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "床位预留已被他人修改，请刷新后重试");
+            }
+            if (!repo.occupyReservedBed(bed.id(), bed.version())) {
+                throw new BusinessException(ErrorCode.CONFLICT, "床位状态已被他人修改，请刷新后重试");
+            }
+            return bed;
+        }
+        throw new BusinessException(ErrorCode.CONFLICT,
+                "床位 " + bed.bedNo() + " 当前状态为" + bedStatusLabel(bed.status()) + "，不可占用");
+    }
+
+    /** 锁床并校验存在、属于目标病区。 */
+    private Bed lockBedAndValidateBed(UUID bedId, UUID wardId) {
         Bed bed = repo.lockBed(bedId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "床位不存在"));
         if (!bed.wardId().equals(wardId)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "床位不属于该病区");
         }
-        if (!bed.free()) {
-            throw new BusinessException(ErrorCode.CONFLICT,
-                    "床位 " + bed.bedNo() + " 当前状态为 " + bed.status() + "，不可占用");
-        }
         return bed;
+    }
+
+    private static String bedStatusLabel(String status) {
+        return switch (status) {
+            case Bed.OCCUPIED -> "在床";
+            case Bed.RESERVED -> "已预留";
+            case Bed.DISABLED -> "停用";
+            default -> status;
+        };
     }
 
     private AdmissionView toView(Admission a) {

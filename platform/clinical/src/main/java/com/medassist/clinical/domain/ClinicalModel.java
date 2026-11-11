@@ -670,6 +670,28 @@ public final class ClinicalModel {
     }
 
     /**
+     * 床位预留（择期入院 / 转科 / 急诊留床）。
+     *
+     * @param patientId 可空：空表示机动预留（不绑定患者）
+     * @param reservedUntil 到期时间；到期后由后台任务置 EXPIRED 并释放床位
+     * @param status ACTIVE / CONSUMED / RELEASED / EXPIRED
+     */
+    public record BedReservation(UUID id, UUID bedId, UUID wardId, UUID patientId,
+                                 String patientNo, String reason, String reservedBy,
+                                 Instant reservedUntil, String status, Instant createdAt,
+                                 long version) {
+
+        public static final String ACTIVE = "ACTIVE";
+        public static final String CONSUMED = "CONSUMED";
+        public static final String RELEASED = "RELEASED";
+        public static final String EXPIRED = "EXPIRED";
+
+        public boolean active() {
+            return ACTIVE.equals(status);
+        }
+    }
+
+    /**
      * 住院登记。
      *
      * @param plannedDischargeDate 预计出院日（业务日期，仅用于床位计划与超期预警，不阻断出院）

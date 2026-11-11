@@ -4,6 +4,7 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.Dept;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
+import com.medassist.clinical.service.BedReservationService;
 import com.medassist.clinical.service.DischargeCheckService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
@@ -62,7 +63,7 @@ class ConsoleReadEndpointsPermissionTest {
         inpatientController = new InpatientController(
                 mock(InpatientService.class), mock(InpatientFinanceService.class), mock(NursingService.class),
                 mock(DischargeCheckService.class), mock(WardDischargeCheckService.class),
-                mock(VisitAccessGuard.class));
+                mock(BedReservationService.class), mock(VisitAccessGuard.class));
     }
 
     @Test
@@ -171,7 +172,7 @@ class ConsoleReadEndpointsPermissionTest {
         InpatientController controller = new InpatientController(
                 service, mock(InpatientFinanceService.class), mock(NursingService.class),
                 mock(DischargeCheckService.class), mock(WardDischargeCheckService.class),
-                mock(VisitAccessGuard.class));
+                mock(BedReservationService.class), mock(VisitAccessGuard.class));
 
         var resp = controller.listWards("inpatient:read", DataScope.all("admin01", true));
 
@@ -189,7 +190,7 @@ class ConsoleReadEndpointsPermissionTest {
         InpatientController controller = new InpatientController(
                 service, mock(InpatientFinanceService.class), mock(NursingService.class),
                 mock(DischargeCheckService.class), mock(WardDischargeCheckService.class),
-                mock(VisitAccessGuard.class));
+                mock(BedReservationService.class), mock(VisitAccessGuard.class));
 
         var resp = controller.listWards("inpatient:read", scope);
 

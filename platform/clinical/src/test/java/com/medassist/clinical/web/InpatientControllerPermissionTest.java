@@ -1,11 +1,13 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.service.BedReservationService;
 import com.medassist.clinical.service.DischargeCheckService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
 import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.service.WardDischargeCheckService;
+import com.medassist.clinical.web.ClinicalDtos.BedReserveReq;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
@@ -43,6 +45,7 @@ class InpatientControllerPermissionTest {
     private NursingService nursingService;
     private DischargeCheckService checkService;
     private WardDischargeCheckService wardCheckService;
+    private BedReservationService reservationService;
     private VisitAccessGuard guard;
     private InpatientController controller;
 
@@ -58,9 +61,10 @@ class InpatientControllerPermissionTest {
         nursingService = mock(NursingService.class);
         checkService = mock(DischargeCheckService.class);
         wardCheckService = mock(WardDischargeCheckService.class);
+        reservationService = mock(BedReservationService.class);
         guard = mock(VisitAccessGuard.class);
         controller = new InpatientController(service, financeService, nursingService, checkService,
-                wardCheckService, guard);
+                wardCheckService, reservationService, guard);
     }
 
     @Test
@@ -225,6 +229,34 @@ class InpatientControllerPermissionTest {
 
         verify(guard).requireAdmission(scope, admissionId);
         verify(service).planDischarge(admissionId, req.date(), "doctor01");
+    }
+
+    @Test
+    @DisplayName("床位预留：读权限可查；写入需分床权限并先校验病区范围")
+    void bedReservationPermissions() {
+        when(reservationService.list(wardId)).thenReturn(List.of());
+        controller.listBedReservations(wardId, "inpatient:read", scope);
+        verify(guard).requireWard(scope, wardId);
+        verify(reservationService).list(wardId);
+
+        var req = new BedReserveReq(UUID.randomUUID(), null, null, null, null);
+        assertThatThrownBy(() -> controller.reserveBed(wardId, req, "inpatient:read",
+                "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(reservationService, never()).create(any(), any(), anyString());
+
+        controller.reserveBed(wardId, req, "inpatient:bed:assign", "nurse01", scope);
+        verify(reservationService).create(wardId, req, "nurse01");
+
+        UUID reservationId = UUID.randomUUID();
+        assertThatThrownBy(() -> controller.releaseBedReservation(wardId, reservationId, null,
+                "inpatient:read", "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(reservationService, never()).release(any(), any(), any(), anyString());
     }
 
     @Test

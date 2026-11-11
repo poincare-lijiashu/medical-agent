@@ -193,6 +193,35 @@ public final class ClinicalDtos {
     }
 
     /**
+     * 床位预留创建。
+     *
+     * @param patientId 可空：空表示机动预留（不绑定患者）
+     * @param reservedUntil 到期时间；缺省由服务端按 24 小时兜底
+     */
+    public record BedReserveReq(
+            @NotNull UUID bedId,
+            UUID patientId,
+            @Size(max = 40) String patientNo,
+            @Size(max = 200) String reason,
+            Instant reservedUntil) {
+    }
+
+    /** 解除床位预留（原因可选，用于交接追溯）。 */
+    public record BedReleaseReq(@Size(max = 200) String reason) {
+    }
+
+    /**
+     * 床位预留视图。
+     *
+     * @param expired 到期但后台任务尚未回收时为 true（界面应提示“即将释放”而不是当可用）
+     */
+    public record BedReservationView(
+            UUID id, UUID bedId, String bedNo, UUID wardId,
+            UUID patientId, String patientNo, String reason, String reservedBy,
+            Instant reservedUntil, Instant createdAt, boolean expired) {
+    }
+
+    /**
      * 转科：目标科室 + 目标床位 + 理由。
      *
      * <p>{@code bedId} 在患者当前已占床时必填：转科必须同时落到目标科室的病区床位，

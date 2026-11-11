@@ -330,6 +330,22 @@ export interface Bed {
   version: number
 }
 
+/** 床位预留（择期入院 / 转科 / 急诊留床）；patientId 为空表示机动预留。 */
+export interface BedReservationView {
+  id: string
+  bedId: string
+  bedNo: string
+  wardId: string
+  patientId: string | null
+  patientNo: string | null
+  reason: string | null
+  reservedBy: string
+  reservedUntil: string | null
+  createdAt: string
+  /** 已到期但后台任务尚未回收：界面应提示“即将释放”，不能当作可用床。 */
+  expired: boolean
+}
+
 /** 转科记录（append-only）：一次主诊科室变更。 */
 export interface VisitTransfer {
   id: string

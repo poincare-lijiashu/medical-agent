@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.AdmissionPeriodSummary;
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaRecord;
 import com.medassist.clinical.domain.ClinicalModel.AnesthesiaVital;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
+import com.medassist.clinical.domain.ClinicalModel.BedReservation;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
@@ -113,6 +114,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -2513,6 +2515,148 @@ public class ClinicalRepository {
                          WHERE id = :id AND version = :version AND status = 'OCCUPIED'
                         """)
                 .param("id", bedId).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 床位预留
+
+    private static final RowMapper<BedReservation> BED_RESERVATION_MAPPER = (rs, i) ->
+            new BedReservation(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("bed_id", UUID.class),
+                    rs.getObject("ward_id", UUID.class),
+                    rs.getObject("patient_id", UUID.class),
+                    rs.getString("patient_no"),
+                    rs.getString("reason"),
+                    rs.getString("reserved_by"),
+                    rs.getTimestamp("reserved_until") == null
+                            ? null : rs.getTimestamp("reserved_until").toInstant(),
+                    rs.getString("status"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getLong("version"));
+
+    /** 预留占床（CAS：仅 FREE → RESERVED）。 */
+    public boolean reserveBed(UUID bedId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.bed
+                           SET status = 'RESERVED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'FREE'
+                        """)
+                .param("id", bedId).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 解除预留（CAS：仅 RESERVED → FREE）；床位已被占用时不动。 */
+    public boolean freeReservedBed(UUID bedId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.bed
+                           SET status = 'FREE', version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'RESERVED'
+                        """)
+                .param("id", bedId).param("version", expectedVersion).update() > 0;
+    }
+
+    /** 用预留床位办理入院/转床（CAS：仅 RESERVED → OCCUPIED）。 */
+    public boolean occupyReservedBed(UUID bedId, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.bed
+                           SET status = 'OCCUPIED', version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = 'RESERVED'
+                        """)
+                .param("id", bedId).param("version", expectedVersion).update() > 0;
+    }
+
+    public void insertBedReservation(BedReservation r) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.bed_reservation
+                            (id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                             reserved_until, status, version)
+                        VALUES (:id, :bedId, :wardId, :patientId, :patientNo, :reason, :reservedBy,
+                                :reservedUntil, :status, 0)
+                        """)
+                .param("id", r.id()).param("bedId", r.bedId()).param("wardId", r.wardId())
+                .param("patientId", r.patientId()).param("patientNo", r.patientNo())
+                .param("reason", r.reason()).param("reservedBy", r.reservedBy())
+                .param("reservedUntil", r.reservedUntil() == null ? null
+                        : OffsetDateTime.ofInstant(r.reservedUntil(), ZoneOffset.UTC))
+                .param("status", r.status()).update();
+    }
+
+    public Optional<BedReservation> findBedReservation(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                               reserved_until, status, created_at, version
+                          FROM clinical_svc.bed_reservation WHERE id = ?
+                        """).param(id).query(BED_RESERVATION_MAPPER).optional();
+    }
+
+    /** 加行锁读取预留；必须在事务内调用。 */
+    public Optional<BedReservation> lockBedReservation(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                               reserved_until, status, created_at, version
+                          FROM clinical_svc.bed_reservation WHERE id = ? FOR UPDATE
+                        """).param(id).query(BED_RESERVATION_MAPPER).optional();
+    }
+
+    /** 某床位的有效预留（不加锁，用于展示；写路径请用加锁版本）。 */
+    public Optional<BedReservation> findActiveBedReservation(UUID bedId) {
+        return jdbc.sql("""
+                        SELECT id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                               reserved_until, status, created_at, version
+                          FROM clinical_svc.bed_reservation
+                         WHERE bed_id = ? AND status = 'ACTIVE'
+                        """).param(bedId).query(BED_RESERVATION_MAPPER).optional();
+    }
+
+    /** 某床位的有效预留（加锁）：入院/转床消费预留时用，防止与解除并发抢先。 */
+    public Optional<BedReservation> lockActiveBedReservation(UUID bedId) {
+        return jdbc.sql("""
+                        SELECT id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                               reserved_until, status, created_at, version
+                          FROM clinical_svc.bed_reservation
+                         WHERE bed_id = ? AND status = 'ACTIVE' FOR UPDATE
+                        """).param(bedId).query(BED_RESERVATION_MAPPER).optional();
+    }
+
+    public List<BedReservation> listActiveBedReservations(UUID wardId) {
+        return jdbc.sql("""
+                        SELECT id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                               reserved_until, status, created_at, version
+                          FROM clinical_svc.bed_reservation
+                         WHERE ward_id = :wardId AND status = 'ACTIVE'
+                         ORDER BY reserved_until NULLS LAST, created_at
+                        """).param("wardId", wardId).query(BED_RESERVATION_MAPPER).list();
+    }
+
+    /**
+     * 一批已到期的有效预留（后台清理的候选集，不加锁）。
+     *
+     * <p>刻意不在这里加锁：清理必须先锁床位再锁预留（与入院/转床、解除预留
+     * 的加锁顺序一致），否则两条路径反向加锁会死锁。
+     */
+    public List<BedReservation> listExpiredBedReservations(Instant now, int limit) {
+        return jdbc.sql("""
+                        SELECT id, bed_id, ward_id, patient_id, patient_no, reason, reserved_by,
+                               reserved_until, status, created_at, version
+                          FROM clinical_svc.bed_reservation
+                         WHERE status = 'ACTIVE' AND reserved_until IS NOT NULL
+                           AND reserved_until < :now
+                         ORDER BY reserved_until
+                         LIMIT :limit
+                        """)
+                .param("now", OffsetDateTime.ofInstant(now, ZoneOffset.UTC))
+                .param("limit", limit)
+                .query(BED_RESERVATION_MAPPER).list();
+    }
+
+    /** 预留状态流转（CAS）：只允许从 {@code from} 迁到 {@code to}。 */
+    public boolean updateBedReservationStatus(UUID id, String from, String to, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.bed_reservation
+                           SET status = :to, version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version AND status = :from
+                        """)
+                .param("id", id).param("version", expectedVersion)
+                .param("from", from).param("to", to).update() > 0;
     }
 
     public String nextAdmissionNo() {
