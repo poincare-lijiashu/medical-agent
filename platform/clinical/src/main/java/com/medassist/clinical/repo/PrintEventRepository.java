@@ -31,10 +31,10 @@ public class PrintEventRepository {
         jdbc.sql("""
                         INSERT INTO clinical_svc.print_event
                             (id, doc_type, doc_no, target_type, target_id, patient_no,
-                             actor, campus_id, printed_at)
+                             actor, campus_id, printed_at, reprint_seq, reason)
                         VALUES
                             (:id, :docType, :docNo, :targetType, :targetId, :patientNo,
-                             :actor, :campusId, :printedAt)
+                             :actor, :campusId, :printedAt, :reprintSeq, :reason)
                         """)
                 .param("id", e.id())
                 .param("docType", e.docType())
@@ -45,7 +45,28 @@ public class PrintEventRepository {
                 .param("actor", e.actor())
                 .param("campusId", e.campusId())
                 .param("printedAt", e.printedAt())
+                .param("reprintSeq", e.reprintSeq())
+                .param("reason", e.reason())
                 .update();
+    }
+
+    /**
+     * 该单号已有多少条留痕（第 238 批：判定本次是第几次打印）。
+     *
+     * <p>不按日期/院区过滤：补打次数是单据维度的累计事实，
+     * 换个日期查就变成“首次”会让原因登记形同虚设。
+     */
+    public long countByDoc(String docType, String docNo) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                          FROM clinical_svc.print_event
+                         WHERE doc_type = :docType
+                           AND doc_no = :docNo
+                        """)
+                .param("docType", docType)
+                .param("docNo", docNo)
+                .query(Long.class)
+                .single();
     }
 
     /** 满足条件的记录总数（分页条用）。 */
@@ -87,7 +108,7 @@ public class PrintEventRepository {
                                  int offset, int limit) {
         return jdbc.sql("""
                         SELECT id, doc_type, doc_no, target_type, target_id, patient_no,
-                               actor, campus_id, printed_at
+                               actor, campus_id, printed_at, reprint_seq, reason
                           FROM clinical_svc.print_event
                          WHERE (CAST(:docType AS text) = '' OR doc_type = CAST(:docType AS text))
                            AND (CAST(:docNo AS text) = '' OR doc_no = CAST(:docNo AS text))
@@ -120,7 +141,9 @@ public class PrintEventRepository {
                         rs.getString("patient_no"),
                         rs.getString("actor"),
                         rs.getObject("campus_id", UUID.class),
-                        rs.getObject("printed_at", OffsetDateTime.class)))
+                        rs.getObject("printed_at", OffsetDateTime.class),
+                        rs.getInt("reprint_seq"),
+                        rs.getString("reason")))
                 .list();
     }
 
@@ -142,6 +165,7 @@ public class PrintEventRepository {
                                max(patient_no) AS patient_no,
                                count(*) AS prints,
                                count(DISTINCT actor) AS actors,
+                               count(*) FILTER (WHERE reason IS NULL OR reason = '') AS unexplained,
                                min(printed_at) AS first_at,
                                max(printed_at) AS last_at
                           FROM clinical_svc.print_event
@@ -167,6 +191,7 @@ public class PrintEventRepository {
                         rs.getString("patient_no"),
                         rs.getLong("prints"),
                         rs.getLong("actors"),
+                        rs.getLong("unexplained"),
                         rs.getObject("first_at", OffsetDateTime.class),
                         rs.getObject("last_at", OffsetDateTime.class)))
                 .list();

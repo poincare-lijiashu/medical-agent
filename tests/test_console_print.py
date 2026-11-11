@@ -85,7 +85,7 @@ def test_views_print_through_channel():
 
 def test_print_audit_is_silent_and_centralized():
     text = (SRC / "utils" / "printAudit.ts").read_text(encoding="utf-8")
-    assert "post('/clinical/print-events'" in text, "打印留痕必须走 Java /clinical/print-events"
+    assert "/clinical/print-events" in text and "post<" in text, "打印留痕必须走 Java /clinical/print-events"
     assert ".catch(" in text, "留痕失败必须静默，不能把已完成的打印变成报错"
     assert "toast" not in text, "打印留痕工具不得耦合 toast（失败不提示用户）"
     # 单据类型集中定义，禁止各页面各写一套大小写口径
@@ -145,3 +145,74 @@ def test_print_history_page_wired():
     nav = (SRC / "navigation.ts").read_text(encoding="utf-8")
     assert "name: 'print-history'" in nav and "path: '/print-events'" in nav, "打印留痕未进导航"
     assert "clinical:print:read" in nav, "打印留痕导航必须用 clinical:print:read 收敛"
+
+
+# ---------------------------------------------------------------- 第 238 批：补打原因
+
+JAVA_CLINICAL = REPO / "platform" / "clinical" / "src" / "main"
+JAVA_COMMON = REPO / "platform" / "common" / "src" / "main"
+
+
+def _read(path: Path) -> str:
+    assert path.exists(), f"缺少文件：{path}"
+    return path.read_text(encoding="utf-8")
+
+
+def test_print_reason_schema_and_server_enforcement():
+    """补打原因必须落库并由服务端判定，否则前端换个日期就绕过了。"""
+    migration = JAVA_CLINICAL / "resources" / "db" / "migration" / "clinical" / "V61__print_reason.sql"
+    sql = _read(migration)
+    assert "reprint_seq" in sql and "reason" in sql, "V61 必须补次序与原因两列"
+
+    service = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "service" / "PrintEventService.java"
+    )
+    assert "countByDoc(" in service, "补打判定必须基于该单号的历史留痕"
+    assert "PRINT_REASON_REQUIRED" in service, "补打未登记原因必须由服务端拒绝"
+    # 首次打印不得要求原因，否则会把正常开单也变成“填个理由”
+    assert "prior > 0" in service, "只有第 2 次及以后才要求补打原因"
+
+    codes = _read(JAVA_COMMON / "java" / "com" / "medassist" / "common" / "api" / "ErrorCode.java")
+    assert "PRINT_REASON_REQUIRED(45440" in codes, "补打原因必须使用稳定业务码 45440"
+
+    handler = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "web" / "GlobalExceptionHandler.java"
+    )
+    assert "PRINT_REASON_REQUIRED" in handler, "新业务码必须在异常映射里显式落 422"
+
+
+def test_print_audit_prompts_reason_and_retries_once():
+    """前端只弹一次原因并重发，绝不进入无限弹窗或把已出纸的打印变成报错。"""
+    text = (SRC / "utils" / "printAudit.ts").read_text(encoding="utf-8")
+    assert "45440" in text, "上报工具必须按业务码识别“补打需原因”"
+    assert "askReprintReason(" in text, "补打被拒时必须弹出原因选择"
+    assert "send({ ...input, reason }, false)" in text, "补打原因必须重发且只重试一次"
+    assert "REASON_REUSE_MS" in text, "整区批量补打不得逐单弹窗（同类型短窗口内复用原因）"
+
+    prompt = (SRC / "utils" / "reprintReason.ts").read_text(encoding="utf-8")
+    assert "REPRINT_REASONS" in prompt, "原因必须给预设选项（护士站没人手打整句）"
+    assert "未说明" in prompt, "必须保留“未说明”出口，否则会逼出假原因"
+    assert "queue" in prompt, "批量打印会并发触发，原因弹窗必须排队而不是叠层"
+
+    dialog = SRC / "components" / "ui" / "ReprintReasonDialog.vue"
+    text_dialog = _read(dialog)
+    assert ":dismissible=\"false\"" in text_dialog, "原因弹窗不可关闭（关闭等于丢弃这次留痕）"
+    assert "answerReprintReason(" in text_dialog, "弹窗确认必须回交原因并继续下一条"
+
+    app = (SRC / "App.vue").read_text(encoding="utf-8")
+    assert "ReprintReasonDialog" in app, "全局原因弹窗必须挂载一次，而不是每个打印页各挂一份"
+
+
+def test_print_history_shows_reason_and_unexplained():
+    """质控要能区分“合理补打”和“没说明的补打”，否则补打原因白记。"""
+    view = (SRC / "views" / "PrintHistoryView.vue").read_text(encoding="utf-8")
+    assert "reasonText(" in view, "留痕列表必须展示补打原因"
+    assert "未说明" in view, "无原因的补打必须显式写“未说明”，不能留白"
+    assert "次序" in view, "留痕列表必须展示第几次打印"
+    assert "unexplained" in view, "异常区必须单列“未说明”次数"
+    assert "补打原因" in view, "CSV 导出必须包含补打原因列"
+
+    types = (SRC / "api" / "types.ts").read_text(encoding="utf-8")
+    assert "reprintSeq: number" in types and "reason: string | null" in types, "留痕类型缺少次序/原因"
+    assert "unexplained: number" in types, "异常类型缺少未说明次数"
+

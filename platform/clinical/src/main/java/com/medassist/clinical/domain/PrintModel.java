@@ -16,9 +16,17 @@ public final class PrintModel {
     private PrintModel() {
     }
 
+    /**
+     * 一条打印留痕（第 238 批增补次序与原因）。
+     *
+     * <p>{@code reprintSeq} 是同一单号的第几次打印（1 = 首次），由服务端在入库时判定；
+     * {@code reason} 只在补打时强制，首次为空。历史行（V61 之前）同样为空，
+     * 报表按“未说明”统计——不能让没有原因的补打被当成已解释。
+     */
     public record PrintEvent(UUID id, String docType, String docNo,
                              String targetType, UUID targetId, String patientNo,
-                             String actor, UUID campusId, OffsetDateTime printedAt) {
+                             String actor, UUID campusId, OffsetDateTime printedAt,
+                             int reprintSeq, String reason) {
     }
 
     /**
@@ -37,8 +45,13 @@ public final class PrintModel {
      *
      * <p>为什么按单号聚合而不是按人：质控关心的是“这张单到底出了几张纸”，
      * 换人补打同样算重复出单；`actors` 只作为排查线索，不影响是否计入异常。
+     *
+     * <p>第 238 批追加 {@code unexplained}：其中没有登记原因的补打次数。
+     * 有原因的是“可解释补打”（卡纸/遗失），没有原因的是真正需要追问的部分，
+     * 两者混在一个次数里，质控仍要逐条点开才能判断。
      */
     public record PrintAnomaly(String docType, String docNo, String patientNo, long prints,
-                               long actors, OffsetDateTime firstAt, OffsetDateTime lastAt) {
+                               long actors, long unexplained,
+                               OffsetDateTime firstAt, OffsetDateTime lastAt) {
     }
 }

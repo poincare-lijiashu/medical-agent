@@ -3,7 +3,7 @@
      403 是权限边界而不是故障：显示权限受限态，不提供重试、不渲染任何流水。 -->
 <template>
   <div class="page">
-    <PageHeader title="打印留痕" sub="票据 / 同意书 / 处方笺 / 输液卡 / 费用汇总单 / 腕带 · 按单号核查补打 · 按院区收敛">
+    <PageHeader title="打印留痕" sub="票据 / 同意书 / 处方笺 / 输液卡 / 费用汇总单 / 腕带 · 按单号核查补打 · 按院区收敛 · 补打须登记原因">
       <template #actions>
         <button class="btn" type="button" :disabled="exporting || loading" @click="exportCsvByFilter">
           <AppIcon name="download" :size="15" /> {{ exporting ? '正在导出…' : '导出 CSV' }}
@@ -77,6 +77,8 @@
               <th>打印时间</th>
               <th>单据类型</th>
               <th>单据号</th>
+              <th class="is-num">次序</th>
+              <th>补打原因</th>
               <th>患者病案号</th>
               <th>关联对象</th>
               <th>打印人</th>
@@ -87,6 +89,10 @@
               <td data-primary class="mono">{{ dateTime(e.printedAt) }}</td>
               <td data-label="单据类型">{{ docTypeLabel(e.docType) }}</td>
               <td data-label="单据号" class="mono">{{ e.docNo }}</td>
+              <td data-label="次序" class="is-num">{{ e.reprintSeq }}</td>
+              <td data-label="补打原因" :class="{ 'is-missing': !e.reason && e.reprintSeq > 1 }">
+                {{ reasonText(e) }}
+              </td>
               <td data-label="患者病案号" class="mono">{{ e.patientNo || '—' }}</td>
               <td data-label="关联对象" class="mono">
                 {{ e.targetType || '—' }}{{ e.targetId ? ` · ${shortId(e.targetId)}` : '' }}
@@ -111,7 +117,7 @@
       <section class="anomaly">
         <div class="anomaly-head">
           <h3 class="anomaly-title">补打异常</h3>
-          <span class="muted small">同一单号在当前日期区间内打印次数达到阈值；换人补打同样计入</span>
+          <span class="muted small">同一单号在当前日期区间内打印次数达到阈值；换人补打同样计入，「未说明」为其中未登记原因的补打</span>
           <span class="spacer" />
           <label class="field anomaly-threshold">
             <span class="label">阈值</span>
@@ -147,6 +153,7 @@
                 <th>患者病案号</th>
                 <th class="is-num">打印次数</th>
                 <th class="is-num">打印人数</th>
+                <th class="is-num">未说明</th>
                 <th>最近一次</th>
                 <th></th>
               </tr>
@@ -158,6 +165,9 @@
                 <td data-label="患者病案号" class="mono">{{ a.patientNo || '—' }}</td>
                 <td data-label="打印次数" class="is-num is-strong">{{ a.prints }}</td>
                 <td data-label="打印人数" class="is-num">{{ a.actors }}</td>
+                <td data-label="未说明" class="is-num" :class="{ 'is-missing': a.unexplained > 0 }">
+                  {{ a.unexplained }}
+                </td>
                 <td data-label="最近一次" class="mono">{{ dateTime(a.lastAt) }}</td>
                 <td class="anomaly-action">
                   <button class="btn btn--sm" type="button" @click="focusDoc(a)">查看流水</button>
@@ -229,6 +239,16 @@ function filterParams() {
 
 function docTypeLabel(value: string): string {
   return DOC_TYPE_OPTIONS.find((o) => o.value === value)?.label ?? value
+}
+
+/**
+ * 补打原因展示：首次打印本来就不需要原因，显示“—”。
+ * 第 2 次及以后仍为空，说明当时没登记（历史数据或用户选了“未说明”以外的异常情况），
+ * 明确写“未说明”而不是留白——质控扫一眼就能看出哪几行需要追问。
+ */
+function reasonText(e: PrintEvent): string {
+  if (e.reason) return e.reason
+  return e.reprintSeq > 1 ? '未说明' : '—'
 }
 
 function shortId(value: string): string {
@@ -322,7 +342,7 @@ async function exportCsvByFilter() {
   exporting.value = true
   try {
     const rows: (string | number | null)[][] = [
-      ['打印时间', '单据类型', '单据号', '患者病案号', '关联对象', '打印人'],
+      ['打印时间', '单据类型', '单据号', '次序', '补打原因', '患者病案号', '关联对象', '打印人'],
     ]
     let pageOffset = 0
     let fetched = 0
@@ -339,6 +359,8 @@ async function exportCsvByFilter() {
           dateTime(e.printedAt),
           docTypeLabel(e.docType),
           e.docNo,
+          e.reprintSeq,
+          reasonText(e),
           e.patientNo ?? '',
           e.targetType ? `${e.targetType}${e.targetId ? ` · ${e.targetId}` : ''}` : '',
           e.actor,
@@ -431,6 +453,12 @@ onMounted(() => {
 
 .anomaly-action {
   text-align: right;
+}
+
+/* 未登记原因的补打：不是错误，但需要质控追问，用警示色而非红/绿色 */
+.is-missing {
+  color: var(--warning-ink);
+  font-weight: 600;
 }
 
 .f-query {

@@ -614,6 +614,10 @@ export interface PrintEvent {
   actor: string
   campusId: string | null
   printedAt: string
+  /** 该单号第几次打印（1 = 首次）；≥2 为补打，服务端强制要求 reason。 */
+  reprintSeq: number
+  /** 补打原因；首次打印与历史数据为空。 */
+  reason: string | null
 }
 
 /** 打印留痕分页结果：total 为满足条件的总条数（跨页不变）。 */
@@ -631,6 +635,8 @@ export interface PrintAnomaly {
   patientNo: string | null
   prints: number
   actors: number
+  /** 其中没有登记原因的补打次数（真正需要追问的部分）。 */
+  unexplained: number
   firstAt: string
   lastAt: string
 }

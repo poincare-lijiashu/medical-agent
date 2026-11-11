@@ -25,6 +25,11 @@ import java.util.UUID;
  *   <li>{@code docNo} 是打印件上的业务号，与 {@code targetId} 分开存：
  *       补打历史按单号查（用户手上的单子只有号），排障按主键查。</li>
  * </ul>
+ *
+ * <p>第 238 批补打原因：同一单号第 2 次及以后打印必须登记原因。
+ * 判定放在服务端（{@code countByDoc}）而不是前端，是因为前端只能看到当前页，
+ * 换个日期区间或换个人登录就"看不见历史"，原因约束会被绕过。
+ * 首次打印不要求原因——首次不存在"为什么又打一张"。
  */
 @Service
 public class PrintEventService {
@@ -33,6 +38,7 @@ public class PrintEventService {
     private static final int MAX_DOC_NO = 64;
     private static final int MAX_TARGET_TYPE = 32;
     private static final int MAX_PATIENT_NO = 32;
+    private static final int MAX_REASON = 64;
     private static final int DEFAULT_LIMIT = 50;
     /** 单页上限：与前端“最近 200 条”对齐，防止一次拉全表。 */
     private static final int MAX_LIMIT = 200;
@@ -43,17 +49,23 @@ public class PrintEventService {
         this.repo = repo;
     }
 
-    /** 记录一次打印；返回落库后的记录（含打印时间）。 */
+    /** 记录一次打印；返回落库后的记录（含打印时间、第几次、补打原因）。 */
     public PrintEvent record(String docType, String docNo, String targetType, UUID targetId,
-                             String patientNo, String actor, UUID campusId) {
+                             String patientNo, String reason, String actor, UUID campusId) {
         String type = requireText(docType, "单据类型", MAX_DOC_TYPE);
         String no = requireText(docNo, "单据号", MAX_DOC_NO);
         String target = optionalText(targetType, MAX_TARGET_TYPE);
         String patient = optionalText(patientNo, MAX_PATIENT_NO);
+        String why = optionalText(reason, MAX_REASON);
         String who = optionalText(actor, 64);
+        long prior = repo.countByDoc(type, no);
+        if (prior > 0 && why == null) {
+            throw new BusinessException(ErrorCode.PRINT_REASON_REQUIRED,
+                    "该单据已打印 " + prior + " 次，第 " + (prior + 1) + " 次补打必须登记原因");
+        }
         PrintEvent event = new PrintEvent(UUID.randomUUID(), type, no, target, targetId,
                 patient, who == null || who.isBlank() ? "system" : who, campusId,
-                OffsetDateTime.now());
+                OffsetDateTime.now(), (int) prior + 1, why);
         repo.insert(event);
         return event;
     }

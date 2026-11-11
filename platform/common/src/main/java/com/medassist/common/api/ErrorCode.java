@@ -219,6 +219,10 @@ public enum ErrorCode {
     CHARGE_RECEIPT_VOID_REASON_REQUIRED(45423, "作废票据必须填写原因"),
     CHARGE_RECEIPT_CHARGE_NOT_PAID(45424, "只有已结算的收费单才能开票"),
 
+    // ---- 单据打印留痕（45xxx 续，第 238 批）----
+    /** 补打拦截：同一单号第 2 次及以后打印必须登记原因，前端据此弹出原因选择。 */
+    PRINT_REASON_REQUIRED(45440, "该单据已打印过，补打必须登记原因"),
+
     // ---- 药房（43xxx）----
     DRUG_STOCK_INSUFFICIENT(43401, "药品库存不足"),
     DRUG_BATCH_EXPIRED(43402, "所选批次已过期，禁止发药"),

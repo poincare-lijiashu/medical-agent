@@ -1,11 +1,13 @@
 <template>
   <RouterView />
   <ToastHost />
+  <ReprintReasonDialog />
 </template>
 
 <script setup lang="ts">
 import { watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import ReprintReasonDialog from '@/components/ui/ReprintReasonDialog.vue'
 import ToastHost from '@/components/ui/ToastHost.vue'
 import { session } from '@/stores/session'
 

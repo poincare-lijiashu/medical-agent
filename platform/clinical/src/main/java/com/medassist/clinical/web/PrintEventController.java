@@ -48,7 +48,7 @@ public class PrintEventController {
         this.service = service;
     }
 
-    /** 记录一次打印（前端在打印窗口成功打开后上报；失败由前端静默忽略）。 */
+    /** 记录一次打印（前端在打印窗口成功打开后上报；补打未填原因时返回 422 由前端补问）。 */
     @PostMapping
     public ApiResponse<PrintEvent> record(
             @Valid @RequestBody RecordPrintReq req,
@@ -57,7 +57,7 @@ public class PrintEventController {
             DataScope scope) {
         Permissions.require(permissions, RECORD);
         return ApiResponse.ok(service.record(req.docType(), req.docNo(), req.targetType(),
-                req.targetId(), req.patientNo(), actor, campusOf(scope)));
+                req.targetId(), req.patientNo(), req.reason(), actor, campusOf(scope)));
     }
 
     /** 打印历史（分页）：条件全空返回最近流水；按院区收敛；支持日期区间核查。 */
@@ -98,12 +98,19 @@ public class PrintEventController {
         return campuses != null && campuses.size() == 1 ? campuses.iterator().next() : null;
     }
 
-    /** 打印上报请求：字段长度上限与库表一致，超长在入口即拒绝。 */
+    /**
+     * 打印上报请求：字段长度上限与库表一致，超长在入口即拒绝。
+     *
+     * <p>第 238 批追加 {@code reason}：第 2 次及以后打印必填，由服务端校验；
+     * 理由不写成枚举——院内口径会变（新增"自助机重打"等），
+     * 前端给预设选项，服务端只约束长度与"补打必须有值"。
+     */
     public record RecordPrintReq(
             @Size(max = 32) String docType,
             @Size(max = 64) String docNo,
             @Size(max = 32) String targetType,
             UUID targetId,
-            @Size(max = 32) String patientNo) {
+            @Size(max = 32) String patientNo,
+            @Size(max = 64) String reason) {
     }
 }

@@ -18,7 +18,14 @@
               <h2 class="modal-title">{{ title }}</h2>
               <p v-if="subtitle" class="modal-sub">{{ subtitle }}</p>
             </div>
-            <button class="btn btn--ghost btn--icon" type="button" aria-label="关闭" @click="close">
+            <!-- 不可关闭时禁用而不是隐藏：位置稳定，也避免用户以为点了没反应 -->
+            <button
+              class="btn btn--ghost btn--icon"
+              type="button"
+              aria-label="关闭"
+              :disabled="!dismissible"
+              @click="close"
+            >
               <AppIcon name="x" :size="16" />
             </button>
           </div>
