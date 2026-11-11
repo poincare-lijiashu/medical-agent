@@ -3,6 +3,7 @@ package com.medassist.clinical.service;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Handover;
+import com.medassist.clinical.domain.ClinicalModel.HandoverBrief;
 import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -28,6 +29,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -182,6 +184,66 @@ class HandoverServiceTest {
                 .hasMessageContaining("DAY / EVENING / NIGHT")
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.VALIDATION_FAILED);
+    }
+
+    @Test
+    @DisplayName("交班历史：limit 缺省 10、上限 50、下限 1，摘要带人数与备注人数")
+    void historyClampsLimit() {
+        HandoverBrief brief = new HandoverBrief(UUID.randomUUID(), wardId, today, "NIGHT",
+                Handover.SIGNED, "nurse00", "nurse01", Instant.now(), 8, 5);
+        when(repo.listHandovers(eq(wardId), anyInt())).thenReturn(List.of(brief));
+
+        var rows = service.history(wardId, null);
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).shiftCode()).isEqualTo("NIGHT");
+        assertThat(rows.get(0).patientCount()).isEqualTo(8);
+        assertThat(rows.get(0).notedCount()).isEqualTo(5);
+        verify(repo).listHandovers(wardId, 10);
+
+        service.history(wardId, 999);
+        verify(repo).listHandovers(wardId, 50);
+        service.history(wardId, 0);
+        verify(repo).listHandovers(wardId, 1);
+    }
+
+    @Test
+    @DisplayName("交班状态：只算有在院患者或已建交班的病区，未签字排在已签字前")
+    void statusCountsOnlyActiveOrSavedWards() {
+        Ward wardA = new Ward(UUID.randomUUID(), "W02", "A病区", ward.deptId(), true);
+        Ward wardC = new Ward(UUID.randomUUID(), "W03", "C病区", ward.deptId(), true);
+        Ward wardD = new Ward(UUID.randomUUID(), "W04", "D病区", ward.deptId(), true);
+        when(repo.listWardsWithActiveAdmissions(any()))
+                .thenReturn(Set.of(wardId, wardA.id(), wardC.id()));
+        when(repo.listHandoversByWards(any(), eq(today), eq("DAY"))).thenReturn(List.of(
+                new HandoverBrief(UUID.randomUUID(), wardId, today, "DAY", Handover.SIGNED,
+                        "nurse00", "nurse01", Instant.now(), 6, 4),
+                new HandoverBrief(UUID.randomUUID(), wardA.id(), today, "DAY", Handover.DRAFT,
+                        "nurse00", null, null, 3, 1)));
+
+        var summary = service.status(List.of(ward, wardA, wardC, wardD), today, "DAY");
+
+        assertThat(summary.wards()).isEqualTo(3);
+        assertThat(summary.signedWards()).isEqualTo(1);
+        assertThat(summary.pendingWards()).isEqualTo(2);
+        assertThat(summary.details()).extracting(d -> d.wardName())
+                .containsExactly("A病区", "C病区", "内科一病区");
+        assertThat(summary.details().get(0).status()).isEqualTo(Handover.DRAFT);
+        assertThat(summary.details().get(1).status()).isEqualTo(HandoverService.STATUS_MISSING);
+        assertThat(summary.details().get(2).signedBy()).isEqualTo("nurse01");
+    }
+
+    @Test
+    @DisplayName("交班状态：没有可见病区时返回零值而不是报错；空病区不撑大分母")
+    void statusEmptyScope() {
+        var empty = service.status(List.of(), today, "NIGHT");
+        assertThat(empty.wards()).isZero();
+        assertThat(empty.details()).isEmpty();
+        assertThat(empty.shiftCode()).isEqualTo("NIGHT");
+
+        when(repo.listWardsWithActiveAdmissions(any())).thenReturn(Set.of());
+        when(repo.listHandoversByWards(any(), eq(today), eq("NIGHT"))).thenReturn(List.of());
+        var idle = service.status(List.of(ward), today, "NIGHT");
+        assertThat(idle.wards()).isZero();
     }
 
     // ---------------------------------------------------------------- 构造

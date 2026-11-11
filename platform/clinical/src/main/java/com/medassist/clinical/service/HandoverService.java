@@ -3,13 +3,17 @@ package com.medassist.clinical.service;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Handover;
+import com.medassist.clinical.domain.ClinicalModel.HandoverBrief;
 import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalDtos.HandoverBriefView;
 import com.medassist.clinical.web.ClinicalDtos.HandoverItemReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverItemView;
 import com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq;
+import com.medassist.clinical.web.ClinicalDtos.HandoverStatusSummary;
 import com.medassist.clinical.web.ClinicalDtos.HandoverView;
+import com.medassist.clinical.web.ClinicalDtos.WardHandoverStatus;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.time.BusinessTime;
@@ -22,6 +26,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,6 +53,13 @@ public class HandoverService {
 
     /** 今日计划出院（交班清单专用提示项；出院预检本身不产生该码）。 */
     public static final String CODE_PLANNED_TODAY = "PLANNED_DISCHARGE_TODAY";
+
+    /** 状态汇总里表示“该班次尚未创建交班报告”。 */
+    public static final String STATUS_MISSING = "MISSING";
+
+    /** 历史列表默认与上限：护士站回看通常只看最近一两天的班次。 */
+    private static final int HISTORY_DEFAULT = 10;
+    private static final int HISTORY_MAX = 50;
 
     private final ClinicalRepository repo;
     private final ObjectMapper objectMapper;
@@ -151,7 +163,71 @@ public class HandoverService {
         return view(wardId, date, shift);
     }
 
+    /**
+     * 某病区最近若干个班次（交班历史）。
+     *
+     * <p>只回摘要：打开某一班次时才拉逐患者明细，避免“看一眼历史”就把几百条明细搬到前端。
+     * 与 {@link #view} 一致要求病区存在且启用，防止停用病区的历史被继续查阅。
+     *
+     * @param limit 缺省 10，最大 50（负数/0 按 1 处理）
+     */
+    public List<HandoverBriefView> history(UUID wardId, Integer limit) {
+        requireWard(wardId);
+        int n = limit == null ? HISTORY_DEFAULT : Math.max(1, Math.min(limit, HISTORY_MAX));
+        return repo.listHandovers(wardId, n).stream()
+                .map(HandoverService::toBriefView)
+                .toList();
+    }
+
+    /**
+     * 某日某班次的交班状态汇总（驾驶舱 / 待办角标，只读）。
+     *
+     * <p>分母口径：当前可见病区中“有在院患者”或“该班次已有交班记录”的病区。
+     * 空病区若还没写交班，不计入分母——否则全院空病区会让角标永远是未完成。
+     */
+    public HandoverStatusSummary status(List<Ward> wards, LocalDate shiftDate, String shiftCode) {
+        LocalDate date = shiftDate == null ? BusinessTime.today() : shiftDate;
+        String shift = normalizeShift(shiftCode);
+        if (wards == null || wards.isEmpty()) {
+            return new HandoverStatusSummary(date, shift, 0, 0, 0, List.of());
+        }
+        List<UUID> wardIds = wards.stream().map(Ward::id).toList();
+        Set<UUID> active = repo.listWardsWithActiveAdmissions(wardIds);
+        Map<UUID, HandoverBrief> saved = new HashMap<>();
+        for (HandoverBrief brief : repo.listHandoversByWards(wardIds, date, shift)) {
+            saved.put(brief.wardId(), brief);
+        }
+
+        List<WardHandoverStatus> rows = new ArrayList<>(wards.size());
+        int signed = 0;
+        for (Ward ward : wards) {
+            HandoverBrief brief = saved.get(ward.id());
+            if (brief == null && !active.contains(ward.id())) {
+                continue;
+            }
+            boolean isSigned = brief != null && Handover.SIGNED.equals(brief.status());
+            if (isSigned) {
+                signed++;
+            }
+            rows.add(new WardHandoverStatus(ward.id(), ward.name(),
+                    brief == null ? STATUS_MISSING : brief.status(),
+                    brief == null ? null : brief.signedBy(),
+                    brief == null ? null : brief.signedAt(),
+                    brief == null ? 0 : brief.patientCount()));
+        }
+        // 未交班/草稿排前面（要处理的事优先），同组按病区名
+        rows.sort(Comparator.comparing((WardHandoverStatus s) -> Handover.SIGNED.equals(s.status()))
+                .thenComparing(WardHandoverStatus::wardName));
+        return new HandoverStatusSummary(date, shift, rows.size(), signed,
+                rows.size() - signed, List.copyOf(rows));
+    }
+
     // ---------------------------------------------------------------- 内部
+
+    private static HandoverBriefView toBriefView(HandoverBrief b) {
+        return new HandoverBriefView(b.id(), b.shiftDate(), b.shiftCode(), b.status(),
+                b.createdBy(), b.signedBy(), b.signedAt(), b.patientCount(), b.notedCount());
+    }
 
     private List<HandoverItemView> liveItems(UUID wardId, LocalDate today,
                                              Map<UUID, String> notes) {

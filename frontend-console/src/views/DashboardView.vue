@@ -386,6 +386,15 @@
             今日预出院 {{ dischargeReadiness.plannedToday }} 人
           </span>
         </template>
+        <RouterLink
+          v-if="handoverStatus && handoverStatus.wards > 0"
+          class="badge"
+          :class="handoverStatus.pendingWards > 0 ? 'badge--warn' : 'badge--ok'"
+          to="/handover"
+          :title="`今日${handoverShiftLabel}有 ${handoverStatus.wards} 个病区需交班，已签字 ${handoverStatus.signedWards} 个；点击进入交班报告`"
+        >
+          今日{{ handoverShiftLabel }}交班 {{ handoverStatus.signedWards }}/{{ handoverStatus.wards }} 病区
+        </RouterLink>
         <span class="spacer" />
         <RouterLink
           v-if="dischargeReadiness"
@@ -530,6 +539,7 @@ import { errorText } from '@/api/http'
 import type {
   CodingSummary,
   DischargeReadinessSummary,
+  HandoverStatusSummary,
   DispenseTrendView,
   InpatientTrendView,
   IssueTrendView,
@@ -573,6 +583,12 @@ interface WardRow {
 const wardRows = ref<WardRow[]>([])
 /** 第 249 批：出院协调（与出院门禁同口径）；无权限时保持 null，整块不渲染。 */
 const dischargeReadiness = ref<DischargeReadinessSummary | null>(null)
+/** 第 255 批：今日交班状态（只算有患者或已建交班的病区）；失败只隐藏角标。 */
+const handoverStatus = ref<HandoverStatusSummary | null>(null)
+const SHIFT_LABELS: Record<string, string> = { DAY: '白班', EVENING: '中班', NIGHT: '夜班' }
+const handoverShiftLabel = computed(
+  () => SHIFT_LABELS[handoverStatus.value?.shiftCode ?? 'DAY'] ?? '班次',
+)
 
 const sectionError = reactive<Record<string, string>>({})
 
@@ -1092,10 +1108,14 @@ async function loadInpatient() {
     // 第 188 批：一次拿汇总。此前对每个病区各拉 beds + admissions（243 个病区 ≈ 486 个请求），
     // 必然触发网关限流（429），「住院床位」整块降级为空态。
     // 第 249 批：并行取“出院受阻”汇总（两条计数 SQL），失败只隐藏这一角标，不影响床位表。
-    const [summary, readiness] = await Promise.all([
+    // 第 255 批：再并行取“今日交班”状态；同样失败只隐藏角标。
+    const [summary, readiness, handover] = await Promise.all([
       clinicalApi.wardSummary(),
       hasPermission('inpatient:read')
         ? clinicalApi.dischargeReadinessSummary().catch(() => null)
+        : Promise.resolve(null),
+      hasPermission('inpatient:read')
+        ? clinicalApi.handoverStatus().catch(() => null)
         : Promise.resolve(null),
     ])
     wardRows.value = summary.map((w) => ({
@@ -1107,9 +1127,11 @@ async function loadInpatient() {
       occupiedBeds: w.occupiedBeds,
     }))
     dischargeReadiness.value = readiness
+    handoverStatus.value = handover
   } catch (e) {
     wardRows.value = []
     dischargeReadiness.value = null
+    handoverStatus.value = null
     sectionError.inpatient = `住院床位加载失败：${errorText(e)}`
   }
 }

@@ -718,6 +718,17 @@ public final class ClinicalModel {
     }
 
     /**
+     * 交班历史摘要（列表用）：不含逐患者明细，只给班次状态与人数。
+     *
+     * @param patientCount 该班次交接的患者数（空病区为 0）
+     * @param notedCount   其中写了逐人备注的人数（交班质量的最简指标）
+     */
+    public record HandoverBrief(UUID id, UUID wardId, LocalDate shiftDate, String shiftCode,
+                                String status, String createdBy, String signedBy, Instant signedAt,
+                                int patientCount, int notedCount) {
+    }
+
+    /**
      * 住院登记。
      *
      * @param plannedDischargeDate 预计出院日（业务日期，仅用于床位计划与超期预警，不阻断出院）

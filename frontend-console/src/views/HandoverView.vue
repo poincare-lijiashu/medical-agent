@@ -72,6 +72,68 @@
     </template>
 
     <template v-else-if="data">
+      <div class="card history">
+        <div class="card-head">
+          <span class="card-title">最近班次</span>
+          <span class="spacer" />
+          <span v-if="historyErr" class="hint hint--warn">{{ historyErr }}</span>
+          <span v-else class="hint">点击任一班次回看当时的交班快照</span>
+        </div>
+        <p v-if="historyLoading && history.length === 0" class="hint">加载中…</p>
+        <p v-else-if="history.length === 0" class="hint">该病区还没有历史交班记录。</p>
+        <div v-else class="table-wrap history-wrap">
+          <table class="table table--compact">
+            <thead>
+              <tr>
+                <th style="width: 120px">交班日</th>
+                <th style="width: 80px">班次</th>
+                <th style="width: 150px">状态</th>
+                <th style="width: 130px">交接人数</th>
+                <th style="width: 150px">签字人</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              <tr
+                v-for="h in history"
+                :key="h.id"
+                :class="{ 'row--current': isCurrent(h) }"
+              >
+                <td class="mono">{{ h.shiftDate }}</td>
+                <td>{{ shiftLabel(h.shiftCode) }}</td>
+                <td>
+                  <span
+                    class="badge"
+                    :class="h.status === 'SIGNED' ? 'badge--ok' : 'badge--warn'"
+                  >
+                    {{ h.status === 'SIGNED' ? '已签字' : '草稿' }}
+                  </span>
+                </td>
+                <td>
+                  {{ h.patientCount }} 人
+                  <span v-if="h.notedCount > 0" class="muted small">（{{ h.notedCount }} 人有备注）</span>
+                </td>
+                <td>
+                  <span v-if="h.signedBy">{{ h.signedBy }}</span>
+                  <span v-else class="muted">—</span>
+                </td>
+                <td class="is-num">
+                  <button
+                    v-if="!isCurrent(h)"
+                    class="btn btn--sm"
+                    type="button"
+                    @click="openBrief(h)"
+                  >
+                    打开
+                  </button>
+                  <span v-else class="muted small">当前</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div v-if="!data.editable" class="card signed-banner">
         <AppIcon name="check" :size="15" />
         <strong>该班次交班已签字</strong>
@@ -223,7 +285,7 @@ import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { clinicalApi } from '@/api'
 import { errorText } from '@/api/http'
-import type { HandoverSaveBody, HandoverView, Ward } from '@/api/types'
+import type { HandoverBrief, HandoverSaveBody, HandoverView, Ward } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { checkCodeLabel } from '@/utils/clinicalLabels'
@@ -259,6 +321,10 @@ const discardOpen = ref(false)
 const pendingReload = ref<null | (() => void)>(null)
 const note = ref('')
 const itemNotes = reactive<Record<string, string>>({})
+/** 最近班次：只存摘要，点开时再拉明细。 */
+const history = ref<HandoverBrief[]>([])
+const historyLoading = ref(false)
+const historyErr = ref('')
 /** 载入时的备注快照：用于判断是否有未保存修改。 */
 let baseline = ''
 /** 当前已加载的查询条件：放弃修改时用于回滚控件值。 */
@@ -337,6 +403,41 @@ async function reload() {
   await loadHandover()
 }
 
+/** 最近班次摘要。失败只影响这一块，不遮挡当前班次的编辑。 */
+async function loadHistory() {
+  if (!wardId.value) return
+  historyLoading.value = true
+  historyErr.value = ''
+  try {
+    history.value = await clinicalApi.handoverHistory(wardId.value, 10)
+  } catch (e) {
+    history.value = []
+    historyErr.value = `历史班次加载失败：${errorText(e)}`
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+/** 当前已加载的班次（未保存修改时控件值可能已偏离，故按 loaded* 判断）。 */
+function isCurrent(b: HandoverBrief): boolean {
+  return b.shiftDate === loadedShiftDate && b.shiftCode === loadedShift
+}
+
+/** 打开历史班次：有未保存修改时先确认，避免覆盖正在写的备注。 */
+function openBrief(b: HandoverBrief) {
+  const action = () => {
+    shiftDate.value = b.shiftDate
+    shift.value = b.shiftCode
+    void loadHandover()
+  }
+  if (!dirty.value) {
+    action()
+    return
+  }
+  pendingReload.value = action
+  discardOpen.value = true
+}
+
 /** 切换前若有未保存修改，先确认；避免值班护士辛苦写的备注被无声覆盖。 */
 function onSelectChange() {
   if (!dirty.value) {
@@ -395,6 +496,7 @@ async function saveDraft() {
   saving.value = true
   try {
     applyLoaded(await clinicalApi.saveHandover(wardId.value, payload()))
+    void loadHistory()
     toast.ok('交班草稿已保存', '接班者可继续补充；签字后才会冻结')
   } catch (e) {
     toast.error('保存交班草稿失败', errorText(e))
@@ -408,6 +510,7 @@ async function sign() {
   signing.value = true
   try {
     applyLoaded(await clinicalApi.signHandover(wardId.value, payload()))
+    void loadHistory()
     signOpen.value = false
     toast.ok('交班已签字', `${shiftDate.value} ${shiftLabel(shift.value)} · 内容已冻结`)
   } catch (e) {
@@ -476,6 +579,11 @@ watch(() => route.query.ward, (next) => {
   }
 })
 
+// 病区一变就重拉最近班次（初始赋值同样触发）
+watch(wardId, (next) => {
+  if (next) void loadHistory()
+})
+
 onMounted(async () => {
   await loadWards()
   if (wardId.value) await loadHandover()
@@ -505,6 +613,19 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.history-wrap {
+  max-height: 260px;
+  overflow: auto;
+}
+
+.row--current td {
+  background: var(--surface-2, #fafafa);
+}
+
+.hint--warn {
+  color: var(--warn, #b45309);
 }
 
 .signed-banner {

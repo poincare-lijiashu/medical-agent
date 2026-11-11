@@ -59,6 +59,8 @@ const messages = {
   'todo.dischargeBlockedNote': '另有 {ready} 人可出院',
   'todo.overdueDischarge': '超期未出院',
   'todo.overdueDischargeNote': '今日计划出院 {planned} 人',
+  'todo.handoverPending': '未交班病区',
+  'todo.handoverPendingNote': '今日已签字 {signed}/{total} 病区',
 
   /* ---------- 空闲超时 ---------- */
   'idle.title': '会话即将结束',

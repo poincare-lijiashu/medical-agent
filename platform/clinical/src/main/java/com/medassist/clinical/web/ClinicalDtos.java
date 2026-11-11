@@ -260,6 +260,39 @@ public final class ClinicalDtos {
     }
 
     /**
+     * 交班历史条目（列表用）：只有班次与人数，打开某一班次时再拉明细。
+     *
+     * @param patientCount 该班次交接的患者数（空病区签字为 0）
+     * @param notedCount   其中写了逐人备注的人数
+     */
+    public record HandoverBriefView(UUID id, LocalDate shiftDate, String shiftCode, String status,
+                                    String createdBy, String signedBy, Instant signedAt,
+                                    int patientCount, int notedCount) {
+    }
+
+    /**
+     * 某病区某班次的交班状态。
+     *
+     * @param status MISSING 表示该班次尚未创建报告（前端显示“未交班”）
+     */
+    public record WardHandoverStatus(UUID wardId, String wardName, String status, String signedBy,
+                                     Instant signedAt, int patientCount) {
+    }
+
+    /**
+     * 某日某班次的交班状态汇总（驾驶舱 / 待办角标）。
+     *
+     * <p>分母只算“真的有人的病区”：有在院患者，或该班次已创建交班（空病区也可签字证明已核对）。
+     * 否则全院几百个空病区会把“今日交班 0/243”变成一个永远完不成的角标。
+     *
+     * @param shiftCode 未指定班次时按当前时间推断后回填，前端据此显示“白班/中班/夜班”
+     */
+    public record HandoverStatusSummary(LocalDate shiftDate, String shiftCode, int wards,
+                                        int signedWards, int pendingWards,
+                                        List<WardHandoverStatus> details) {
+    }
+
+    /**
      * 转科：目标科室 + 目标床位 + 理由。
      *
      * <p>{@code bedId} 在患者当前已占床时必填：转科必须同时落到目标科室的病区床位，

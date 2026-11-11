@@ -56,6 +56,8 @@ const messages: Record<MessageKey, string> = {
   'todo.dischargeBlockedNote': '{ready} ready to discharge',
   'todo.overdueDischarge': 'Overdue discharges',
   'todo.overdueDischargeNote': '{planned} planned for discharge today',
+  'todo.handoverPending': 'Wards without handover',
+  'todo.handoverPendingNote': '{signed}/{total} wards signed today',
 
   /* ---------- Idle timeout ---------- */
   'idle.title': 'Session ending soon',

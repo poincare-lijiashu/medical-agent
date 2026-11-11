@@ -379,6 +379,39 @@ export interface HandoverSaveBody {
   items: { admissionId: string; note?: string }[]
 }
 
+/** 交班历史条目：只有班次与人数，点开某一班次再拉明细。 */
+export interface HandoverBrief {
+  id: string
+  shiftDate: string
+  shiftCode: 'DAY' | 'EVENING' | 'NIGHT'
+  status: 'DRAFT' | 'SIGNED'
+  createdBy: string | null
+  signedBy: string | null
+  signedAt: string | null
+  patientCount: number
+  notedCount: number
+}
+
+/** 单病区某班次的交班状态；MISSING 表示该班次尚未创建报告。 */
+export interface WardHandoverStatus {
+  wardId: string
+  wardName: string
+  status: 'MISSING' | 'DRAFT' | 'SIGNED'
+  signedBy: string | null
+  signedAt: string | null
+  patientCount: number
+}
+
+/** 某日某班次各可见病区的交班状态汇总（驾驶舱 / 待办角标）。 */
+export interface HandoverStatusSummary {
+  shiftDate: string
+  shiftCode: 'DAY' | 'EVENING' | 'NIGHT'
+  wards: number
+  signedWards: number
+  pendingWards: number
+  details: WardHandoverStatus[]
+}
+
 /** 转科记录（append-only）：一次主诊科室变更。 */
 export interface VisitTransfer {
   id: string

@@ -102,6 +102,20 @@ export async function loadTodoItems(): Promise<TodoItem[]> {
               : undefined,
         }
       }),
+      // 第 255 批：今日交班（按当前班次推断）；分母只算有患者或已建交班的病区。
+      tally('handoverPending', t('todo.handoverPending'), '/handover', async () => {
+        const data = await clinicalApi.handoverStatus()
+        return {
+          count: data.pendingWards ?? 0,
+          note:
+            data.wards > 0
+              ? t('todo.handoverPendingNote', {
+                  signed: String(data.signedWards ?? 0),
+                  total: String(data.wards),
+                })
+              : undefined,
+        }
+      }),
     )
   }
 

@@ -22,6 +22,7 @@ import com.medassist.clinical.domain.ClinicalModel.DiagnosisDef;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedication;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedicationItem;
 import com.medassist.clinical.domain.ClinicalModel.Handover;
+import com.medassist.clinical.domain.ClinicalModel.HandoverBrief;
 import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBed;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBoardRow;
@@ -127,6 +128,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 临床核心仓储（JdbcClient 显式 SQL）。
@@ -2764,6 +2766,79 @@ public class ClinicalRepository {
                 .param("admissionId", item.admissionId()).param("bedNo", item.bedNo())
                 .param("patientNo", item.patientNo()).param("flags", item.flags())
                 .param("note", item.note()).update();
+    }
+
+    private static final RowMapper<HandoverBrief> HANDOVER_BRIEF_MAPPER = (rs, i) ->
+            new HandoverBrief(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("ward_id", UUID.class),
+                    rs.getObject("shift_date", LocalDate.class),
+                    rs.getString("shift_code"),
+                    rs.getString("status"),
+                    rs.getString("created_by"),
+                    rs.getString("signed_by"),
+                    rs.getTimestamp("signed_at") == null
+                            ? null : rs.getTimestamp("signed_at").toInstant(),
+                    rs.getInt("patient_count"),
+                    rs.getInt("noted_count"));
+
+    /** 交班历史摘要的公共列：人数与已写备注人数用子查询一次算出，避免 N+1。 */
+    private static final String HANDOVER_BRIEF_COLUMNS = """
+            h.id, h.ward_id, h.shift_date, h.shift_code, h.status, h.created_by, h.signed_by,
+            h.signed_at,
+            (SELECT count(*) FROM clinical_svc.handover_item i WHERE i.handover_id = h.id)
+                AS patient_count,
+            (SELECT count(*) FROM clinical_svc.handover_item i WHERE i.handover_id = h.id
+                    AND i.note IS NOT NULL AND btrim(i.note) <> '') AS noted_count
+            """;
+
+    /**
+     * 某病区最近 N 个班次（按交班日倒序、同日按夜→中→白）。
+     *
+     * <p>排序不能直接用班次字符串：字典序 EVENING &lt; DAY &lt; NIGHT，会把白天排在夜里前面。
+     */
+    public List<HandoverBrief> listHandovers(UUID wardId, int limit) {
+        return jdbc.sql("SELECT " + HANDOVER_BRIEF_COLUMNS + """
+                           FROM clinical_svc.handover h
+                          WHERE h.ward_id = :wardId
+                          ORDER BY h.shift_date DESC,
+                                   CASE h.shift_code
+                                       WHEN 'NIGHT' THEN 3 WHEN 'EVENING' THEN 2 ELSE 1 END DESC
+                          LIMIT :limit
+                          """)
+                .param("wardId", wardId).param("limit", limit)
+                .query(HANDOVER_BRIEF_MAPPER).list();
+    }
+
+    /** 多个病区在同一天同一班次的交班记录（交班状态汇总用，一次查询）。 */
+    public List<HandoverBrief> listHandoversByWards(List<UUID> wardIds, LocalDate shiftDate,
+                                                    String shiftCode) {
+        if (wardIds == null || wardIds.isEmpty()) {
+            return List.of();
+        }
+        return jdbc.sql("SELECT " + HANDOVER_BRIEF_COLUMNS + """
+                           FROM clinical_svc.handover h
+                          WHERE h.ward_id IN (:wardIds)
+                            AND h.shift_date = :shiftDate AND h.shift_code = :shiftCode
+                          """)
+                .param("wardIds", wardIds).param("shiftDate", shiftDate)
+                .param("shiftCode", shiftCode)
+                .query(HANDOVER_BRIEF_MAPPER).list();
+    }
+
+    /** 有在院患者（已入科/待入科）的病区集合：交班分母只算“真的有人的病区”。 */
+    public Set<UUID> listWardsWithActiveAdmissions(List<UUID> wardIds) {
+        if (wardIds == null || wardIds.isEmpty()) {
+            return Set.of();
+        }
+        return jdbc.sql("""
+                        SELECT DISTINCT ward_id
+                          FROM clinical_svc.admission
+                         WHERE ward_id IN (:wardIds) AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """)
+                .param("wardIds", wardIds)
+                .query((rs, i) -> rs.getObject("ward_id", UUID.class))
+                .list().stream().collect(Collectors.toSet());
     }
 
     public String nextAdmissionNo() {

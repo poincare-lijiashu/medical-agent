@@ -286,6 +286,31 @@ class InpatientControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("交班历史与状态：读权限即可；历史先校验病区，状态按可见病区统计")
+    void handoverHistoryAndStatusPermissions() {
+        assertThatThrownBy(() -> controller.handoverHistory(wardId, 10, null, scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(handoverService, never()).history(any(), any());
+
+        controller.handoverHistory(wardId, 10, "inpatient:read", scope);
+        verify(guard).requireWard(scope, wardId);
+        verify(handoverService).history(wardId, 10);
+
+        assertThatThrownBy(() -> controller.handoverStatus(null, null, null, scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+
+        var ward = new com.medassist.clinical.domain.ClinicalModel.Ward(wardId, "W01",
+                "内科一病区", UUID.randomUUID(), true);
+        when(service.listWards(any(), any())).thenReturn(List.of(ward));
+        controller.handoverStatus(null, null, "inpatient:read", scope);
+        verify(handoverService).status(List.of(ward), null, null);
+    }
+
+    @Test
     @DisplayName("权限头为空：提示重新登录（403，不误报 401）")
     void emptyPermissionsHeaderIsForbidden() {
         assertThatThrownBy(() -> controller.finance(admissionId, null, "clerk01", scope))

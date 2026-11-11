@@ -23,7 +23,9 @@ import com.medassist.clinical.web.ClinicalDtos.DepositReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositView;
 import com.medassist.clinical.web.ClinicalDtos.DischargeCheckView;
 import com.medassist.clinical.web.ClinicalDtos.DischargeReadinessSummary;
+import com.medassist.clinical.web.ClinicalDtos.HandoverBriefView;
 import com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq;
+import com.medassist.clinical.web.ClinicalDtos.HandoverStatusSummary;
 import com.medassist.clinical.web.ClinicalDtos.HandoverView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
@@ -235,6 +237,41 @@ public class InpatientController {
         Permissions.require(permissions, READ);
         guard.requireWard(scope, wardId);
         return ApiResponse.ok(handoverService.view(wardId, shiftDate, shift));
+    }
+
+    /**
+     * 交班历史：某病区最近 N 个班次摘要（默认 10，最大 50）。
+     *
+     * <p>只回班次与人数，打开某一班次再拉明细；权限与单班次查询一致。
+     */
+    @GetMapping("/wards/{wardId}/handovers")
+    public ApiResponse<List<HandoverBriefView>> handoverHistory(
+            @PathVariable UUID wardId,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(handoverService.history(wardId, limit));
+    }
+
+    /**
+     * 交班状态汇总（驾驶舱 / 待办角标）：某日某班次各可见病区是否已签字。
+     *
+     * <p>班次缺省时按当前时间推断并回填；分母只算“有在院患者或已创建交班”的病区。
+     * 只读、不写审计（角标会周期性刷新）。
+     */
+    @GetMapping("/inpatient/handover/status")
+    public ApiResponse<HandoverStatusSummary> handoverStatus(
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(required = false) String shift,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        List<Ward> wards = service.listWards(scope.campusFilter(),
+                scope.allDepartments() ? null : scope.deptCodes());
+        return ApiResponse.ok(handoverService.status(wards, date, shift));
     }
 
     /**

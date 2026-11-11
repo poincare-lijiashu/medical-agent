@@ -21,7 +21,9 @@ import type {
   DischargeMedication,
   DischargeMedicationView,
   DischargeReadinessSummary,
+  HandoverBrief,
   HandoverSaveBody,
+  HandoverStatusSummary,
   HandoverView,
   DispenseView,
   EmergencyBed,
@@ -393,6 +395,10 @@ export const clinicalApi = {
     post<void>(`/clinical/wards/${wardId}/bed-reservations/${id}/release`, { reason }),
   handover: (wardId: string, params?: { shiftDate?: string; shift?: string }) =>
     get<HandoverView>(`/clinical/wards/${wardId}/handover`, params),
+  handoverHistory: (wardId: string, limit?: number) =>
+    get<HandoverBrief[]>(`/clinical/wards/${wardId}/handovers`, { limit }),
+  handoverStatus: (params?: { date?: string; shift?: string }) =>
+    get<HandoverStatusSummary>('/clinical/inpatient/handover/status', params),
   saveHandover: (wardId: string, body: HandoverSaveBody) =>
     post<HandoverView>(`/clinical/wards/${wardId}/handover`, body),
   signHandover: (wardId: string, body: HandoverSaveBody) =>
