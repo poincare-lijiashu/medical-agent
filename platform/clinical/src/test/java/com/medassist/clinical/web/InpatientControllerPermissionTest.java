@@ -1,5 +1,6 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.service.DischargeCheckService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
@@ -39,6 +40,7 @@ class InpatientControllerPermissionTest {
     private InpatientService service;
     private InpatientFinanceService financeService;
     private NursingService nursingService;
+    private DischargeCheckService checkService;
     private VisitAccessGuard guard;
     private InpatientController controller;
 
@@ -52,8 +54,9 @@ class InpatientControllerPermissionTest {
         service = mock(InpatientService.class);
         financeService = mock(InpatientFinanceService.class);
         nursingService = mock(NursingService.class);
+        checkService = mock(DischargeCheckService.class);
         guard = mock(VisitAccessGuard.class);
-        controller = new InpatientController(service, financeService, nursingService, guard);
+        controller = new InpatientController(service, financeService, nursingService, checkService, guard);
     }
 
     @Test
@@ -146,6 +149,24 @@ class InpatientControllerPermissionTest {
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
         verify(nursingService, never()).correct(any(), any(), any(), anyString());
+    }
+
+    @Test
+    @DisplayName("出院体检：只有 inpatient:read 不够（结论含未结金额与出院带药）")
+    void dischargeCheckRequiresDischargePermission() {
+        assertThatThrownBy(() -> controller.dischargeCheck(admissionId, "inpatient:read", "clerk01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(checkService, never()).check(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("出院体检：inpatient:admission:discharge 放行并透传操作者")
+    void dischargeCheckPassesActor() {
+        controller.dischargeCheck(admissionId, "inpatient:admission:discharge", "doctor01", scope);
+
+        verify(checkService).check(admissionId, "doctor01");
     }
 
     @Test

@@ -275,6 +275,46 @@ public final class ClinicalDtos {
                                  BigDecimal shortfall) {
     }
 
+    // ---------------------------------------------------------------- 出院前体检
+
+    /**
+     * 出院前一致性体检（只读）。
+     *
+     * <p>为什么需要：出院接口遇到第一个问题就返回失败，医护只能"试一次 → 被拒 → 去处理 → 再试"，
+     * 反复往返且看不到还剩几项。体检把与出院门禁**同一口径**的阻断项一次性列出，
+     * 并补充"建议处理项"（未停长嘱、未完成出院带药）与"未核查项"（病历归档未接入本服务）。
+     *
+     * <p>口径一致性：{@code ready} 仅由阻断项决定，且阻断项集合必须与
+     * {@code InpatientService#discharge} 的校验一一对应；建议项即使存在也不改变 ready——
+     * 否则界面说"不能出院"而接口实际放行，比不展示更糟。
+     */
+    public record DischargeCheckView(
+            UUID admissionId, String admissionNo, UUID visitId, String visitNo, String patientNo,
+            String status, boolean ready,
+            int blockerCount, int warningCount, int uncheckedCount,
+            Instant checkedAt,
+            List<DischargeCheckItem> items) {
+    }
+
+    /**
+     * 体检条目。
+     *
+     * @param code       稳定机器码（前端与测试按码断言，不解析中文）
+     * @param domain     ADMISSION / ORDER / BILLING / PHARMACY / EMR
+     * @param severity   BLOCKER（服务端会拒绝出院）/ WARNING（建议处理）/ INFO（仅提示）
+     * @param result     PASS / FAIL / UNKNOWN；UNKNOWN 表示本服务无法核查，绝不冒充 PASS
+     * @param title      条目名（人可读）
+     * @param detail     说明（含条数与金额）
+     * @param nextAction 下一步建议；无需处理时为空
+     * @param count      涉及条数（可空）
+     * @param amount     涉及金额（可空）
+     */
+    public record DischargeCheckItem(
+            String code, String domain, String severity, String result,
+            String title, String detail, String nextAction,
+            Integer count, BigDecimal amount) {
+    }
+
     // ---------------------------------------------------------------- 护理执行记录
 
     /** 护理执行记录提交（execDate 缺省为当天）。 */

@@ -415,6 +415,35 @@ export interface InpatientAlert {
   shortfall: number
 }
 
+/** 出院前体检条目：BLOCKER 会阻断出院，WARNING 仅建议，UNKNOWN 表示本服务未核查。 */
+export interface DischargeCheckItem {
+  code: string
+  domain: string
+  severity: 'BLOCKER' | 'WARNING' | 'INFO'
+  result: 'PASS' | 'FAIL' | 'UNKNOWN'
+  title: string
+  detail: string
+  nextAction: string | null
+  count: number | null
+  amount: number | null
+}
+
+/** 出院前一致性体检（只读，口径与出院门禁一致）。 */
+export interface DischargeCheckView {
+  admissionId: string
+  admissionNo: string
+  visitId: string
+  visitNo: string
+  patientNo: string
+  status: string
+  ready: boolean
+  blockerCount: number
+  warningCount: number
+  uncheckedCount: number
+  checkedAt: string
+  items: DischargeCheckItem[]
+}
+
 /** 护理执行记录（长嘱逐日执行，追加式）。 */
 export interface NursingExecutionView {
   id: string

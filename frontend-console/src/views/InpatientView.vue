@@ -438,17 +438,53 @@
       v-model="dischargeOpen"
       title="办理出院"
       :subtitle="dischargeTarget ? `${dischargeTarget.admissionNo} · ${dischargeTarget.patientNo}` : ''"
-      width="480px"
+      width="560px"
     >
       <div class="stack">
+        <div v-if="checkLoading" class="loading">
+          <div v-for="i in 3" :key="i" class="skeleton" style="height: 36px" />
+        </div>
+        <template v-else-if="check">
+          <div class="check-summary" :class="check.ready ? 'is-ok' : 'is-blocked'">
+            <strong>{{ check.ready ? '可以办理出院' : `有 ${check.blockerCount} 项阻断，暂不能出院` }}</strong>
+            <span class="hint">
+              建议处理 {{ check.warningCount }} 项 · 未核查 {{ check.uncheckedCount }} 项 ·
+              {{ dateTime(check.checkedAt) }}
+            </span>
+          </div>
+          <div class="check-list">
+            <div v-for="it in check.items" :key="it.code" class="check-row">
+              <span class="badge" :class="checkBadgeClass(it)">{{ checkBadgeText(it) }}</span>
+              <div class="check-body">
+                <div class="check-title">
+                  {{ it.title }}
+                  <span v-if="it.count" class="muted">· {{ it.count }} 条</span>
+                </div>
+                <div class="hint">{{ it.detail }}</div>
+                <div v-if="it.nextAction && it.result !== 'PASS'" class="check-next">{{ it.nextAction }}</div>
+              </div>
+              <span v-if="it.amount != null && it.amount > 0" class="num">{{ money(it.amount) }}</span>
+            </div>
+          </div>
+        </template>
+        <p v-else class="hint">
+          体检未加载（{{ checkError || '网络异常' }}）。仍可直接出院，服务端会再次校验。
+        </p>
         <p class="hint" style="line-height: 1.7">
-          出院前必须结清费用并完成按日计费；未结清时服务端会拒绝并给出待处理条数。
-          出院会释放床位并把就诊状态置为已结束。
+          体检与出院门禁同一口径；阻断项必须处理完才能出院。出院会释放床位并把就诊状态置为已结束。
         </p>
       </div>
       <template #footer>
+        <button class="btn" type="button" :disabled="busy || checkLoading" @click="loadDischargeCheck">
+          重新体检
+        </button>
         <button class="btn" type="button" @click="dischargeOpen = false">取消</button>
-        <button class="btn btn--danger" type="button" :disabled="busy" @click="submitDischarge">
+        <button
+          class="btn btn--danger"
+          type="button"
+          :disabled="busy || (check ? !check.ready : false)"
+          @click="submitDischarge"
+        >
           确认出院
         </button>
       </template>
@@ -494,6 +530,8 @@ import type {
   Bed,
   DepositView,
   Dept,
+  DischargeCheckItem,
+  DischargeCheckView,
   InpatientAlert,
   InpatientFinanceView,
   Patient,
@@ -924,10 +962,41 @@ async function printWristband(a: AdmissionView) {
 /* ------------------------------ 出院 ------------------------------ */
 const dischargeOpen = ref(false)
 const dischargeTarget = ref<AdmissionView | null>(null)
+/** 出院前体检：拿不到就退化为"直接提交"，由服务端门禁兜底。 */
+const checkLoading = ref(false)
+const check = ref<DischargeCheckView | null>(null)
+const checkError = ref('')
 
 function openDischarge(a: AdmissionView) {
   dischargeTarget.value = a
   dischargeOpen.value = true
+  void loadDischargeCheck()
+}
+
+async function loadDischargeCheck() {
+  if (!dischargeTarget.value) return
+  checkLoading.value = true
+  checkError.value = ''
+  check.value = null
+  try {
+    check.value = await clinicalApi.dischargeCheck(dischargeTarget.value.id)
+  } catch (e) {
+    checkError.value = errorText(e)
+  } finally {
+    checkLoading.value = false
+  }
+}
+
+function checkBadgeClass(it: DischargeCheckItem): string {
+  if (it.result === 'UNKNOWN') return 'badge--neutral'
+  if (it.result === 'PASS') return 'badge--ok'
+  return it.severity === 'BLOCKER' ? 'badge--danger' : 'badge--warn'
+}
+
+function checkBadgeText(it: DischargeCheckItem): string {
+  if (it.result === 'UNKNOWN') return '未核查'
+  if (it.result === 'PASS') return '通过'
+  return it.severity === 'BLOCKER' ? '阻断' : '建议'
 }
 
 async function submitDischarge() {
@@ -940,6 +1009,8 @@ async function submitDischarge() {
     await reloadWard()
   } catch (e) {
     toast.error('出院失败', errorText(e))
+    // 被拒多半是门禁条件变化（并发计费/结算），立刻重查，让用户看到最新阻断项。
+    void loadDischargeCheck()
   } finally {
     busy.value = false
   }
@@ -1237,6 +1308,60 @@ onMounted(async () => {
   border-color: var(--danger-line, var(--line-strong));
   color: var(--danger, #b42318);
   background: var(--danger-weak, var(--panel-3));
+}
+
+/* 出院体检：一行一项，徽章在左、说明居中、金额在右 */
+.check-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--sunken);
+}
+
+.check-summary.is-ok {
+  border-color: var(--positive-line, var(--line-strong));
+  color: var(--positive-ink);
+}
+
+.check-summary.is-blocked {
+  border-color: var(--danger-line, var(--line-strong));
+  color: var(--danger, #b42318);
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.check-title {
+  font-size: var(--fs-12);
+  font-weight: 600;
+}
+
+.check-next {
+  font-size: var(--fs-small);
+  color: var(--accent-ink);
 }
 
 .is-danger {

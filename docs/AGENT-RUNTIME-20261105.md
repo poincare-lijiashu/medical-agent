@@ -10296,6 +10296,63 @@ Java：mvn -pl auth -am -DskipTests compile → 通过
 - 字典不含“从未出现过的动作”（新动作要等第一次写入后才出现）；
 - 选动作后仍需另填对象类型，未做“按动作联动可选对象类型”的级联筛选。
 
+## 244. 2026-11-11 出院前一致性体检（第 244 批）
+
+**问题**
+
+- 出院接口遇到第一个问题就返回失败：医护只能“试一次 → 被拒 → 去处理 → 再试”，
+  反复往返，且永远看不到“还剩几项”；
+- 出院场景真正容易漏的不止费用：长期医嘱没停、出院带药没发、病历没归档，
+  这三类都不会在出院接口上报错，人走了才被发现；
+- 但“体检”最容易做成假的：把没查的项当通过，界面一片绿、出院后被追责。
+
+**本批做了什么**
+
+1. **只读体检端点** `GET /api/v2/clinical/inpatient/admissions/{id}/discharge-check`：
+   权限复用 `inpatient:admission:discharge` + `guard.requireAdmission`，
+   不写业务表、不改状态、不触发计费，只落一条 `DISCHARGE_CHECK` 审计（仅结论计数）。
+2. **七项固定清单**，每项带 `code/severity/result/detail/nextAction/count/amount`：
+   - 阻断（与出院门禁一一对应，服务端确实会拒）：`ADMISSION_STATUS`、`UNSETTLED_CHARGE`、
+     `UNBILLED_TEMP_ORDER`、`UNBILLED_DAILY_ORDER`；
+   - 建议（服务端不拒，只提醒）：`UNSTOPPED_LONG_ORDER`、`DISCHARGE_MED_PENDING`；
+   - 未核查：`EMR_ARCHIVE`——clinical 未接入 emr，固定 `UNKNOWN` 并写明“本系统没有替你查”。
+3. **`ready` 只由阻断项决定**：`ready = blockerCount == 0`。建议项存在也不改结论，
+   否则会出现“界面说不能出院、接口却放行”的分裂。
+4. **新增一条 SQL** `listUnstoppedLongOrders`：`LONG + PLACED + stop_date IS NULL`，
+   不按 `start_date` 过滤——明天起效的长嘱今天办出院同样属于“没停”。
+5. **前端出院弹窗改为体检单**：打开即拉取；阻断时禁用“确认出院”并给出逐项下一步；
+   支持“重新体检”；体检请求失败则降级为直接提交（服务端门禁兜底），
+   出院被拒后自动重查，避免用户对着旧结论反复点击。
+6. **回归锁 8 条（Java）**：6 条服务级（全通过、三项阻断聚合与金额、建议项不阻断、
+   未提交带药、非在院状态、审计只记计数）+ 2 条接口权限（读权限不够、出院权限放行并透传操作者）。
+
+**验证**
+
+```
+Java：mvn -pl clinical -am -DskipTests compile → 通过
+定向：DischargeCheckServiceTest 6 passed；InpatientControllerPermissionTest 9 passed；
+      ConsoleReadEndpointsPermissionTest 通过；DischargeMedication 相关 23 passed（回归）
+前端：npm run typecheck → 通过；npm run build → 通过
+      （入口 95.71 KB gzip / 预算 110；住院页 10.19 KB）
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- 不把“未停长嘱/未发带药”升级为阻断：服务端 `discharge` 并未拦这两类，
+  体检若标阻断就与真实门禁打架；先把“看清”做对，再谈加不加门禁；
+- 不为一项检查引入 clinical→emr 客户端：需要新增 baseUrl/内网令牌/超时/演练面，
+  本批先把结构留好（`domain=EMR`），跨服务核查单独一批做；
+- 体检结果不落库：口径随业务实时变化，缓存只会让人看到过期结论；
+- 审计只记 `ready/blockerCount/warningCount/uncheckedCount`，不记金额与患者标识，
+  避免审计表变成第二份费用明细。
+
+**遗留**
+
+- 病历与病案首页归档未自动核查（需 clinical→emr 内网客户端 + 按就诊查未归档接口）；
+- 未做“按病区批量体检”（护士站想一次看到全病区待出院患者的问题）；
+- 出院后的结算完整性复核（出院后补费）仍走现有中途结算流程，未纳入本体检。
+
 
 
 

@@ -768,6 +768,23 @@ public class ClinicalRepository {
                 .query(ORDER_MAPPER).list();
     }
 
+    /**
+     * 未停止的长期医嘱（{@code stop_date IS NULL} 且仍为 PLACED）：出院体检用。
+     *
+     * <p>与 {@link #listBillableLongOrders} 的区别：不按 start_date 过滤——明天才起效、
+     * 但今天办出院的长嘱同样属于"没停"，出院后它不会再计费也不会有人停，属于遗留脏数据。
+     */
+    public List<VisitOrder> listUnstoppedLongOrders(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT * FROM clinical_svc.visit_order
+                         WHERE visit_id = :visitId AND order_mode = 'LONG' AND status = 'PLACED'
+                           AND stop_date IS NULL
+                         ORDER BY created_at
+                        """)
+                .param("visitId", visitId)
+                .query(ORDER_MAPPER).list();
+    }
+
     /** 加行锁读取某天可计费的长嘱；必须在事务内调用（防并发停嘱/撤销）。 */
     public List<VisitOrder> lockBillableLongOrders(UUID visitId, LocalDate date) {
         return jdbc.sql("""

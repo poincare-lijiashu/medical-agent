@@ -3,6 +3,7 @@ package com.medassist.clinical.web;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.domain.ClinicalModel.WardOccupancy;
+import com.medassist.clinical.service.DischargeCheckService;
 import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
@@ -14,6 +15,7 @@ import com.medassist.clinical.web.ClinicalDtos.CreateBedsReq;
 import com.medassist.clinical.web.ClinicalDtos.CreateWardReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositView;
+import com.medassist.clinical.web.ClinicalDtos.DischargeCheckView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
@@ -49,7 +51,7 @@ import java.util.UUID;
  *   <li>{@code inpatient:ward:manage}——病区与床位维护（护理部/管理员）；</li>
  *   <li>{@code inpatient:admission:create}——入院登记（住院处/医师）；</li>
  *   <li>{@code inpatient:bed:assign}——分床/转床（护理部）；</li>
- *   <li>{@code inpatient:admission:discharge}——出院办理（医师/住院处）；</li>
+ *   <li>{@code inpatient:admission:discharge}——出院办理与出院前体检（医师/住院处）；</li>
  *   <li>{@code inpatient:finance:read}——费用看板与欠费预警（住院处/医师/护士）；</li>
  *   <li>{@code inpatient:nursing:execute}——护理执行记录（护士）；</li>
  *   <li>{@code inpatient:read}——住院信息查询。</li>
@@ -74,13 +76,16 @@ public class InpatientController {
     private final InpatientService service;
     private final InpatientFinanceService financeService;
     private final NursingService nursingService;
+    private final DischargeCheckService checkService;
     private final VisitAccessGuard guard;
 
     public InpatientController(InpatientService service, InpatientFinanceService financeService,
-                               NursingService nursingService, VisitAccessGuard guard) {
+                               NursingService nursingService, DischargeCheckService checkService,
+                               VisitAccessGuard guard) {
         this.service = service;
         this.financeService = financeService;
         this.nursingService = nursingService;
+        this.checkService = checkService;
         this.guard = guard;
     }
 
@@ -192,6 +197,23 @@ public class InpatientController {
         Permissions.require(permissions, BED_ASSIGN);
         guard.requireAdmission(scope, id);
         return ApiResponse.ok(PhiMask.admission(service.assignBed(id, req, actor), scope));
+    }
+
+    /**
+     * 出院前一致性体检（只读）。
+     *
+     * <p>与 {@code discharge} 使用同一套门禁口径，把阻断项一次性列出；
+     * 另附建议处理项与"本服务未核查"的病历归档项。
+     */
+    @GetMapping("/inpatient/admissions/{id}/discharge-check")
+    public ApiResponse<DischargeCheckView> dischargeCheck(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, DISCHARGE);
+        guard.requireAdmission(scope, id);
+        return ApiResponse.ok(checkService.check(id, actor));
     }
 
     @PostMapping("/inpatient/admissions/{id}/discharge")

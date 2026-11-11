@@ -16,6 +16,7 @@ import type {
   Consultation,
   DepositView,
   Dept,
+  DischargeCheckView,
   DischargeMedication,
   DischargeMedicationView,
   DispenseView,
@@ -379,6 +380,8 @@ export const clinicalApi = {
     post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/bed`, { bedId, reason }),
   dischargeAdmission: (admissionId: string) =>
     post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/discharge`),
+  dischargeCheck: (admissionId: string) =>
+    get<DischargeCheckView>(`/clinical/inpatient/admissions/${admissionId}/discharge-check`),
   deposits: (admissionId: string) =>
     get<DepositView>(`/clinical/inpatient/admissions/${admissionId}/deposits`),
   payDeposit: (admissionId: string, amount: number, method: string, remark?: string) =>
