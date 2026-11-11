@@ -29,8 +29,15 @@ public final class NursingSheetModel {
                                String bedNo, String attendingDoctor, List<SheetLine> lines) {
     }
 
-    /** 整区结果：patientCount 为在院患者总数，sheets 只含当日有有效长嘱的床位。 */
-    public record WardSheets(UUID wardId, LocalDate date, int patientCount,
-                             List<SheetPatient> sheets) {
+    /**
+     * 整区结果（第 240 批增补分页字段）。
+     *
+     * <p>`patientCount` 是在院总数（含当日无长嘱的），`sheetPatients` 是当日有长嘱、
+     * 真正会出单的患者数；`sheets` 只含本批（`offset` 起 `limit` 位）。
+     * 分批的原因：一次渲染几百页 HTML 会把浏览器打印预览拖死，
+     * 且整区补打会在留痕里一次刷出几百条记录。
+     */
+    public record WardSheets(UUID wardId, LocalDate date, int patientCount, int sheetPatients,
+                             int offset, int limit, boolean hasMore, List<SheetPatient> sheets) {
     }
 }

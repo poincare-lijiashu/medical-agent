@@ -42,15 +42,23 @@ public class NursingSheetController {
         this.guard = guard;
     }
 
-    /** 病区当日护理执行单批量取数；date 缺省为当天。 */
+    /**
+     * 病区当日护理执行单批量取数；date 缺省为当天。
+     *
+     * <p>第 240 批：按患者分批，`limit` 由服务端夹到 1..{@link
+     * com.medassist.clinical.service.NursingSheetService#BATCH_MAX}，
+     * `offset` 为患者序号（不是医嘱行号）。响应里的 `hasMore` 决定要不要再点一次。
+     */
     @GetMapping("/{wardId}/nursing-sheets")
     public ApiResponse<WardSheets> wardSheets(
             @PathVariable UUID wardId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
+            @RequestParam(required = false) Integer offset,
+            @RequestParam(required = false) Integer limit,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             DataScope scope) {
         Permissions.require(permissions, READ);
         guard.requireWard(scope, wardId);
-        return ApiResponse.ok(service.wardSheets(wardId, date));
+        return ApiResponse.ok(service.wardSheets(wardId, date, offset, limit));
     }
 }

@@ -51,6 +51,29 @@ const REPRINT_REASON_REQUIRED = 45440
 const REASON_REUSE_MS = 60_000
 let recentReason: { docType: string; reason: string; at: number } | null = null
 
+/**
+ * 同一单据类型正在询问中的原因（第 240 批）。
+ *
+ * <p>整区批量打印一次会给几十张护理单各上报一条；第二次整区打印时它们**同时**
+ * 被服务端拒绝，若各自弹一次窗，护士要连答几十遍（前面的复用窗口只在“已经答完”后生效）。
+ * 这里让并发的同类型请求共享同一个询问结果：只弹一次，答案统一用于整批。
+ */
+let pendingAsk: { docType: string; promise: Promise<string> } | null = null
+
+function reasonFor(code: string, docNo: string, message: string): Promise<string> {
+  if (pendingAsk && pendingAsk.docType === code) return pendingAsk.promise
+  const promise = askReprintReason({ docType: code, docNo, message }).then((reason) => {
+    recentReason = { docType: code, reason, at: Date.now() }
+    return reason
+  })
+  const entry = { docType: code, promise }
+  pendingAsk = entry
+  void promise.finally(() => {
+    if (pendingAsk === entry) pendingAsk = null
+  })
+  return promise
+}
+
 export interface PrintAuditInput {
   docType: keyof typeof PRINT_DOC_TYPES
   /** 打印件上的业务号（票据号 / 处方号 / 住院号）。 */
@@ -95,12 +118,7 @@ async function send(input: PrintAuditInput, mayAskReason: boolean): Promise<void
         await send({ ...input, reason: reused }, false)
         return
       }
-      const reason = await askReprintReason({
-        docType: code,
-        docNo: input.docNo,
-        message: e.message,
-      })
-      recentReason = { docType: code, reason, at: Date.now() }
+      const reason = await reasonFor(code, input.docNo, e.message)
       await send({ ...input, reason }, false)
       return
     }

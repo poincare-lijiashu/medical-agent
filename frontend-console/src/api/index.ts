@@ -395,9 +395,14 @@ export const clinicalApi = {
     get<NursingExecutionView[]>(`/clinical/inpatient/admissions/${admissionId}/nursing-executions`, {
       date,
     }),
-  /** 整区护理执行单（第 234 批）：一次取全病区当日长嘱与执行记录，需 inpatient:nursing:read。 */
-  wardNursingSheets: (wardId: string, date?: string) =>
-    get<WardNursingSheets>(`/clinical/wards/${wardId}/nursing-sheets`, { date }),
+  /**
+   * 整区护理执行单（第 234/240 批）：按患者分批，单批最多 80 位。
+   * `offset` 是患者序号（不是医嘱行号），`hasMore` 为 true 时应提示继续打印。
+   */
+  wardNursingSheets: (
+    wardId: string,
+    params: { date?: string; offset?: number; limit?: number } = {},
+  ) => get<WardNursingSheets>(`/clinical/wards/${wardId}/nursing-sheets`, params),
   recordNursing: (
     admissionId: string,
     body: { orderId: string; execDate?: string; status: string; note?: string },

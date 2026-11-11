@@ -452,11 +452,17 @@ export interface NursingSheetPatient {
   lines: NursingSheetLine[]
 }
 
-/** 整区结果：patientCount 为在院总数，sheets 仅含当日有有效长嘱的床位。 */
+/** 整区结果：patientCount 为在院总数，sheets 仅含本批（第 240 批起按患者分批）。 */
 export interface WardNursingSheets {
   wardId: string
   date: string
   patientCount: number
+  /** 当日有长嘱、会出单的患者总数（跨批不变）。 */
+  sheetPatients: number
+  offset: number
+  limit: number
+  /** 还有未打印的患者：界面应给“继续打印下一批”，而不是假装打完了。 */
+  hasMore: boolean
   sheets: NursingSheetPatient[]
 }
 

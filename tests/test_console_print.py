@@ -281,3 +281,54 @@ def test_print_history_review_ui_closed_loop():
     assert "PrintAnomalySummary" in types, "缺少待办计数类型"
 
 
+# ---------------------------------------------------------------- 第 240 批：整区分批保护
+
+
+def test_ward_batch_is_bounded_and_paged_by_patient():
+    """整区打印必须有上限，且按患者分页（按医嘱行切会把一张单截成两半）。"""
+    service = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "service" / "NursingSheetService.java"
+    )
+    assert "BATCH_MAX" in service, "整区批量必须有显式上限"
+    assert "Math.min(limit, BATCH_MAX)" in service, "上限必须在服务端夹取（前端可传任意 limit）"
+    assert "hasMore" in service, "必须告诉前端还有没有下一批"
+
+    repo = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "repo" / "NursingSheetRepository.java"
+    )
+    assert "countSheetPatients(" in repo, "分页总数必须与明细同口径（有长嘱的患者）"
+    # 患者分页：先取本批患者（子查询 + LIMIT），再 JOIN 医嘱
+    assert "LIMIT :limit OFFSET :offset" in repo
+    assert ") p\n" in repo or "FROM (\n" in repo, "必须先分页取患者，再取这些患者的医嘱"
+    assert "EXISTS (" in repo, "子查询必须只取当日有有效长嘱的患者"
+
+    controller = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "web" / "NursingSheetController.java"
+    )
+    assert "Integer offset" in controller and "Integer limit" in controller, "批量端点必须支持分批"
+
+
+def test_ward_batch_ui_continues_instead_of_pretending_done():
+    """超上限时要给“继续打印下一批”，不能静默截断。"""
+    view = _read(SRC / "views" / "NursingView.vue")
+    assert "batchOffset" in view and "batchRemain" in view, "整区打印必须记录批次进度"
+    assert "继续打印下一批" in view, "还有未打印患者时必须引导继续"
+    assert "data.hasMore" in view, "必须消费服务端 hasMore 而不是自己猜"
+    assert "data.sheetPatients" in view, "进度对照的是需出单人数，不是本页条数"
+    assert "batchKey" in view, "切病区/日期必须回到第一批"
+
+    api = _read(SRC / "api" / "index.ts")
+    assert "offset?: number" in api and "limit?: number" in api, "批量接口必须暴露分批参数"
+    types = _read(SRC / "api" / "types.ts")
+    assert "sheetPatients: number" in types and "hasMore: boolean" in types, "整区类型缺少分批字段"
+
+
+def test_reprint_reason_is_shared_within_one_batch():
+    """整区补打会并发触发几十次 422：只能弹一次原因，不能排队几十次。"""
+    text = _read(SRC / "utils" / "printAudit.ts")
+    assert "pendingAsk" in text, "并发补打必须共享同一次原因询问"
+    assert "reasonFor(" in text, "原因获取必须收口到一处，便于去重"
+    assert "recentReason === " not in text  # 防回退成对象字面量比较
+
+
+

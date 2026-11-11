@@ -20,7 +20,13 @@
           @click="printWardSheets"
         >
           <AppIcon name="layers" :size="15" />
-          {{ batchPrinting ? '正在汇总整区…' : '整区批量打印' }}
+          {{
+            batchPrinting
+              ? '正在汇总整区…'
+              : batchRemain > 0
+                ? `继续打印下一批（剩 ${batchRemain} 位）`
+                : '整区批量打印'
+          }}
         </button>
         <button class="btn" type="button" :disabled="loading" @click="reloadAll">
           <AppIcon name="refresh" :size="15" /> 刷新
@@ -513,20 +519,31 @@ function printNursingSheet() {
 }
 
 /**
- * 整区批量打印：一次请求取全病区当日数据（第 234 批后端批量端点），
- * 一床一页、按床位排序。相比逐床请求（30 床约 60 次往返），
- * 既快也不会因网关限流造成“部分床位失败”。
+ * 整区批量打印（第 234 批端点 + 第 240 批分批）。
+ *
+ * 一次请求取一批（默认 80 位）患者：一床一页、按床位排序。
+ * 病区超过上限时服务端只回一批并给 `hasMore`，按钮变成「继续打印下一批」——
+ * 不一次渲染几百页，也不假装已经打完。
+ * 切病区/日期自动回到第一批（用 `batchKey` 判断，避免残留上一次的 offset）。
  */
 const batchPrinting = ref(false)
+const batchOffset = ref(0)
+const batchRemain = ref(0)
+const batchKey = ref('')
 
 async function printWardSheets() {
   if (batchPrinting.value || !selectedWardId.value) return
   const wardName = wards.value.find((w) => w.id === selectedWardId.value)?.name ?? ''
   const date = execDate.value
+  const key = `${selectedWardId.value}@${date}`
+  const start = batchKey.value === key ? batchOffset.value : 0
   batchPrinting.value = true
   try {
-    const data = await clinicalApi.wardNursingSheets(selectedWardId.value, date)
+    const data = await clinicalApi.wardNursingSheets(selectedWardId.value, { date, offset: start })
+    batchKey.value = key
     if (data.sheets.length === 0) {
+      batchOffset.value = 0
+      batchRemain.value = 0
       toast.error(
         '没有可打印的执行单',
         data.patientCount > 0
@@ -575,11 +592,22 @@ async function printWardSheets() {
         patientNo: s.patientNo,
       })
     }
-    const skipped = data.patientCount - data.sheets.length
-    toast.ok(
-      '已生成整区执行单',
-      `${data.sheets.length} 位患者 · ${date}${skipped > 0 ? `（另有 ${skipped} 人当日无长嘱）` : ''}`,
-    )
+    const done = data.offset + data.sheets.length
+    batchOffset.value = done
+    batchRemain.value = Math.max(0, data.sheetPatients - done)
+    // patientCount 含当日无长嘱的患者；对照的是“需出单人数”，不是本批条数
+    const noOrder = data.patientCount - data.sheetPatients
+    const noOrderText = noOrder > 0 ? `；另有 ${noOrder} 人当日无长嘱` : ''
+    if (data.hasMore) {
+      toast.ok(
+        `本批已生成 ${data.sheets.length} 张`,
+        `${date} · 共 ${data.sheetPatients} 人需出单，还剩 ${batchRemain.value} 人${noOrderText}。点「继续打印下一批」继续。`,
+      )
+    } else {
+      batchOffset.value = 0
+      batchRemain.value = 0
+      toast.ok('已生成整区执行单', `${data.sheets.length} 位患者 · ${date}${noOrderText}`)
+    }
   } catch (e) {
     toast.error('整区执行单读取失败', errorText(e))
   } finally {
