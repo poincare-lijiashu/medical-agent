@@ -315,6 +315,35 @@ public final class ClinicalDtos {
             Integer count, BigDecimal amount) {
     }
 
+    // ---------------------------------------------------------------- 病区出院预检（批量）
+
+    /**
+     * 病区出院预检（只读批量）。
+     *
+     * <p>与单患者体检**同一口径**，但只回机器码与条数：一个病区几十人，
+     * 护士站要的是"谁还走不了、卡在哪一项"，金额留在单个患者页（那里单独校验费用权限）。
+     *
+     * @param emrChecked false 表示病历归档未核查（EMR 未接入/不可达），界面必须明说
+     */
+    public record WardDischargeReadinessView(
+            UUID wardId, String wardName, Instant checkedAt,
+            int total, int readyCount, int blockedCount, boolean emrChecked,
+            List<WardDischargeReadiness> items) {
+    }
+
+    /**
+     * 病区预检条目。
+     *
+     * @param blockers 阻断项机器码（与单患者体检同码，前端按码翻译）
+     * @param warnings 建议项机器码
+     */
+    public record WardDischargeReadiness(
+            UUID admissionId, String admissionNo, String patientNo,
+            UUID bedId, String bedNo, String status, boolean ready,
+            int blockerCount, int warningCount,
+            List<String> blockers, List<String> warnings) {
+    }
+
     // ---------------------------------------------------------------- 护理执行记录
 
     /** 护理执行记录提交（execDate 缺省为当天）。 */

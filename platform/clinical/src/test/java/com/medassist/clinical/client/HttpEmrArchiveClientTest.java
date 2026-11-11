@@ -15,6 +15,8 @@ import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -111,5 +113,34 @@ class HttpEmrArchiveClientTest {
     void blankTokenDoesNotCallUpstream() {
         assertEquals(Optional.empty(), client("").archiveSummary(visitId));
         assertEquals(0, CALLS.get());
+    }
+
+    @Test
+    @DisplayName("批量：解析每个就诊；上游缺省字段按 0/false（Jackson 3 不对 null 装箱宽松）")
+    void parsesBatchSummary() {
+        UUID second = UUID.randomUUID();
+        BODY.set("{\"items\":[{\"visitId\":\"" + visitId + "\",\"total\":5,\"archived\":3,"
+                + "\"draft\":2,\"homepageFound\":true,\"homepageStatus\":\"SUBMITTED\","
+                + "\"homepageArchived\":false},{\"visitId\":\"" + second + "\",\"total\":0,"
+                + "\"archived\":0,\"draft\":0,\"homepageFound\":false}]}");
+
+        Map<UUID, EmrArchiveClient.ArchiveSummary> out =
+                client("tok").batchArchiveSummary(List.of(visitId, second));
+
+        assertEquals(2, out.size());
+        assertEquals(2, out.get(visitId).unarchived());
+        assertEquals("SUBMITTED", out.get(visitId).homepageStatus());
+        assertEquals(0, out.get(second).total());
+        assertEquals("/internal/records/archive-summaries", LAST_PATH.get());
+        assertEquals("tok", LAST_TOKEN.get());
+    }
+
+    @Test
+    @DisplayName("批量上游 5xx：返回空 Map（调用方据此显示“未核查”）")
+    void batchFailureReturnsEmptyMap() {
+        STATUS.set(503);
+        BODY.set("{\"message\":\"down\"}");
+
+        assertTrue(client("tok").batchArchiveSummary(List.of(visitId)).isEmpty());
     }
 }

@@ -11,6 +11,7 @@ import com.medassist.clinical.service.NursingService;
 import com.medassist.clinical.service.ReferenceService;
 import com.medassist.clinical.service.RegistrationService;
 import com.medassist.clinical.service.VisitAccessGuard;
+import com.medassist.clinical.service.WardDischargeCheckService;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
@@ -60,7 +61,8 @@ class ConsoleReadEndpointsPermissionTest {
 
         inpatientController = new InpatientController(
                 mock(InpatientService.class), mock(InpatientFinanceService.class), mock(NursingService.class),
-                mock(DischargeCheckService.class), mock(VisitAccessGuard.class));
+                mock(DischargeCheckService.class), mock(WardDischargeCheckService.class),
+                mock(VisitAccessGuard.class));
     }
 
     @Test
@@ -168,7 +170,8 @@ class ConsoleReadEndpointsPermissionTest {
                 new Ward(UUID.randomUUID(), "W01", "一病区", UUID.randomUUID(), true)));
         InpatientController controller = new InpatientController(
                 service, mock(InpatientFinanceService.class), mock(NursingService.class),
-                mock(DischargeCheckService.class), mock(VisitAccessGuard.class));
+                mock(DischargeCheckService.class), mock(WardDischargeCheckService.class),
+                mock(VisitAccessGuard.class));
 
         var resp = controller.listWards("inpatient:read", DataScope.all("admin01", true));
 
@@ -185,7 +188,8 @@ class ConsoleReadEndpointsPermissionTest {
         when(service.listWards(java.util.Set.of(), java.util.Set.of(deptId))).thenReturn(List.of());
         InpatientController controller = new InpatientController(
                 service, mock(InpatientFinanceService.class), mock(NursingService.class),
-                mock(DischargeCheckService.class), mock(VisitAccessGuard.class));
+                mock(DischargeCheckService.class), mock(WardDischargeCheckService.class),
+                mock(VisitAccessGuard.class));
 
         var resp = controller.listWards("inpatient:read", scope);
 

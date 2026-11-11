@@ -5,6 +5,7 @@ import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
 import com.medassist.clinical.service.VisitAccessGuard;
+import com.medassist.clinical.service.WardDischargeCheckService;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
@@ -41,6 +42,7 @@ class InpatientControllerPermissionTest {
     private InpatientFinanceService financeService;
     private NursingService nursingService;
     private DischargeCheckService checkService;
+    private WardDischargeCheckService wardCheckService;
     private VisitAccessGuard guard;
     private InpatientController controller;
 
@@ -55,8 +57,10 @@ class InpatientControllerPermissionTest {
         financeService = mock(InpatientFinanceService.class);
         nursingService = mock(NursingService.class);
         checkService = mock(DischargeCheckService.class);
+        wardCheckService = mock(WardDischargeCheckService.class);
         guard = mock(VisitAccessGuard.class);
-        controller = new InpatientController(service, financeService, nursingService, checkService, guard);
+        controller = new InpatientController(service, financeService, nursingService, checkService,
+                wardCheckService, guard);
     }
 
     @Test
@@ -167,6 +171,25 @@ class InpatientControllerPermissionTest {
         controller.dischargeCheck(admissionId, "inpatient:admission:discharge", "doctor01", scope);
 
         verify(checkService).check(admissionId, "doctor01");
+    }
+
+    @Test
+    @DisplayName("病区出院预检：缺少 inpatient:read 时 403，且不触达服务层")
+    void wardReadinessRequiresRead() {
+        assertThatThrownBy(() -> controller.wardDischargeReadiness(wardId, null, "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(wardCheckService, never()).check(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("病区出院预检：inpatient:read 放行，先做病区范围校验再查")
+    void wardReadinessPassesScopeAndActor() {
+        controller.wardDischargeReadiness(wardId, "inpatient:read", "nurse01", scope);
+
+        verify(guard).requireWard(scope, wardId);
+        verify(wardCheckService).check(wardId, "nurse01");
     }
 
     @Test

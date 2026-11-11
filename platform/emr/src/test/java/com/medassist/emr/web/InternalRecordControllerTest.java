@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -85,5 +86,49 @@ class InternalRecordControllerTest {
         assertThat(body).containsEntry("homepageFound", true)
                 .containsEntry("homepageStatus", Homepage.ARCHIVED)
                 .containsEntry("homepageArchived", true);
+    }
+
+    @Test
+    @DisplayName("批量：去重后每个就诊都有一条，没有病历的显式回 0 份（区分未查与查过）")
+    @SuppressWarnings("unchecked")
+    void batchReturnsEntryPerVisit() {
+        UUID noRecords = UUID.randomUUID();
+        when(repo.archiveCountsByVisits(any())).thenReturn(
+                Map.of(visitId, new EmrRepository.RecordArchiveCounts(5, 3, 2)));
+        when(repo.findHomepagesByVisits(any())).thenReturn(Map.of());
+
+        Map<String, Object> body = controller.archiveSummaries(
+                List.of(visitId, noRecords, visitId), TOKEN);
+
+        List<Map<String, Object>> items = (List<Map<String, Object>>) body.get("items");
+        assertThat(items).hasSize(2);
+        assertThat(items).extracting(i -> i.get("visitId"))
+                .containsExactly(visitId, noRecords);
+        assertThat(items.get(0)).containsEntry("total", 5).containsEntry("archived", 3)
+                .containsEntry("draft", 2);
+        assertThat(items.get(1)).containsEntry("total", 0).containsEntry("archived", 0)
+                .containsEntry("homepageFound", false);
+    }
+
+    @Test
+    @DisplayName("批量：缺令牌时 403，且不触达数据层")
+    void batchRequiresToken() {
+        assertThatThrownBy(() -> controller.archiveSummaries(List.of(visitId), null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(repo, never()).archiveCountsByVisits(any());
+    }
+
+    @Test
+    @DisplayName("批量：超过 200 次就诊拒绝（防止被当作扫描接口）")
+    void batchRejectsTooManyVisits() {
+        List<UUID> tooMany = java.util.stream.IntStream.range(0, 201)
+                .mapToObj(i -> UUID.randomUUID()).toList();
+
+        assertThatThrownBy(() -> controller.archiveSummaries(tooMany, TOKEN))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
     }
 }

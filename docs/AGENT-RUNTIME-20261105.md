@@ -10460,6 +10460,62 @@ Java：mvn -pl emr -am -DskipTests compile → 通过
 - 病案首页与病历分开统计，但“首页未生成”没有升级为单独条目（避免清单继续变长）；
 - 未做“按病区批量出院体检”，护士站仍只能逐个患者点开。
 
+## 247. 2026-11-11 病区出院预检（第 247 批）
+
+**问题**
+
+- §244–§246 的体检是**单患者**的：护士站想知道“全病区谁还走不了”，只能把 40 个患者逐个点开；
+- 直接循环调用单患者体检是灾难：40 人 × 5 条 SQL = 200 次往返，再加 40 次 EMR 调用（最坏 80s），
+  一次预检就能把连接池和请求线程占满；
+- 批量视图如果直接复用单患者 DTO，就会把**费用金额**发给所有有住院读权限的角色，
+  而金额本来需要 `inpatient:finance:read`。
+
+**本批做了什么**
+
+1. **批量端点** `GET /clinical/wards/{wardId}/discharge-readiness`：
+   权限 `inpatient:read` + `guard.requireWard`，一次返回病区在院患者的阻断/建议项。
+2. **集合查询替代 N+1**：新增 5 条按 `visitIds = ANY(CAST(... AS uuid[]))` 分组的 SQL
+   （未结费用、临时医嘱未计费、长嘱未计费、未停长嘱、待处理出院带药）；
+   长嘱计费的区间取病区**最早入院日**——早于医嘱起效日的日期不会 JOIN 出缺口，口径不变。
+3. **EMR 也只调一次**：新增 `GET /internal/records/archive-summaries`（单次上限 200 次就诊），
+   对每个请求的就诊**都回一条**（无病历回 0 份），调用方据此区分“查过、0 份”与“没查”。
+4. **批量 DTO 只回机器码与条数**（`blockers` / `warnings`），金额一律不进病区列表；
+   `emrChecked=false` 明说病历归档未核查，前端也照实提示。
+5. **前端**：住院页新增“出院预检”，弹窗按“阻断在前、再按床号”列出；
+   点“处理”直接打开同一套单患者出院弹窗——预检与门禁同源，不会出现“预检能走、点进去不能走”。
+6. **修一个真实解析坑**：Jackson 3 默认 `FAIL_ON_NULL_FOR_PRIMITIVES=true`，
+   上游少发一个布尔字段就整条解析失败。EMR 客户端 DTO 改为包装类型并按 `0/false` 兜底。
+7. **回归锁**：病区服务 5 条（混合场景与排序、一次批量查询、EMR 不可达、仅登记未入院、空病区）、
+   EMR 批量接口 3 条（逐就诊返回/缺令牌/超上限）、客户端 2 条（批量解析含缺省字段/5xx 降级）、
+   接口权限 2 条（缺读权限 403、放行并校验病区）。
+
+**验证**
+
+```
+Java：mvn -pl emr -am -DskipTests compile → 通过
+      mvn -pl clinical -am -DskipTests compile → 通过
+定向：WardDischargeCheckServiceTest 5 passed；InternalRecordControllerTest 7 passed；
+      HttpEmrArchiveClientTest 5 passed；DischargeCheckServiceTest 9 passed（回归）；
+      InpatientControllerPermissionTest 14 passed；ConsoleReadEndpointsPermissionTest 10 passed
+前端：npm run typecheck → 通过；npm run build → 通过
+      （入口 95.76 KB gzip / 预算 110；住院页 11.10 KB）
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- 批量不回金额：病区列表面向所有住院读权限角色，金额要单独授权；
+  需要金额时点进单患者体检（那里有完整明细与下一步建议）；
+- 200 条上限：超过一个病区的规模就不是预检了，限制可防止内部接口被当成批量扫描；
+- EMR 批量失败只置 `emrChecked=false`，不给任何人加“病历未归档”——查不到不能算作未归档；
+- 预检仍是只读快照，不缓存：出院状态随时在变，缓存只会给出过期结论。
+
+**遗留**
+
+- 病区预检不做自动刷新：处理完一个患者回到列表需要手动“重新预检”；
+- 未支持按“只看出院待办/只看可出院”筛选（患者多时需要滚动）；
+- 未把预检结果接入驾驶舱或待办中心（目前只在住院工作站可见）。
+
 
 
 

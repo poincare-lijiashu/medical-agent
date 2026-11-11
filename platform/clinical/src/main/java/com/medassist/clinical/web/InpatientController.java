@@ -8,6 +8,7 @@ import com.medassist.clinical.service.InpatientFinanceService;
 import com.medassist.clinical.service.InpatientService;
 import com.medassist.clinical.service.NursingService;
 import com.medassist.clinical.service.VisitAccessGuard;
+import com.medassist.clinical.service.WardDischargeCheckService;
 import com.medassist.clinical.web.ClinicalDtos.AdmissionView;
 import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
@@ -22,6 +23,7 @@ import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionView;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
+import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadinessView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -77,15 +79,17 @@ public class InpatientController {
     private final InpatientFinanceService financeService;
     private final NursingService nursingService;
     private final DischargeCheckService checkService;
+    private final WardDischargeCheckService wardCheckService;
     private final VisitAccessGuard guard;
 
     public InpatientController(InpatientService service, InpatientFinanceService financeService,
                                NursingService nursingService, DischargeCheckService checkService,
-                               VisitAccessGuard guard) {
+                               WardDischargeCheckService wardCheckService, VisitAccessGuard guard) {
         this.service = service;
         this.financeService = financeService;
         this.nursingService = nursingService;
         this.checkService = checkService;
+        this.wardCheckService = wardCheckService;
         this.guard = guard;
     }
 
@@ -197,6 +201,23 @@ public class InpatientController {
         Permissions.require(permissions, BED_ASSIGN);
         guard.requireAdmission(scope, id);
         return ApiResponse.ok(PhiMask.admission(service.assignBed(id, req, actor), scope));
+    }
+
+    /**
+     * 病区出院预检（只读批量）。
+     *
+     * <p>与单患者体检同一口径、同样的阻断项码，但**不回金额**：病区列表面向所有
+     * 住院读权限角色，费用金额仍需 {@code inpatient:finance:read} 才能看。
+     */
+    @GetMapping("/wards/{wardId}/discharge-readiness")
+    public ApiResponse<WardDischargeReadinessView> wardDischargeReadiness(
+            @PathVariable UUID wardId,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        guard.requireWard(scope, wardId);
+        return ApiResponse.ok(wardCheckService.check(wardId, actor));
     }
 
     /**

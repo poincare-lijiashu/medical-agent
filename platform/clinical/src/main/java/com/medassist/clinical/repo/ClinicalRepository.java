@@ -117,9 +117,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -884,6 +886,127 @@ public class ClinicalRepository {
                 .param("visitId", visitId).param("fromDate", from).param("toDate", to)
                 .query(Long.class).single();
         return n == null ? 0 : n.intValue();
+    }
+
+    // ---------------------------------------------------------------- 出院预检（病区批量）
+    //
+    // 为什么按 visitIds 批量而不是逐个患者查：一个病区 40 人 × 5 条 SQL = 200 次往返，
+    // 护士站点一次"出院预检"就把连接池占满。这里全部用 visitIds = ANY(...) 一次取回。
+
+    /** 批量：有金额的未结收费单条数（只回条数，批量视图不展示金额）。 */
+    public Map<UUID, Integer> countUnsettledChargesByVisits(Collection<UUID> visitIds) {
+        if (visitIds.isEmpty()) {
+            return Map.of();
+        }
+        return countByVisit("""
+                        SELECT visit_id, count(*) AS n FROM clinical_svc.charge
+                         WHERE visit_id = ANY(CAST(:visitIds AS uuid[]))
+                           AND status = 'UNPAID' AND total_amount > 0
+                         GROUP BY visit_id
+                        """, visitIds);
+    }
+
+    /** 批量：未计费的临时医嘱条数。 */
+    public Map<UUID, Integer> countUnbilledTempOrdersByVisits(Collection<UUID> visitIds) {
+        if (visitIds.isEmpty()) {
+            return Map.of();
+        }
+        return countByVisit("""
+                        SELECT visit_id, count(*) AS n FROM clinical_svc.visit_order
+                         WHERE visit_id = ANY(CAST(:visitIds AS uuid[]))
+                           AND status = 'PLACED' AND order_mode = 'TEMP'
+                         GROUP BY visit_id
+                        """, visitIds);
+    }
+
+    /** 批量：未停止的长期医嘱条数。 */
+    public Map<UUID, Integer> countUnstoppedLongOrdersByVisits(Collection<UUID> visitIds) {
+        if (visitIds.isEmpty()) {
+            return Map.of();
+        }
+        return countByVisit("""
+                        SELECT visit_id, count(*) AS n FROM clinical_svc.visit_order
+                         WHERE visit_id = ANY(CAST(:visitIds AS uuid[]))
+                           AND status = 'PLACED' AND order_mode = 'LONG' AND stop_date IS NULL
+                         GROUP BY visit_id
+                        """, visitIds);
+    }
+
+    /**
+     * 批量：区间内"应计未计"的长嘱条数（按就诊分组）。
+     *
+     * <p>区间起点取病区内最早入院日：对某个就诊而言，早于其医嘱 start_date 的日期
+     * 不会 JOIN 出任何行，所以统一区间不会给其他患者算出多余缺口。
+     */
+    public Map<UUID, Integer> countUnbilledDailyOrdersByVisits(Collection<UUID> visitIds,
+                                                               LocalDate from, LocalDate to) {
+        if (visitIds.isEmpty()) {
+            return Map.of();
+        }
+        return countByVisit("""
+                        SELECT o.visit_id, count(*) AS n
+                          FROM generate_series(CAST(:fromDate AS date), CAST(:toDate AS date),
+                                               interval '1 day') AS d(day)
+                          JOIN clinical_svc.visit_order o
+                            ON o.visit_id = ANY(CAST(:visitIds AS uuid[]))
+                           AND o.order_mode = 'LONG' AND o.status = 'PLACED'
+                           AND o.start_date <= d.day::date
+                           AND (o.stop_date IS NULL OR o.stop_date >= d.day::date)
+                         WHERE NOT EXISTS (
+                                 SELECT 1 FROM clinical_svc.charge_item ci
+                                   JOIN clinical_svc.charge c ON c.id = ci.charge_id
+                                  WHERE c.visit_id = o.visit_id
+                                    AND ci.source_key =
+                                        'DAILY:' || o.id::text || ':' || d.day::date::text)
+                           AND NOT EXISTS (
+                                 SELECT 1 FROM clinical_svc.nursing_execution ne
+                                   LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                          ON nc.execution_id = ne.id
+                                  WHERE ne.order_id = o.id AND ne.exec_date = d.day::date
+                                    AND coalesce(nc.to_status, ne.status) <> 'EXECUTED')
+                         GROUP BY o.visit_id
+                        """, visitIds, from, to);
+    }
+
+    /** 批量：存在待处理出院带药（DRAFT/SUBMITTED）的住院登记。 */
+    public Set<UUID> listActiveDischargeMedicationAdmissions(Collection<UUID> admissionIds) {
+        if (admissionIds.isEmpty()) {
+            return Set.of();
+        }
+        List<UUID> rows = jdbc.sql("""
+                        SELECT admission_id FROM clinical_svc.discharge_medication
+                         WHERE admission_id = ANY(CAST(:admissionIds AS uuid[]))
+                           AND status IN ('DRAFT', 'SUBMITTED')
+                        """)
+                .param("admissionIds", admissionIds.toArray(UUID[]::new))
+                .query((rs, i) -> rs.getObject("admission_id", UUID.class)).list();
+        return new LinkedHashSet<>(rows);
+    }
+
+    private Map<UUID, Integer> countByVisit(String sql, Collection<UUID> visitIds) {
+        List<Map.Entry<UUID, Integer>> rows = jdbc.sql(sql)
+                .param("visitIds", visitIds.toArray(UUID[]::new))
+                .query((rs, i) -> Map.entry(rs.getObject("visit_id", UUID.class), rs.getInt("n")))
+                .list();
+        Map<UUID, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<UUID, Integer> row : rows) {
+            out.put(row.getKey(), row.getValue());
+        }
+        return out;
+    }
+
+    private Map<UUID, Integer> countByVisit(String sql, Collection<UUID> visitIds,
+                                            LocalDate from, LocalDate to) {
+        List<Map.Entry<UUID, Integer>> rows = jdbc.sql(sql)
+                .param("visitIds", visitIds.toArray(UUID[]::new))
+                .param("fromDate", from).param("toDate", to)
+                .query((rs, i) -> Map.entry(rs.getObject("visit_id", UUID.class), rs.getInt("n")))
+                .list();
+        Map<UUID, Integer> out = new LinkedHashMap<>();
+        for (Map.Entry<UUID, Integer> row : rows) {
+            out.put(row.getKey(), row.getValue());
+        }
+        return out;
     }
 
     /** 某医嘱某日是否已按日计费（护理补记非 EXECUTED 前必须确认未收费）。 */

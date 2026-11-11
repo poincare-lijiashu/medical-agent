@@ -48,6 +48,15 @@
       </label>
       <span class="hint">{{ deptName(currentWard?.deptId) }}</span>
       <span class="spacer" />
+      <button
+        v-if="selectedWardId"
+        class="btn btn--sm"
+        type="button"
+        :disabled="readinessLoading"
+        @click="openReadiness"
+      >
+        <AppIcon name="warning" :size="13" /> 出院预检
+      </button>
       <button v-if="canManageWard && selectedWardId" class="btn btn--sm" type="button" @click="openBeds">
         <AppIcon name="plus" :size="13" /> 批量建床
       </button>
@@ -433,6 +442,62 @@
       </template>
     </AppModal>
 
+    <!-- 病区出院预检 -->
+    <AppModal
+      v-model="readinessOpen"
+      title="病区出院预检"
+      :subtitle="wardLabel"
+      width="720px"
+    >
+      <div v-if="readinessLoading" class="loading">
+        <div v-for="i in 4" :key="i" class="skeleton" style="height: 40px" />
+      </div>
+      <div v-else-if="readiness" class="stack">
+        <div class="check-summary" :class="readiness.blockedCount ? 'is-blocked' : 'is-ok'">
+          <strong>
+            {{ readiness.blockedCount ? `${readiness.blockedCount} 人还不能出院` : '在院患者当前均可出院' }}
+          </strong>
+          <span class="hint">
+            在院 {{ readiness.total }} 人 · 可出院 {{ readiness.readyCount }} 人 ·
+            {{ dateTime(readiness.checkedAt) }}
+          </span>
+          <span v-if="!readiness.emrChecked" class="hint">
+            病历归档未核查（电子病历未接入或暂不可达），点开患者可看逐项结论。
+          </span>
+        </div>
+        <div v-if="readiness.items.length === 0" class="hint">该病区暂无在院患者。</div>
+        <div v-else class="readiness-list">
+          <div v-for="it in readiness.items" :key="it.admissionId" class="readiness-row">
+            <span class="badge" :class="it.ready ? 'badge--ok' : 'badge--danger'">
+              {{ it.ready ? '可出院' : `${it.blockerCount} 项阻断` }}
+            </span>
+            <div class="check-body">
+              <div class="check-title">
+                <span class="mono">{{ it.bedNo || '未分床' }}</span> ·
+                <span class="mono">{{ it.patientNo }}</span>
+                <span class="muted"> {{ it.admissionNo }}</span>
+              </div>
+              <div class="readiness-flags">
+                <span v-for="c in it.blockers" :key="c" class="badge badge--danger">
+                  {{ checkCodeLabel(c) }}
+                </span>
+                <span v-for="c in it.warnings" :key="c" class="badge badge--warn">
+                  {{ checkCodeLabel(c) }}
+                </span>
+                <span v-if="!it.blockers.length && !it.warnings.length" class="hint">无待处理项</span>
+              </div>
+            </div>
+            <button class="btn btn--sm" type="button" @click="openDischargeFromReadiness(it)">处理</button>
+          </div>
+        </div>
+      </div>
+      <p v-else class="hint">预检加载失败（{{ readinessError || '网络异常' }}），请稍后重试。</p>
+      <template #footer>
+        <button class="btn" type="button" :disabled="readinessLoading" @click="loadReadiness">重新预检</button>
+        <button class="btn" type="button" @click="readinessOpen = false">关闭</button>
+      </template>
+    </AppModal>
+
     <!-- 出院 -->
     <AppModal
       v-model="dischargeOpen"
@@ -537,6 +602,8 @@ import type {
   InpatientFinanceView,
   Patient,
   Ward,
+  WardDischargeReadiness,
+  WardDischargeReadinessView,
 } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
@@ -961,14 +1028,17 @@ async function printWristband(a: AdmissionView) {
 }
 
 /* ------------------------------ 出院 ------------------------------ */
+/** 出院弹窗只需要这三个字段：批量预检条目也能直接打开同一弹窗。 */
+type DischargeTarget = Pick<AdmissionView, 'id' | 'admissionNo' | 'patientNo'>
+
 const dischargeOpen = ref(false)
-const dischargeTarget = ref<AdmissionView | null>(null)
+const dischargeTarget = ref<DischargeTarget | null>(null)
 /** 出院前体检：拿不到就退化为"直接提交"，由服务端门禁兜底。 */
 const checkLoading = ref(false)
 const check = ref<DischargeCheckView | null>(null)
 const checkError = ref('')
 
-function openDischarge(a: AdmissionView) {
+function openDischarge(a: DischargeTarget) {
   dischargeTarget.value = a
   dischargeOpen.value = true
   void loadDischargeCheck()
@@ -1015,6 +1085,56 @@ async function submitDischarge() {
   } finally {
     busy.value = false
   }
+}
+
+/* ------------------------------ 病区出院预检 ------------------------------ */
+const readinessOpen = ref(false)
+const readinessLoading = ref(false)
+const readiness = ref<WardDischargeReadinessView | null>(null)
+const readinessError = ref('')
+
+const wardLabel = computed(() =>
+  currentWard.value ? `${currentWard.value.name}（${currentWard.value.code}）` : '',
+)
+
+/** 与后端 DischargeCheckService 的机器码一一对应；未知码原样显示，便于发现新码。 */
+const CHECK_CODE_LABELS: Record<string, string> = {
+  ADMISSION_STATUS: '状态异常',
+  UNSETTLED_CHARGE: '未结费用',
+  UNBILLED_TEMP_ORDER: '临时医嘱未计费',
+  UNBILLED_DAILY_ORDER: '长嘱未计费',
+  UNSTOPPED_LONG_ORDER: '长嘱未停',
+  DISCHARGE_MED_PENDING: '带药未完成',
+  EMR_ARCHIVE: '病历未归档',
+}
+
+function checkCodeLabel(code: string): string {
+  return CHECK_CODE_LABELS[code] ?? code
+}
+
+function openReadiness() {
+  readinessOpen.value = true
+  void loadReadiness()
+}
+
+async function loadReadiness() {
+  if (!selectedWardId.value) return
+  readinessLoading.value = true
+  readinessError.value = ''
+  readiness.value = null
+  try {
+    readiness.value = await clinicalApi.wardDischargeReadiness(selectedWardId.value)
+  } catch (e) {
+    readinessError.value = errorText(e)
+  } finally {
+    readinessLoading.value = false
+  }
+}
+
+/** 从预检条目直接打开单患者出院弹窗（同一个门禁，不会出现"预检能走、点进去不能走"）。 */
+function openDischargeFromReadiness(it: WardDischargeReadiness) {
+  readinessOpen.value = false
+  openDischarge({ id: it.admissionId, admissionNo: it.admissionNo, patientNo: it.patientNo })
 }
 
 /* ------------------------------ 批量建床 ------------------------------ */
@@ -1363,6 +1483,29 @@ onMounted(async () => {
 .check-next {
   font-size: var(--fs-small);
   color: var(--accent-ink);
+}
+
+/* 病区出院预检：一人一行，机器码徽章横向排 */
+.readiness-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.readiness-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+
+.readiness-flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
 }
 
 .is-danger {

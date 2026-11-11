@@ -444,6 +444,33 @@ export interface DischargeCheckView {
   items: DischargeCheckItem[]
 }
 
+/** 病区出院预检条目：只回机器码与条数，金额留在单患者体检页。 */
+export interface WardDischargeReadiness {
+  admissionId: string
+  admissionNo: string
+  patientNo: string
+  bedId: string | null
+  bedNo: string | null
+  status: string
+  ready: boolean
+  blockerCount: number
+  warningCount: number
+  blockers: string[]
+  warnings: string[]
+}
+
+/** 病区出院预检（只读批量）；emrChecked=false 表示病历归档未核查。 */
+export interface WardDischargeReadinessView {
+  wardId: string
+  wardName: string
+  checkedAt: string
+  total: number
+  readyCount: number
+  blockedCount: number
+  emrChecked: boolean
+  items: WardDischargeReadiness[]
+}
+
 /** 护理执行记录（长嘱逐日执行，追加式）。 */
 export interface NursingExecutionView {
   id: string

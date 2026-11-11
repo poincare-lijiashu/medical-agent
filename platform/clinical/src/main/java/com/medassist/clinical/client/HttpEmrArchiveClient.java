@@ -11,8 +11,13 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.time.Duration;
+import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * 电子病历归档核查客户端（内网直连，不经网关）。
@@ -75,13 +80,64 @@ public class HttpEmrArchiveClient implements EmrArchiveClient {
             log.warn("clinical.emr_archive_empty visitId={}", visitId);
             return Optional.empty();
         }
-        return Optional.of(new ArchiveSummary(response.total(), response.archived(),
-                response.draft(), response.homepageFound(), response.homepageStatus(),
-                response.homepageArchived()));
+        return Optional.of(toSummary(response));
+    }
+
+    /**
+     * 上游 JSON → 领域摘要。
+     *
+     * <p>包装类型不是装饰：Jackson 3 默认 {@code FAIL_ON_NULL_FOR_PRIMITIVES=true}，
+     * 上游少发一个布尔字段就整条解析失败。外部报文一律按"缺省=0/false"处理。
+     */
+    private static ArchiveSummary toSummary(SummaryResponse r) {
+        return new ArchiveSummary(nz(r.total()), nz(r.archived()), nz(r.draft()),
+                Boolean.TRUE.equals(r.homepageFound()), r.homepageStatus(),
+                Boolean.TRUE.equals(r.homepageArchived()));
+    }
+
+    private static int nz(Integer value) {
+        return value == null ? 0 : value;
     }
 
     /** 与 emr 的 {@code /internal/records/by-visit/{id}/archive-summary} 对应。 */
-    record SummaryResponse(UUID visitId, int total, int archived, int draft,
-                           boolean homepageFound, String homepageStatus, boolean homepageArchived) {
+    record SummaryResponse(UUID visitId, Integer total, Integer archived, Integer draft,
+                           Boolean homepageFound, String homepageStatus, Boolean homepageArchived) {
+    }
+
+    @Override
+    public Map<UUID, ArchiveSummary> batchArchiveSummary(Collection<UUID> visitIds) {
+        if (client == null || visitIds == null || visitIds.isEmpty()) {
+            return Map.of();
+        }
+        String csv = visitIds.stream().map(UUID::toString).collect(Collectors.joining(","));
+        BatchResponse response;
+        try {
+            response = client.get()
+                    .uri(builder -> builder.path("/internal/records/archive-summaries")
+                            .queryParam("visitIds", csv).build())
+                    .header("X-Internal-Token", token)
+                    .retrieve()
+                    .body(BatchResponse.class);
+        } catch (RestClientException e) {
+            log.warn("clinical.emr_archive_batch_unavailable visits={} err={} msg={}",
+                    visitIds.size(), e.getClass().getSimpleName(), e.getMessage());
+            return Map.of();
+        }
+        if (response == null || response.items() == null) {
+            log.warn("clinical.emr_archive_batch_empty visits={}", visitIds.size());
+            return Map.of();
+        }
+        Map<UUID, ArchiveSummary> out = new LinkedHashMap<>();
+        for (SummaryResponse item : response.items()) {
+            if (item == null || item.visitId() == null) {
+                continue;
+            }
+            out.put(item.visitId(), toSummary(item));
+        }
+        return out;
+    }
+
+    /** 与 emr 的 {@code /internal/records/archive-summaries} 对应。 */
+    record BatchResponse(List<SummaryResponse> items) {
     }
 }

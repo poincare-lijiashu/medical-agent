@@ -27,7 +27,9 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -1051,6 +1053,52 @@ public class EmrRepository {
 
     /** 病历归档计数投影（{@code unarchived = total - archived}）。 */
     public record RecordArchiveCounts(int total, int archived, int draft) {
+    }
+
+    /**
+     * 批量：按就诊统计归档计数（病区出院预检用，一次查询代替 N 次）。
+     *
+     * <p>只返回**有记录**的就诊；调用方对缺失的 visitId 视作 0 份。
+     */
+    public Map<UUID, RecordArchiveCounts> archiveCountsByVisits(Collection<UUID> visitIds) {
+        if (visitIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Map.Entry<UUID, RecordArchiveCounts>> rows = jdbc.sql("""
+                        SELECT visit_id,
+                               count(*) AS total,
+                               count(*) FILTER (WHERE status = 'ARCHIVED') AS archived,
+                               count(*) FILTER (WHERE status = 'DRAFT') AS draft
+                          FROM emr_svc.medical_record
+                         WHERE visit_id = ANY(:visitIds)
+                         GROUP BY visit_id
+                        """)
+                .param("visitIds", visitIds.toArray(UUID[]::new))
+                .query((rs, i) -> Map.entry(rs.getObject("visit_id", UUID.class),
+                        new RecordArchiveCounts(rs.getInt("total"), rs.getInt("archived"),
+                                rs.getInt("draft"))))
+                .list();
+        Map<UUID, RecordArchiveCounts> out = new LinkedHashMap<>();
+        for (Map.Entry<UUID, RecordArchiveCounts> row : rows) {
+            out.put(row.getKey(), row.getValue());
+        }
+        return out;
+    }
+
+    /** 批量：按就诊取病案首页（只用于判断归档状态）。 */
+    public Map<UUID, Homepage> findHomepagesByVisits(Collection<UUID> visitIds) {
+        if (visitIds.isEmpty()) {
+            return Map.of();
+        }
+        List<Homepage> rows = jdbc.sql("SELECT " + HOMEPAGE_COLUMNS
+                        + " FROM emr_svc.record_homepage WHERE visit_id = ANY(:visitIds)")
+                .param("visitIds", visitIds.toArray(UUID[]::new))
+                .query(HOMEPAGE_MAPPER).list();
+        Map<UUID, Homepage> out = new LinkedHashMap<>();
+        for (Homepage homepage : rows) {
+            out.put(homepage.visitId(), homepage);
+        }
+        return out;
     }
 
     /**
