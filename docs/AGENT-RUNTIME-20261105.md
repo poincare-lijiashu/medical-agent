@@ -9850,6 +9850,49 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 不支持按床位区间/责任护士筛选后批量打印；
 - 整区打印没有“打印预览/取消”能力，出纸后无法中止（浏览器打印对话框可取消）。
 
+## 234. 2026-11-11 整区护理执行单后端批量端点（第 234 批）
+
+**问题**
+
+- 上一批整区打印是**逐床请求**：每床 2 次（医嘱 + 执行记录），30 床约 60 次往返，
+  大病房出单慢，且在网关限流下容易出现“部分床位失败”；
+- 前端为了容错要写“失败跳过 + 汇总提示”，复杂度都压在浏览器侧。
+
+**本批做了什么**
+
+1. **Java 批量端点** `GET /clinical/wards/{wardId}/nursing-sheets?date=`：
+   - 权限沿用 `inpatient:nursing:read`，院区/科室边界走 `VisitAccessGuard.requireWard`
+     （越权与不存在同码，不泄露病区存在性）；
+   - 一条 SQL 取“病区在院患者 + 当日有效长期医嘱（LONG/PLACED/日期窗口）+
+     当日执行记录（含更正后状态）”，按床位排序；服务层按住院分组；
+   - 返回 `patientCount`（在院总数）与 `sheets`（仅当日有长嘱的床位），
+     前端可提示“本区 N 人、M 人有长嘱”，且不打印空白页。
+   - 新增 `NursingSheetRepository` / `NursingSheetService` / `NursingSheetController`，
+     不动 400KB 的 `ClinicalRepository`。
+2. **前端改为一次请求**：`clinicalApi.wardNursingSheets()`；一床一页渲染不变，
+   去掉逐床循环与进度计数，失败语义简化为“整区读取失败 → 不出纸并提示”。
+3. **共用渲染继续保留**：`renderSheet(meta, wardName, lines, date)` 单患者与整区同一份，
+   `SheetLine` 与后端 `lines` 字段一一对应，避免两套字段名漂移。
+4. **验证**：`mvn -pl clinical -am compile` 通过；Java 契约锁自动覆盖新路由；
+   新增回归锁“整区打印必须走批量端点 + 必须分页”。
+
+**验证**
+
+```
+Java：mvn -pl clinical -am -DskipTests compile → 通过
+定向：print + java contract + permission → 18 passed（+1 条新锁）
+前端：npm run typecheck → 通过；npm run build → 通过（入口 93.21 KB gzip）
+全量：pytest --ignore=tests/e2e → 1877 passed / 1 skipped
+```
+
+**遗留**
+
+- 批量端点没有分页/上限保护：超大病房（>100 床）会一次返回全部行，
+  后续应按床位分片或加 `limit`；
+- 患者姓名字段仍不在执行单上（`admission` 只存病案号，姓名在主索引；
+  批量端点跨服务取姓名需调用 EMPI，本批未做）；
+- 留痕仍是每张纸一条 `print_event`，没有“批量批次号”可把一次整区打印归为一组。
+
 
 
 

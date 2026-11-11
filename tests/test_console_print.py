@@ -93,6 +93,15 @@ def test_print_audit_is_silent_and_centralized():
         assert doc_type in text, f"打印留痕缺少单据类型 {doc_type}"
 
 
+def test_ward_batch_print_uses_single_endpoint():
+    """第 234 批：整区批量打印必须走一次批量接口，不得回退成逐床请求。"""
+    text = (SRC / "views" / "NursingView.vue").read_text(encoding="utf-8")
+    assert "clinicalApi.wardNursingSheets(" in text, "整区打印应调用后端批量端点"
+    assert "data.sheets" in text, "整区打印应消费批量结果的 sheets"
+    # 一床一页：分页样式必须存在，否则整区单据会连成一页
+    assert "page-break-after" in text, "整区打印必须声明按床位分页"
+
+
 def test_print_history_page_wired():
     """第 231 批：留痕必须有人能查——页面、路由、导航、文案四处齐全。"""
     view = SRC / "views" / "PrintHistoryView.vue"

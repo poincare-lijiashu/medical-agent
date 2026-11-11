@@ -178,6 +178,7 @@ import type {
   VisitOrder,
   VisitTransfer,
   Ward,
+  WardNursingSheets,
   WardOccupancy,
 } from './types'
 
@@ -370,6 +371,9 @@ export const clinicalApi = {
     get<NursingExecutionView[]>(`/clinical/inpatient/admissions/${admissionId}/nursing-executions`, {
       date,
     }),
+  /** 整区护理执行单（第 234 批）：一次取全病区当日长嘱与执行记录，需 inpatient:nursing:read。 */
+  wardNursingSheets: (wardId: string, date?: string) =>
+    get<WardNursingSheets>(`/clinical/wards/${wardId}/nursing-sheets`, { date }),
   recordNursing: (
     admissionId: string,
     body: { orderId: string; execDate?: string; status: string; note?: string },

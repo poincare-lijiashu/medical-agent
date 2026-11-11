@@ -429,6 +429,37 @@ export interface NursingExecutionView {
   createdAt: string
 }
 
+/** 护理执行单行：当日执行状态为空表示未记录。 */
+export interface NursingSheetLine {
+  orderId: string
+  orderNo: string
+  itemName: string
+  dose: string | null
+  frequency: string | null
+  execStatus: string | null
+  executor: string | null
+  note: string | null
+}
+
+/** 整区护理执行单：一位在院患者一张。 */
+export interface NursingSheetPatient {
+  admissionId: string
+  admissionNo: string
+  patientNo: string
+  visitId: string
+  bedNo: string | null
+  attendingDoctor: string
+  lines: NursingSheetLine[]
+}
+
+/** 整区结果：patientCount 为在院总数，sheets 仅含当日有有效长嘱的床位。 */
+export interface WardNursingSheets {
+  wardId: string
+  date: string
+  patientCount: number
+  sheets: NursingSheetPatient[]
+}
+
 /** 护理执行更正结果（reversedAmount > 0 表示已联动红冲当日费用）。 */
 export interface NursingCorrectionView {
   id: string

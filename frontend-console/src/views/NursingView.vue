@@ -20,7 +20,7 @@
           @click="printWardSheets"
         >
           <AppIcon name="layers" :size="15" />
-          {{ batchPrinting ? `正在汇总 ${batchProgress.done}/${batchProgress.total}` : '整区批量打印' }}
+          {{ batchPrinting ? '正在汇总整区…' : '整区批量打印' }}
         </button>
         <button class="btn" type="button" :disabled="loading" @click="reloadAll">
           <AppIcon name="refresh" :size="15" /> 刷新
@@ -382,28 +382,42 @@ function executionOf(orderId: string) {
 }
 
 /** 执行单状态：未记录单独列一档，避免打印件被误读成“已执行”。 */
-function execStatusLabel(exec?: NursingExecutionView): string {
-  if (!exec) return '未记录'
-  if (exec.status === 'EXECUTED') return '已执行'
-  if (exec.status === 'REFUSED') return '患者拒绝'
+function execStatusLabel(status: string | null | undefined): string {
+  if (!status) return '未记录'
+  if (status === 'EXECUTED') return '已执行'
+  if (status === 'REFUSED') return '患者拒绝'
   return '未执行'
 }
 
-interface SheetRow {
-  order: VisitOrder
-  exec?: NursingExecutionView
+/** 打印所需的患者抬头（单患者与整区批量共用）。 */
+interface SheetMeta {
+  admissionNo: string
+  patientNo: string
+  bedNo: string | null
+  attendingDoctor: string
 }
 
-/** 执行单取数口径：与页面 `orderRows` 完全一致（长期 + 在途 + 日期窗口内）。 */
-function sheetRowsOf(orders: VisitOrder[], execs: NursingExecutionView[], date: string): SheetRow[] {
-  return orders
-    .filter((o) => {
-      if (o.orderMode !== 'LONG' || o.status !== 'PLACED') return false
-      if (o.startDate && date < o.startDate) return false
-      if (o.stopDate && date > o.stopDate) return false
-      return true
-    })
-    .map((o) => ({ order: o, exec: execs.find((e) => e.orderId === o.id) }))
+/** 打印所需的单行数据：execStatus 为空即未记录。 */
+interface SheetLine {
+  orderNo: string
+  itemName: string
+  dose: string | null
+  frequency: string | null
+  execStatus: string | null
+  executor: string | null
+  note: string | null
+}
+
+function toLine(order: VisitOrder, exec?: NursingExecutionView): SheetLine {
+  return {
+    orderNo: order.orderNo,
+    itemName: order.itemName,
+    dose: order.dose,
+    frequency: order.frequency,
+    execStatus: exec?.status ?? null,
+    executor: exec?.executor ?? null,
+    note: exec?.note ?? null,
+  }
 }
 
 const SHEET_CSS = `
@@ -419,36 +433,31 @@ const SHEET_CSS = `
 `
 
 /** 单张执行单正文（单患者 / 整区批量共用同一渲染，避免两套版式漂移）。 */
-function renderSheet(
-  admission: AdmissionView,
-  wardName: string,
-  rows: SheetRow[],
-  date: string,
-): string {
+function renderSheet(meta: SheetMeta, wardName: string, lines: SheetLine[], date: string): string {
   const esc = escapeHtml
-  const recorded = rows.filter((r) => r.exec).length
-  const unrecorded = rows.length - recorded
-  const notBilled = rows.filter((r) => r.exec && r.exec.status !== 'EXECUTED').length
-  const body = rows
+  const recorded = lines.filter((l) => l.execStatus).length
+  const unrecorded = lines.length - recorded
+  const notBilled = lines.filter((l) => l.execStatus && l.execStatus !== 'EXECUTED').length
+  const body = lines
     .map(
-      (r, idx) => `<tr>
+      (l, idx) => `<tr>
         <td class="num">${idx + 1}</td>
-        <td class="mono">${esc(r.order.orderNo)}</td>
-        <td>${esc(r.order.itemName)}</td>
-        <td>${esc([r.order.dose, r.order.frequency].filter(Boolean).join(' · ') || '—')}</td>
-        <td class="${r.exec && r.exec.status !== 'EXECUTED' ? 'warn' : ''}">${esc(execStatusLabel(r.exec))}</td>
-        <td>${esc(r.exec?.executor ?? '—')}</td>
-        <td>${esc(r.exec?.note ?? '')}</td>
+        <td class="mono">${esc(l.orderNo)}</td>
+        <td>${esc(l.itemName)}</td>
+        <td>${esc([l.dose, l.frequency].filter(Boolean).join(' · ') || '—')}</td>
+        <td class="${l.execStatus && l.execStatus !== 'EXECUTED' ? 'warn' : ''}">${esc(execStatusLabel(l.execStatus))}</td>
+        <td>${esc(l.executor ?? '—')}</td>
+        <td>${esc(l.note ?? '')}</td>
       </tr>`,
     )
     .join('')
   return `
     <h1>护理执行单</h1>
-    <div class="muted meta">${esc(admission.admissionNo)} · ${esc(wardName)} ${esc(admission.bedNo ?? '未分床')} · ${esc(date)}</div>
+    <div class="muted meta">${esc(meta.admissionNo)} · ${esc(wardName)} ${esc(meta.bedNo ?? '未分床')} · ${esc(date)}</div>
     <table class="head">
-      <tr><th>病案号</th><td>${esc(admission.patientNo)}</td><th>床位</th><td>${esc(admission.bedNo ?? '未分床')}</td></tr>
-      <tr><th>执行日期</th><td>${esc(date)}</td><th>主管医师</th><td>${esc(admission.attendingDoctor)}</td></tr>
-      <tr><th>有效长嘱</th><td>${rows.length} 条</td><th>已记录 / 未记录</th><td>${recorded} / ${unrecorded}</td></tr>
+      <tr><th>病案号</th><td>${esc(meta.patientNo)}</td><th>床位</th><td>${esc(meta.bedNo ?? '未分床')}</td></tr>
+      <tr><th>执行日期</th><td>${esc(date)}</td><th>主管医师</th><td>${esc(meta.attendingDoctor)}</td></tr>
+      <tr><th>有效长嘱</th><td>${lines.length} 条</td><th>已记录 / 未记录</th><td>${recorded} / ${unrecorded}</td></tr>
     </table>
     <table class="items">
       <thead>
@@ -474,10 +483,20 @@ function printNursingSheet() {
   const admission = selectedAdmission.value
   if (!admission || orderRows.value.length === 0) return
   const wardName = wards.value.find((w) => w.id === admission.wardId)?.name ?? ''
-  const rows = orderRows.value.map((o) => ({ order: o, exec: executionOf(o.id) }))
+  const lines = orderRows.value.map((o) => toLine(o, executionOf(o.id)))
   const ok = printHtml({
     title: `护理执行单 ${admission.admissionNo} ${execDate.value}`,
-    body: renderSheet(admission, wardName, rows, execDate.value),
+    body: renderSheet(
+      {
+        admissionNo: admission.admissionNo,
+        patientNo: admission.patientNo,
+        bedNo: admission.bedNo,
+        attendingDoctor: admission.attendingDoctor,
+      },
+      wardName,
+      lines,
+      execDate.value,
+    ),
     css: SHEET_CSS,
   })
   if (!ok) {
@@ -494,86 +513,77 @@ function printNursingSheet() {
 }
 
 /**
- * 整区批量打印：逐床取当日长期医嘱与执行记录，一床一页、按床位排序。
- *
- * <p>为什么逐床请求而不是让后端一次返回：当前护理接口按住院主键取数，
- * 跨服务批量端点属新增契约；先按床位串行取（每床两次请求），失败只跳过该床，
- * 不让一位患者的异常拖垮整区出单。进度显示在按钮上，避免长任务看起来像卡死。
+ * 整区批量打印：一次请求取全病区当日数据（第 234 批后端批量端点），
+ * 一床一页、按床位排序。相比逐床请求（30 床约 60 次往返），
+ * 既快也不会因网关限流造成“部分床位失败”。
  */
 const batchPrinting = ref(false)
-const batchProgress = ref({ done: 0, total: 0 })
 
 async function printWardSheets() {
-  if (batchPrinting.value || patients.value.length === 0) return
+  if (batchPrinting.value || !selectedWardId.value) return
   const wardName = wards.value.find((w) => w.id === selectedWardId.value)?.name ?? ''
   const date = execDate.value
   batchPrinting.value = true
-  batchProgress.value = { done: 0, total: patients.value.length }
-  const sections: string[] = []
-  const printed: { admission: AdmissionView }[] = []
-  const failed: string[] = []
   try {
-    for (const admission of patients.value) {
-      try {
-        const [orders, execs] = await Promise.all([
-          clinicalApi.orders(admission.visitId),
-          clinicalApi.nursingExecutions(admission.id, date),
-        ])
-        const rows = sheetRowsOf(orders, execs, date)
-        if (rows.length > 0) {
-          sections.push(
-            `<section class="sheet">${renderSheet(admission, wardName, rows, date)}</section>`,
-          )
-          printed.push({ admission })
-        }
-      } catch {
-        failed.push(admission.patientNo)
-      } finally {
-        batchProgress.value = {
-          done: batchProgress.value.done + 1,
-          total: batchProgress.value.total,
-        }
-      }
+    const data = await clinicalApi.wardNursingSheets(selectedWardId.value, date)
+    if (data.sheets.length === 0) {
+      toast.error(
+        '没有可打印的执行单',
+        data.patientCount > 0
+          ? `本区在院 ${data.patientCount} 人，当日均无有效长期医嘱`
+          : '本区当前没有在院患者',
+      )
+      return
     }
+    const sections = data.sheets.map(
+      (s) =>
+        `<section class="sheet">${renderSheet(
+          {
+            admissionNo: s.admissionNo,
+            patientNo: s.patientNo,
+            bedNo: s.bedNo,
+            attendingDoctor: s.attendingDoctor,
+          },
+          wardName,
+          s.lines.map((l) => ({
+            orderNo: l.orderNo,
+            itemName: l.itemName,
+            dose: l.dose,
+            frequency: l.frequency,
+            execStatus: l.execStatus,
+            executor: l.executor,
+            note: l.note,
+          })),
+          date,
+        )}</section>`,
+    )
+    const ok = printHtml({
+      title: `护理执行单 ${wardName} ${date}`,
+      body: sections.join(''),
+      css: `${SHEET_CSS}\n.sheet { page-break-after: always; }\n.sheet:last-child { page-break-after: auto; }`,
+    })
+    if (!ok) {
+      toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+      return
+    }
+    for (const s of data.sheets) {
+      recordPrint({
+        docType: 'nursingSheet',
+        docNo: `${s.admissionNo}@${date}`,
+        targetType: 'ADMISSION',
+        targetId: s.admissionId,
+        patientNo: s.patientNo,
+      })
+    }
+    const skipped = data.patientCount - data.sheets.length
+    toast.ok(
+      '已生成整区执行单',
+      `${data.sheets.length} 位患者 · ${date}${skipped > 0 ? `（另有 ${skipped} 人当日无长嘱）` : ''}`,
+    )
+  } catch (e) {
+    toast.error('整区执行单读取失败', errorText(e))
   } finally {
     batchPrinting.value = false
-  }
-
-  if (sections.length === 0) {
-    toast.error(
-      '没有可打印的执行单',
-      failed.length > 0
-        ? `${failed.length} 位患者读取失败，请重试`
-        : '本区当日没有有效长期医嘱',
-    )
-    return
-  }
-  const ok = printHtml({
-    title: `护理执行单 ${wardName} ${date}`,
-    body: sections.join(''),
-    css: `${SHEET_CSS}\n.sheet { page-break-after: always; }\n.sheet:last-child { page-break-after: auto; }`,
-  })
-  if (!ok) {
-    toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
-    return
-  }
-  for (const item of printed) {
-    recordPrint({
-      docType: 'nursingSheet',
-      docNo: `${item.admission.admissionNo}@${date}`,
-      targetType: 'ADMISSION',
-      targetId: item.admission.id,
-      patientNo: item.admission.patientNo,
-    })
-  }
-  if (failed.length > 0) {
-    const shown = failed.slice(0, 5).join('、')
-    toast.error(
-      '部分患者未打印',
-      `${failed.length} 位读取失败：${shown}${failed.length > 5 ? '…' : ''}`,
-    )
-  } else {
-    toast.ok('已生成整区执行单', `${printed.length} 位患者 · ${date}`)
   }
 }
 
