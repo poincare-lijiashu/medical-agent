@@ -212,6 +212,12 @@ const router = createRouter({
         },
         { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
         {
+          // 第 231 批：打印留痕（质控 / 管理员按单号核查补打次数）
+          path: 'print-events',
+          name: 'print-history',
+          component: () => import('@/views/PrintHistoryView.vue'),
+        },
+        {
           // 第 204 批：Agent 编排治理总览（仅管理员）
           path: 'ai/agent',
           name: 'ai-agent',

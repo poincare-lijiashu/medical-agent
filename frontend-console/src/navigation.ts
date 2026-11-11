@@ -490,6 +490,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['auth:user:read', 'audit:log:read'],
   },
   {
+    // 第 231 批：打印留痕（按单号核查补打次数与打印人；按院区收敛）
+    name: 'print-history',
+    path: '/print-events',
+    title: '打印留痕',
+    hint: '票据 / 同意书 / 处方笺 / 输液卡 / 费用汇总单 / 腕带 · 按单号核查补打 · 按院区收敛',
+    icon: 'print',
+    group: '系统管理',
+    permissions: ['clinical:print:read'],
+  },
+  {
     // 第 204 批：Agent 编排治理总览（运行时开关 / 路由 / 目录 / 工具 / 合规 / 第二意见）
     name: 'ai-agent',
     path: '/ai/agent',

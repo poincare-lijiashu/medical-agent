@@ -9741,6 +9741,41 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
   要做到强一致需要打印代理或打印服务端渲染，不在本批范围；
 - `doc_type` 未在库里做枚举约束，靠前端常量收口；新增单据类型需同步 `printAudit.ts`。
 
+## 231. 2026-11-11 打印留痕查询页（第 231 批）
+
+**问题**
+
+- 上批把留痕写进了 `print_event`，但只有一个 JSON 接口：
+  质控要核查“这张票补打了几次”得手工拼 URL；导航里也没有入口，
+  等于“有数据没人能查”。
+
+**本批做了什么**
+
+1. **新页 `/print-events`（打印留痕）**：按**单据类型 + 单据号 + 条数**筛选；
+   表格列：打印时间、单据类型、单据号、患者病案号、关联对象（类型+短 ID）、打印人；
+   带入单据号且有结果时给出提示“该单共打印 N 次，补打请核对”，直接服务补打核查场景。
+2. **四种状态齐全**：加载骨架、`LoadError`（可重试）、`EmptyState`（含“升级前历史单据没有记录”的口径说明）、
+   `PermissionDenied`（403 不提供重试、不渲染任何流水）。
+3. **导航与文案**：系统管理组新增「打印留痕」，权限门 `clinical:print:read`（仅 ADMIN/QC 持有）；
+   中英文案同步补齐（`nav.print-history.*`），路由懒加载。
+4. **数据层**：`api/types.ts` 增 `PrintEvent`，`clinicalApi.printEvents()` 走 `GET /clinical/print-events`。
+5. **回归锁**：新增“留痕页四处齐全”（页面/路由/导航/权限）与“403 必须与故障区分”，
+   并校验页面使用 `clinicalApi.printEvents`、具备四态组件。
+
+**验证**
+
+```
+定向：print + i18n + permission + java contract → 22 passed（+1 条新锁）
+前端：npm run typecheck → 通过；npm run build → 通过（入口 93.19 KB gzip，仍低于 110 KB 预算）
+全量：pytest --ignore=tests/e2e → 1876 passed / 1 skipped
+```
+
+**遗留**
+
+- 没有分页：接口按 `LIMIT` 返回最近 N 条（上限 200），长期流水需后端加分页游标；
+- 没有按时间区间筛选（接口也尚未支持 `from/to`），补打核查通常够用；
+- 关联对象只显示类型与短 ID，未做“点开跳转到票据/处方详情”的深链。
+
 
 
 

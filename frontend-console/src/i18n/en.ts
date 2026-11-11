@@ -223,6 +223,8 @@ const messages: Record<MessageKey, string> = {
   'nav.his-workbench.hint': 'Integration self-check: adapter status, patient index and order reads, inline read-only AI review',
   'nav.system.title': 'System Administration',
   'nav.system.hint': 'Accounts and roles, organization and department binding, cross-domain audit log',
+  'nav.print-history.title': 'Print Audit Trail',
+  'nav.print-history.hint': 'Receipts, consents, prescriptions, IV cards, inpatient statements, wristbands - reprint checks by document number, scoped by campus',
   'nav.ai-review.title': 'Review Center',
   'nav.ai-review.hint': 'High-risk dual sign-off, prescription review, consult assistance, case archive',
 

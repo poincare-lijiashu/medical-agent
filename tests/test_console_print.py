@@ -90,3 +90,20 @@ def test_print_audit_is_silent_and_centralized():
     # 单据类型集中定义，禁止各页面各写一套大小写口径
     for doc_type in ("RECEIPT", "CONSENT", "PRESCRIPTION", "PIVAS_CARD", "INPATIENT_FINANCE", "WRISTBAND"):
         assert doc_type in text, f"打印留痕缺少单据类型 {doc_type}"
+
+
+def test_print_history_page_wired():
+    """第 231 批：留痕必须有人能查——页面、路由、导航、文案四处齐全。"""
+    view = SRC / "views" / "PrintHistoryView.vue"
+    assert view.exists(), "缺少打印留痕页面 PrintHistoryView.vue"
+    text = view.read_text(encoding="utf-8")
+    assert "clinicalApi.printEvents(" in text, "打印留痕页必须走 clinicalApi.printEvents"
+    for component in ("PermissionDenied", "LoadError", "EmptyState", "TableSkeleton"):
+        assert component in text, f"打印留痕页缺少 {component}（空/错/无权限/加载态）"
+    assert "isForbidden(" in text, "403 必须与故障区分（不显示重试）"
+
+    router = (SRC / "router" / "index.ts").read_text(encoding="utf-8")
+    assert "PrintHistoryView.vue" in router, "打印留痕页未注册路由"
+    nav = (SRC / "navigation.ts").read_text(encoding="utf-8")
+    assert "name: 'print-history'" in nav and "path: '/print-events'" in nav, "打印留痕未进导航"
+    assert "clinical:print:read" in nav, "打印留痕导航必须用 clinical:print:read 收敛"

@@ -226,6 +226,8 @@ const messages = {
   'nav.his-workbench.hint': '对接自检：适配器状态 · 患者主索引/医嘱读取 · 就地 AI 审方（只读）',
   'nav.system.title': '系统管理',
   'nav.system.hint': '账号与角色 · 机构与科室绑定 · 跨域审计日志',
+  'nav.print-history.title': '打印留痕',
+  'nav.print-history.hint': '票据 / 同意书 / 处方笺 / 输液卡 / 费用汇总单 / 腕带 · 按单号核查补打 · 按院区收敛',
   'nav.ai-review.title': '审核中心',
   'nav.ai-review.hint': '高危双人核对 · 开药待审 · 会诊协助 · 病例库',
 

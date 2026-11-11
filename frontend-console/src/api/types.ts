@@ -572,6 +572,19 @@ export interface ChargeView {
 
 export type ChargeReceiptStatus = 'ISSUED' | 'VOID'
 
+/** 单据打印留痕：追加式，用于核查补打次数与打印人。 */
+export interface PrintEvent {
+  id: string
+  docType: string
+  docNo: string
+  targetType: string | null
+  targetId: string | null
+  patientNo: string | null
+  actor: string
+  campusId: string | null
+  printedAt: string
+}
+
 /** 收费票据：金额/支付方式为开票快照；重打累计次数，作废留原因。 */
 export interface ChargeReceipt {
   id: string
