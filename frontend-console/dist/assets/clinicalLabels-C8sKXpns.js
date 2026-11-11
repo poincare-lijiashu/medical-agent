@@ -1,0 +1,1 @@
+const _={ADMISSION_STATUS:"状态异常",UNSETTLED_CHARGE:"未结费用",UNBILLED_TEMP_ORDER:"临时医嘱未计费",UNBILLED_DAILY_ORDER:"长嘱未计费",UNSTOPPED_LONG_ORDER:"长嘱未停",DISCHARGE_MED_PENDING:"带药未完成",EMR_ARCHIVE:"病历未归档",OVERDUE_DISCHARGE:"超期未出院",PLANNED_DISCHARGE_TODAY:"今日预出院"},R="OVERDUE_DISCHARGE";function A(E){return _[E]??E}function O(E){return E.filter(D=>D!==R)}export{A as c,O as v};
