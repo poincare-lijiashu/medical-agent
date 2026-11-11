@@ -391,6 +391,30 @@ python scripts/chs_sim.py --port 9099
 可作为测评前门禁。**脚本只证明应用与数据库技术控制项，不替代第三方测评**
 （物理环境、宿主机 EDR、WAF/IDS、SIEM、密评、恢复演练仍需院方或测评机构完成）。
 
+## SLO 与容量基线（§268）
+
+| 文档/工具 | 作用 |
+|---|---|
+| [SLO-20261111.md](../docs/SLO-20261111.md) | 10 个 SLO、SLI 口径、PromQL、错误预算与变更冻结策略 |
+| [CAPACITY-MODEL-20261111.md](../docs/CAPACITY-MODEL-20261111.md) | 1000 床医院工作负载假设、副本/连接池公式、扩容触发条件 |
+| `scripts/perf/slo_capacity.ps1` | 分阶段加权只读压测，输出 Markdown + JSON、冷启动与容量点 |
+| `deploy/observability/alerts/medassist-alerts.yaml` | `medassist.slo` 组：可用性快/慢烧、读延迟、限流比例告警 |
+
+```powershell
+# 核心读场景：2/4/8 并发，每阶段 10s；输出 reports/perf/slo-capacity-*.md
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\perf\slo_capacity.ps1 `
+  -Scenario core -Stages 2,4,8 -StageSeconds 10 -PaceMs 20
+
+# 混入重查询（运营洞察/审计/护理看板），用于找慢端点，不用于宣称核心 SLO 达标
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\perf\slo_capacity.ps1 `
+  -Scenario mixed -Strict
+```
+
+2026-11-11 开发基线（mixed，单机、无 TLS）：4 并发 **125.7 RPS**、P95 **10.4ms**、
+0 错误/0 限流；8 并发 249 RPS 时出现 1.2% 429，说明**网关限流先于应用饱和**。
+按 150 RPS × 2 倍余量规划，单副本 125 RPS 至少需要 **3 个临床副本**；生产必须在
+准生产环境复测，不能把开发机数字当容量承诺。
+
 ## 构建与运行
 
 ```powershell

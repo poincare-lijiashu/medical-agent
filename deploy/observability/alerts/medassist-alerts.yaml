@@ -285,3 +285,117 @@ spec:
           annotations:
             summary: "审计归档超过 8 天未成功（{{ $labels.cronjob }}）"
             description: "归档是每周任务；连续错过一个周期说明 CronJob 失败或被挂起，热表将持续膨胀并影响保留期合规。"
+
+    # ========================================================================
+    # 第 268 批：SLO 与错误预算（见 docs/SLO-20261111.md）
+    #
+    # 口径：
+    #   * 可用性 SLI = 1 - 5xx / 全部服务端请求；4xx 是客户端错误，不计入不可用；
+    #   * 99.95% 月预算 = 0.05%，14.4x 快烧 = 0.72%，6x 慢烧 = 0.30%；
+    #   * 429 不计入可用性（限流是保护动作），但单独用 throttle 比例告警；
+    #   * 延迟只看成功请求的直方图，避免把 5xx 的快速失败算成"低延迟"。
+    # ========================================================================
+    - name: medassist.slo
+      rules:
+        - alert: MedassistGatewayAvailabilityBudgetFastBurn
+          expr: |
+            (
+              sum(rate(http_server_requests_seconds_count{component="gateway", status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{component="gateway"}[5m])), 0.001)
+            ) > 0.0072
+            and
+            (
+              sum(rate(http_server_requests_seconds_count{component="gateway", status=~"5.."}[1h]))
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{component="gateway"}[1h])), 0.001)
+            ) > 0.0072
+          for: 2m
+          labels:
+            severity: critical
+            slo: gateway-availability
+          annotations:
+            summary: "网关可用性 SLO 快烧（5m/1h 均 > 14.4x 错误预算）"
+            description: "目标 99.95%；先看下游 5xx 来源与最近发布，必要时按 docs/SLO-20261111.md 的预算策略冻结变更。"
+
+        - alert: MedassistGatewayAvailabilityBudgetSlowBurn
+          expr: |
+            (
+              sum(rate(http_server_requests_seconds_count{component="gateway", status=~"5.."}[30m]))
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{component="gateway"}[30m])), 0.001)
+            ) > 0.003
+            and
+            (
+              sum(rate(http_server_requests_seconds_count{component="gateway", status=~"5.."}[6h]))
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{component="gateway"}[6h])), 0.001)
+            ) > 0.003
+          for: 15m
+          labels:
+            severity: warning
+            slo: gateway-availability
+          annotations:
+            summary: "网关可用性 SLO 慢烧（30m/6h 均 > 6x 错误预算）"
+            description: "不是瞬时抖动；按科室/接口拆 5xx，确认是否为同一依赖或同一版本引入。"
+
+        - alert: MedassistAuthAvailabilityBudgetFastBurn
+          expr: |
+            (
+              sum(rate(http_server_requests_seconds_count{component="auth", status=~"5.."}[5m]))
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{component="auth"}[5m])), 0.001)
+            ) > 0.0072
+            and
+            (
+              sum(rate(http_server_requests_seconds_count{component="auth", status=~"5.."}[1h]))
+              /
+              clamp_min(sum(rate(http_server_requests_seconds_count{component="auth"}[1h])), 0.001)
+            ) > 0.0072
+          for: 2m
+          labels:
+            severity: critical
+            slo: auth-availability
+          annotations:
+            summary: "认证可用性 SLO 快烧（5m/1h 均 > 14.4x 错误预算）"
+            description: "认证不可用会阻断全部登录；先确认 PG 与 auth 实例，再考虑降级到只读/备用节点。"
+
+        - alert: MedassistClinicalLatencyP95High
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le) (rate(http_server_requests_seconds_bucket{component="clinical", status!~"5.."}[5m]))
+            ) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+            slo: clinical-latency
+          annotations:
+            summary: "临床核心读 P95 超过 500ms"
+            description: "目标 p95 < 500ms；先看慢 SQL/行锁与 N+1，再看是否被报表/导出类重查询挤占。"
+
+        - alert: MedassistPharmacyTechLatencyP95High
+          expr: |
+            histogram_quantile(0.95,
+              sum by (component, le) (rate(http_server_requests_seconds_bucket{component=~"pharmacy|tech", status!~"5.."}[5m]))
+            ) > 0.8
+          for: 10m
+          labels:
+            severity: warning
+            slo: pharmacy-tech-latency
+          annotations:
+            summary: "药事/医技 P95 超过 800ms（{{ $labels.component }}）"
+            description: "目标 p95 < 800ms；药房先看库存/批次锁，医技先看设备接口与报告生成。"
+
+        - alert: MedassistGatewayThrottleRateHigh
+          expr: |
+            sum(rate(medassist_gateway_rate_limited_total[5m]))
+            /
+            clamp_min(sum(rate(http_server_requests_seconds_count{component="gateway"}[5m])), 0.001)
+            > 0.02
+          for: 10m
+          labels:
+            severity: warning
+            slo: gateway-throttle
+          annotations:
+            summary: "网关限流比例超过 2%"
+            description: "限流保护生效但已影响业务；检查异常客户端、护理站轮询频率与容量基线（docs/CAPACITY-MODEL-20261111.md）。"

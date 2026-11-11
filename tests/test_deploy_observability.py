@@ -161,6 +161,29 @@ def test_batch_jobs_have_failure_alerts():
     assert "severity: critical" in backup_block
 
 
+def test_slo_alerts_and_capacity_docs_exist():
+    """第 268 批：SLO 告警、容量模型与压测脚本必须同时存在，避免"文档写了、规则没上"。"""
+    alerts = _alerts(PLATFORM_ALERTS)
+    for name in (
+        "MedassistGatewayAvailabilityBudgetFastBurn",
+        "MedassistGatewayAvailabilityBudgetSlowBurn",
+        "MedassistAuthAvailabilityBudgetFastBurn",
+        "MedassistClinicalLatencyP95High",
+        "MedassistPharmacyTechLatencyP95High",
+        "MedassistGatewayThrottleRateHigh",
+    ):
+        assert name in alerts, f"缺少 SLO 告警：{name}"
+    for path in (
+        os.path.join(REPO, "docs", "SLO-20261111.md"),
+        os.path.join(REPO, "docs", "CAPACITY-MODEL-20261111.md"),
+        os.path.join(REPO, "scripts", "perf", "slo_capacity.ps1"),
+    ):
+        assert os.path.isfile(path), f"缺少交付物：{path}"
+    body = _read(PLATFORM_ALERTS)
+    assert "MedassistGatewayThrottleRateHigh" in body
+    assert "docs/CAPACITY-MODEL-20261111.md" in body
+
+
 def test_ai_core_exposes_required_production_settings():
     """评测 06 P1-4：AUDIT_TIMEZONE/TRUSTED_PROXIES/PG_POOL_MAX 必须有 Helm 入口。
 

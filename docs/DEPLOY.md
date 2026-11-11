@@ -432,6 +432,7 @@ Java 微服务矩阵（`platform/`）与 Python AI 中台的集群形态已交�
 | --- | --- | --- |
 | 发布后冒烟门禁 | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\release_gate.ps1` | 网关健康 + 登录 + EMPI/临床/病案/输血/医技读接口 200，未带令牌仍 401 |
 | 容量基线 | `... scripts\perf\platform_loadtest.ps1 -Concurrency 8 -DurationSeconds 20 -PaceMs 50` | p95 ≤ 800ms、错误率 ≤ 1%、429 ≤ 1%（超过说明压测节奏高于限流阈值） |
+| SLO/容量分阶段基线（§268） | `... scripts\perf\slo_capacity.ps1 -Scenario mixed -Stages 2,4,8 -StageSeconds 10` | 至少一个阶段 p95/错误/429 全部达标；报告给出安全 RPS 与所需副本数。口径见 `docs/SLO-20261111.md`、`docs/CAPACITY-MODEL-20261111.md` |
 | 备份恢复演练 | `... scripts\dr\pg_restore_drill.ps1` | dump 可恢复，5 张核心表行数一致，自动清理演练库 |
 
 **本机实测（2026-11-04，单机 + Docker PG）**
