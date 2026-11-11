@@ -11278,3 +11278,71 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - `_include`/`_revinclude`、`_sort`、`_summary`、条件更新与批量 Bundle 未实现；
 - FHIR 写接口（ServiceRequest/DiagnosticReport/Procedure）未开放；
 - Patient 不按院区过滤（EMPI 跨院区共享），区域平台侧仍需按授权策略再收敛。
+
+## 260. 2026-11-11 PACS DIMSE 网关与影像底座（第 260 批）
+
+**问题**
+
+- 影像域此前只有 DICOMweb（QIDO/WADO），用于浏览器阅片；院内 PACS/设备之间的
+  **DIMSE** 通道缺失，导致：无法做 C-ECHO 连通性自检、无法按患者/检查号 C-FIND 对账、
+  无法把实例 C-STORE 推送到 PACS、无法发起 C-MOVE 迁移，且这些"传输动作"没有台账；
+- 阅片深链（OHIF）代码已存在，但缺少可复现的本地 Orthanc + OHIF 底座与配置说明。
+
+**本批做了什么**
+
+1. **dcm4che 5.35.2**（官方仓库，非 Maven Central）引入 `tech` 模块，新增 `com.medassist.tech.pacs`：
+   - `Dcm4cheDimseClient`：C-ECHO、C-FIND（Study/Series）、C-STORE SCU、C-MOVE SCU；
+   - 每次调用新建 Association 并释放（DICOM 关联有状态，复用会把响应串到下一条请求）；
+   - 守护线程池、连接/请求超时、单次 C-FIND 最多 500 条。
+2. **安全边界**：远端 host/port/AE 与 C-MOVE 目的地**只能来自配置**；目的地白名单
+   fail-closed（空配置拒绝所有 MOVE）；UID 正则校验；C-STORE 单文件 64MB（可配）+
+   multipart 上限；错误统一 503/400，不把对端 500 原样透出。
+3. **API**（`/tech/pacs/dimse/**`）：`GET /echo`、`POST /studies/find`、`POST /series/find`、
+   `POST /move`、`POST /store`（multipart）。读操作需 `tech:pacs:read`，传输需
+   auth V83 新增的 `tech:pacs:transfer`（ADMIN/TECHNICIAN/INTEGRATION）。
+4. **审计**：tech V18 `pacs_dimse_log`（追加式，库级触发器拒绝 UPDATE/DELETE），
+   记录操作人/操作/远端 AE 与主机/检查与实例计数/状态码/耗时/detail；
+   C-FIND 无 `phi:read` 时患者号与姓名掩码；detail 只放 UID/计数，不落患者明文。
+5. **指标**：`medassist.pacs.dimse.operations{operation,outcome}` 与
+   `medassist.pacs.dimse.duration`。
+6. **影像底座**：docker-compose 新增 `imaging` profile（Orthanc 4242/8042 + DICOMweb，
+   OHIF 3000 + `deploy/imaging/ohif/app-config.js`）；`run_platform_demo.ps1` 探测
+   8042/4242 后才注入 `PACS_*` 环境变量，未启动底座时 tech 照常启动、调阅接口 503。
+7. **文档**：`platform/README.md` 增加影像 PACS/DICOM 章节（两条通道、变量、API、安全边界）。
+
+**验证**
+
+```
+后端：mvn -pl tech -am test → 通过
+      Dcm4cheDimseClientTest（4 条：查询键/日期区间/Study/Series 解析）
+      PacsDimseServiceTest（7 条：白名单拒绝、非 0 状态判失败、PHI 掩码、日期校验、未启用 503）
+      Dcm4cheDimseProtocolTest（2 条：本机内嵌 SCP 上真实完成
+           C-ECHO → C-FIND → C-STORE → C-MOVE；以及服务层→协议层全链路）
+      PacsControllerPermissionTest（新增 DIMSE 读写权限分离）
+真实库：tech V18 / auth V83 success
+      pacs_dimse_log INSERT 成功；UPDATE 被触发器拒绝（追加式审计生效）
+网关：admin01 GET /api/v2/tech/pacs/dimse/echo → 503
+      （未配置 PACS 时 fail-closed，不返回空结果假装"没有检查"）
+迁移 lint：scanned=253 new=0 PASS
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **只做 SCU，不做 C-STORE SCP**：影像归档归 PACS；本平台再做一个 SCP 等于重复建 PACS，
+  还会把"存储与生命周期"责任揽到自己身上。
+- **不做 C-GET**：C-GET 要求本端同时是 C-STORE SCP；院内主流是 C-MOVE，
+  收益低、攻击面大。需要时按院方要求单独评估。
+- **每次新建 Association**：避免有状态连接在超时/并发下串响应；调用频率是运维级，
+  建连成本可接受。
+- **审计失败不阻断传输**：影像可能已经推到对端，返回失败会让调用方误判"没推"；
+  审计写失败以 ERROR 日志留痕，由运维补录。
+- **C-MOVE 白名单 fail-closed**：宁可拒绝一次合法推送，也不让接口变成任意 DICOM 转发器。
+
+**遗留**
+
+- 本机网络未能完成 Orthanc/OHIF 镜像拉取（层已下载但镜像未落地），compose 配置已就绪；
+  DICOMweb + OHIF 的端到端复验需在镜像可用后补做；
+- C-MOVE 的真实影像回推需院内 PACS 联调（本批已用内嵌 SCP 验证请求/响应与计数解析）；
+- 未实现 C-GET、C-STORE SCP、DICOM TLS（院方 PACS 启 TLS 时需补证书与 AE 白名单）；
+- C-FIND 只做患者号/姓名掩码，未做 DICOM 标签级脱敏。

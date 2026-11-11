@@ -38,6 +38,14 @@
       后者基于 JAX-RS，与 Spring MVC 的鉴权/审计/错误壳需要重写适配，收益低于成本。
     -->
     <hapi-fhir.version>8.12.1</hapi-fhir.version>
+
+    <!--
+      dcm4che（DICOM 工具包，5.35.2，2026-11 经 maven.dcm4che.org 实测可解析）。
+      只用于 DIMSE（C-ECHO/C-FIND/C-STORE/C-MOVE）网关；DICOMweb 仍走既有 HTTP 客户端。
+      注意：该构件不在 Maven Central，仅在 dcm4che 官方仓库（见 tech/pom.xml）；
+      5.36.0 的模块已发布但父 POM 缺失，构建无法解析，故取 5.35.2。
+    -->
+    <dcm4che.version>5.35.2</dcm4che.version>
   </properties>
 
   <modules>

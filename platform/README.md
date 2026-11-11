@@ -87,6 +87,51 @@
 - 本地编码统一用 `urn:medassist:*`，未建立 LOINC/SNOMED/ICD 映射（属主数据治理 W4.2）；
 - 不提供 `Practitioner`/`Location` 资源，就诊参与人与位置只给 `display`，避免悬空引用。
 
+## 影像 PACS / DICOM（§260）
+
+两条通道，职责分开：
+
+| 通道 | 用途 | 实现 |
+|---|---|---|
+| DICOMweb（QIDO-RS / WADO-RS） | 浏览器阅片、按 UID 调阅、序列缓存 | `tech` 既有 `HttpPacsDicomClient`，未配置时返回 503 |
+| DIMSE（C-ECHO/C-FIND/C-STORE/C-MOVE） | 院内系统对账、推送与迁移 | `dcm4che 5.35.2`，SCU 只连配置里的 PACS |
+
+**本地影像底座**（可选 profile，不占默认联调资源）：
+
+```powershell
+docker compose --profile imaging up -d orthanc ohif
+# Orthanc: DIMSE 127.0.0.1:4242 (AE MEDAGENT)，DICOMweb http://127.0.0.1:8042/dicom-web
+# OHIF:    http://127.0.0.1:3000/viewer?StudyInstanceUIDs=<uid>
+```
+
+`scripts/run_platform_demo.ps1` 会探测 8042/4242：探测到才注入 `PACS_BASE_URL` /
+`PACS_VIEWER_URL` / `PACS_DIMSE_*`，没启动影像底座时 `tech` 照常启动（调阅接口 503，
+不会假装"没有影像"）。生产对接院方 PACS 时改 `.env`/Helm 的以下变量：
+
+| 变量 | 说明 |
+|---|---|
+| `PACS_BASE_URL` | DICOMweb 根地址（如 `https://pacs/dicom-web`） |
+| `PACS_VIEWER_URL` | OHIF 根地址（深链格式 `?StudyInstanceUIDs=`） |
+| `PACS_DIMSE_ENABLED` / `_HOST` / `_PORT` | DIMSE 开关与目标（远端地址只能来自配置） |
+| `PACS_DIMSE_CALLED_AE` / `_CALLING_AE` | 被叫/本端 AE Title |
+| `PACS_DIMSE_MOVE_DESTINATIONS` | 允许的 C-MOVE 目的地（逗号分隔；为空则全部拒绝） |
+
+**DIMSE API**（`/tech/pacs/dimse/**`）：
+
+| 接口 | 权限 | 说明 |
+|---|---|---|
+| `GET /echo` | `tech:pacs:read` | 连通性自检（返回远端 AE/耗时） |
+| `POST /studies/find` | `tech:pacs:read` | 按患者/检查号/日期/设备对账；无 `phi:read` 时患者号与姓名掩码 |
+| `POST /series/find` | `tech:pacs:read` | 某检查的序列构成 |
+| `POST /move` | `tech:pacs:transfer` | 让 PACS 推到白名单 AE（默认拒绝） |
+| `POST /store` | `tech:pacs:transfer` | multipart 上传单个 DICOM 实例并 C-STORE 到 PACS |
+
+安全边界：远端主机/端口/AE 与 C-MOVE 目的地**全部来自配置**，请求不能指定；
+单文件大小上限 64MB（可配）；每次操作写 `tech_svc.pacs_dimse_log`（追加式，
+库级触发器拒绝改删），detail 只放 UID/计数，不落患者明文。
+DIMSE 查询是 **PACS 级**（远端不提供院区维度），因此只授予集成/技师/管理员；
+控制台内的阅片队列与调阅仍按院区收敛。
+
 ## 构建与运行
 
 ```powershell

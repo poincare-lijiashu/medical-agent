@@ -514,6 +514,10 @@ tech:
     startup: {failureThreshold: 30, periodSeconds: 5}
     liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
     readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 对接院方 PACS 时追加（不要把 PACS 口令写进 values，用 external Secret 注入）：
+  #   PACS_BASE_URL / PACS_VIEWER_URL
+  #   PACS_DIMSE_ENABLED / _HOST / _PORT / _CALLED_AE / _CALLING_AE / _MOVE_DESTINATIONS
+  # 详见 platform/README.md「影像 PACS / DICOM（§260）」
   env: []
   nodeSelector: {}
   tolerations: []

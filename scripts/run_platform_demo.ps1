@@ -82,6 +82,25 @@ $env:JWT_ISSUER = "medassist-auth"
 # 不配置会把链接写成 127.0.0.1:8090（对端拿到后无法回查）。
 $env:FHIR_BASE_URL = "http://127.0.0.1:8080/api/v2/fhir"
 
+# 影像底座（第 260 批）：Orthanc/OHIF 属于可选 profile，未启动时不改 PACS 配置
+# （tech 服务照常启动，调阅接口返回 503 而不是假装"没有影像"）。
+# 启动：docker compose --profile imaging up -d orthanc ohif
+if (Test-Port 8042) {
+    if (-not $env:PACS_BASE_URL) {
+        $env:PACS_BASE_URL = "http://127.0.0.1:8042/dicom-web"
+    }
+    if (-not $env:PACS_VIEWER_URL) {
+        $env:PACS_VIEWER_URL = "http://127.0.0.1:3000/viewer"
+    }
+}
+if (Test-Port 4242) {
+    if (-not $env:PACS_DIMSE_ENABLED) { $env:PACS_DIMSE_ENABLED = "true" }
+    if (-not $env:PACS_DIMSE_HOST) { $env:PACS_DIMSE_HOST = "127.0.0.1" }
+    if (-not $env:PACS_DIMSE_PORT) { $env:PACS_DIMSE_PORT = "4242" }
+    if (-not $env:PACS_DIMSE_CALLED_AE) { $env:PACS_DIMSE_CALLED_AE = "MEDAGENT" }
+    if (-not $env:PACS_DIMSE_MOVE_DESTINATIONS) { $env:PACS_DIMSE_MOVE_DESTINATIONS = "MEDAGENT" }
+}
+
 # 密钥治理（第 129 批）：本脚本**不再内置任何演示密钥字面量**。
 # 两个值都必须来自 .env.local（或当前进程环境变量），缺失即 fail-fast——
 # 静默回落到仓库里的公开值，等于把"能伪造任意身份/调用内部接口"的能力写进版本库。

@@ -1013,6 +1013,26 @@ public class TechRepository {
                 .param("description", s.description()).param("count", s.instanceCount()).update();
     }
 
+    /** PACS DIMSE 操作台账（追加式；detail 只放 UID/计数等定位信息，不放患者明文）。 */
+    public void insertPacsDimse(String actor, String operation, String remoteAe, String remoteHost,
+                                Integer studies, Integer instances, String outcome,
+                                Integer statusCode, int durationMs, String detailJson) {
+        jdbc.sql("""
+                        INSERT INTO tech_svc.pacs_dimse_log
+                            (actor, operation, remote_ae, remote_host, studies, instances,
+                             outcome, status_code, duration_ms, detail)
+                        VALUES (:actor, :operation, CAST(:remoteAe AS text), CAST(:remoteHost AS text),
+                                CAST(:studies AS integer), CAST(:instances AS integer), :outcome,
+                                CAST(:statusCode AS integer), :durationMs, CAST(:detail AS jsonb))
+                        """)
+                .param("actor", actor).param("operation", operation)
+                .param("remoteAe", remoteAe).param("remoteHost", remoteHost)
+                .param("studies", studies).param("instances", instances)
+                .param("outcome", outcome).param("statusCode", statusCode)
+                .param("durationMs", durationMs)
+                .param("detail", detailJson == null ? "{}" : detailJson).update();
+    }
+
     public void insertPacsAccess(PacsAccessLog log) {
         jdbc.sql("""
                         INSERT INTO tech_svc.pacs_access_log

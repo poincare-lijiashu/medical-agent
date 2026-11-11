@@ -39,6 +39,12 @@ spring:
         password: ${NACOS_PASSWORD:nacos}
         namespace: ${NACOS_NAMESPACE:public}
 
+  # DIMSE C-STORE 上传的是单个 DICOM 文件，默认 1MB 不够（CT/MR 单实例常见 10–50MB）
+  servlet:
+    multipart:
+      max-file-size: ${PACS_DIMSE_MAX_FILE_BYTES:67108864}
+      max-request-size: ${PACS_DIMSE_MAX_REQUEST_BYTES:69206016}
+
 # ---- 服务间调用：tech → empi（内网直连，不经网关）----
 tech:
   empi:
@@ -57,6 +63,18 @@ tech:
     max-instance-bytes: ${PACS_MAX_INSTANCE_BYTES:67108864}
     # OHIF 等查看器根地址（如 http://ohif.local/viewer）；为空时回退到 PACS 登记回传的 viewerUrl
     viewer-url: ${PACS_VIEWER_URL:}
+    # DIMSE 网关：远端主机/被叫 AE/目的地白名单只能来自配置，不接受请求参数（防任意 DICOM 转发）
+    dimse:
+      enabled: ${PACS_DIMSE_ENABLED:false}
+      host: ${PACS_DIMSE_HOST:127.0.0.1}
+      port: ${PACS_DIMSE_PORT:4242}
+      called-ae: ${PACS_DIMSE_CALLED_AE:MEDAGENT}
+      calling-ae: ${PACS_DIMSE_CALLING_AE:MEDASSIST_HIS}
+      connect-timeout: ${PACS_DIMSE_CONNECT_TIMEOUT:PT5S}
+      request-timeout: ${PACS_DIMSE_REQUEST_TIMEOUT:PT30S}
+      max-file-bytes: ${PACS_DIMSE_MAX_FILE_BYTES:67108864}
+      # 逗号分隔的允许目的地；为空表示拒绝所有 C-MOVE（fail-closed）
+      move-destinations: ${PACS_DIMSE_MOVE_DESTINATIONS:}
 
 management:
   endpoints:

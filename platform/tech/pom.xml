@@ -14,6 +14,23 @@
   <name>Platform Tech</name>
   <description>医技域：检查/检验申请、标本流转、报告回写与修订、危急值闭环</description>
 
+  <!--
+    dcm4che 不在 Maven Central，只在官方仓库发布。
+    只在本模块引入，避免其他服务被动依赖该仓库（供应链面收敛）。
+  -->
+  <repositories>
+    <repository>
+      <id>dcm4che</id>
+      <url>https://maven.dcm4che.org</url>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+
   <dependencies>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -52,6 +69,17 @@
       <groupId>com.medassist</groupId>
       <artifactId>platform-common</artifactId>
       <version>${project.version}</version>
+    </dependency>
+    <!-- DIMSE 网关（C-ECHO / C-FIND / C-STORE SCU / C-MOVE SCU） -->
+    <dependency>
+      <groupId>org.dcm4che</groupId>
+      <artifactId>dcm4che-core</artifactId>
+      <version>${dcm4che.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.dcm4che</groupId>
+      <artifactId>dcm4che-net</artifactId>
+      <version>${dcm4che.version}</version>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>

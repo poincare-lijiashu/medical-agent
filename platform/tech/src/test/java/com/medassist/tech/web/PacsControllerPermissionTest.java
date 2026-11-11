@@ -4,6 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
 import com.medassist.tech.service.PacsDicomService;
+import com.medassist.tech.service.PacsDimseService;
 import com.medassist.tech.service.PacsReadingService;
 import com.medassist.tech.service.PacsService;
 import com.medassist.tech.service.TechAccessGuard;
@@ -31,6 +32,7 @@ class PacsControllerPermissionTest {
     private PacsService service;
     private PacsReadingService readingService;
     private PacsDicomService dicomService;
+    private PacsDimseService dimseService;
     private PacsController controller;
 
     private static final String UID = "1.2.840.113619.2.55.3.20261103.7";
@@ -40,7 +42,8 @@ class PacsControllerPermissionTest {
         service = mock(PacsService.class);
         readingService = mock(PacsReadingService.class);
         dicomService = mock(PacsDicomService.class);
-        controller = new PacsController(service, readingService, dicomService,
+        dimseService = mock(PacsDimseService.class);
+        controller = new PacsController(service, readingService, dicomService, dimseService,
                 mock(TechAccessGuard.class));
     }
 
@@ -60,6 +63,21 @@ class PacsControllerPermissionTest {
         controller.readingQueue(null, "MINE", null, 10, "tech:pacs:read", "doc01",
                 DataScope.all("doc01", true));
         verify(readingService).queue(null, "MINE", null, 10, "doc01", Set.of());
+    }
+
+    @Test
+    @DisplayName("DIMSE：C-ECHO/C-FIND 需要 tech:pacs:read，C-MOVE/C-STORE 需要 tech:pacs:transfer")
+    void dimseRequiresTransferForMutation() {
+        assertForbidden(() -> controller.dimseEcho("tech:pacs:write", "tech01"));
+        assertForbidden(() -> controller.dimseMove(
+                new PacsDimseDtos.MoveReq(UID, "MEDAGENT"), "tech:pacs:read", "tech01"));
+
+        controller.dimseEcho("tech:pacs:read", "tech01");
+        verify(dimseService).echo("tech01");
+
+        controller.dimseMove(new PacsDimseDtos.MoveReq(UID, "MEDAGENT"),
+                "tech:pacs:transfer", "tech01");
+        verify(dimseService).move(UID, "MEDAGENT", "tech01");
     }
 
     @Test

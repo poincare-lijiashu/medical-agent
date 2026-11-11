@@ -9,9 +9,18 @@ import com.medassist.tech.domain.TechModel.PacsStudy;
 import com.medassist.tech.domain.TechModel.ReadingQueueItem;
 import com.medassist.tech.domain.TechModel.WorklistItem;
 import com.medassist.tech.service.PacsDicomService;
+import com.medassist.tech.service.PacsDimseService;
 import com.medassist.tech.service.PacsReadingService;
 import com.medassist.tech.service.PacsService;
 import com.medassist.tech.service.TechAccessGuard;
+import com.medassist.tech.web.PacsDimseDtos.EchoView;
+import com.medassist.tech.web.PacsDimseDtos.FindStudiesReq;
+import com.medassist.tech.web.PacsDimseDtos.MoveReq;
+import com.medassist.tech.web.PacsDimseDtos.MoveView;
+import com.medassist.tech.web.PacsDimseDtos.SeriesFindReq;
+import com.medassist.tech.web.PacsDimseDtos.SeriesView;
+import com.medassist.tech.web.PacsDimseDtos.StoreView;
+import com.medassist.tech.web.PacsDimseDtos.StudyView;
 import com.medassist.tech.web.PacsDtos.InstancePage;
 import com.medassist.tech.web.PacsDtos.ReadingNoteReq;
 import com.medassist.tech.web.PacsDtos.ReadingTaskView;
@@ -31,7 +40,9 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -58,17 +69,22 @@ public class PacsController {
     private static final String WRITE = "tech:pacs:write";
     private static final String READING = "tech:report:write";
     private static final String AUDIT = "tech:pacs:audit";
+    /** DIMSE 传输权限：C-MOVE/C-STORE 会改动 PACS 数据，与只读调阅分离。 */
+    private static final String TRANSFER = "tech:pacs:transfer";
 
     private final PacsService service;
     private final PacsReadingService readingService;
     private final PacsDicomService dicomService;
+    private final PacsDimseService dimseService;
     private final TechAccessGuard guard;
 
     public PacsController(PacsService service, PacsReadingService readingService,
-                          PacsDicomService dicomService, TechAccessGuard guard) {
+                          PacsDicomService dicomService, PacsDimseService dimseService,
+                          TechAccessGuard guard) {
         this.service = service;
         this.readingService = readingService;
         this.dicomService = dicomService;
+        this.dimseService = dimseService;
         this.guard = guard;
     }
 
@@ -329,6 +345,58 @@ public class PacsController {
                 .contentType(MediaType.parseMediaType(payload.contentType()))
                 .header(HttpHeaders.CACHE_CONTROL, "no-store")
                 .body(payload.bytes());
+    }
+
+    // ---------------------------------------------------------------- DIMSE 网关
+
+    /** C-ECHO 连通性自检：运维确认"本端到 PACS 的 DIMSE 通不通"。 */
+    @GetMapping("/dimse/echo")
+    public ApiResponse<EchoView> dimseEcho(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dimseService.echo(actor));
+    }
+
+    /** C-FIND（Study 级）：按患者/检查号/日期/设备对账远端 PACS。 */
+    @PostMapping("/dimse/studies/find")
+    public ApiResponse<List<StudyView>> dimseFindStudies(
+            @Valid @RequestBody FindStudiesReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dimseService.findStudies(req, actor,
+                Permissions.has(permissions, "phi:read")));
+    }
+
+    /** C-FIND（Series 级）：确认某检查在远端 PACS 的序列构成。 */
+    @PostMapping("/dimse/series/find")
+    public ApiResponse<List<SeriesView>> dimseFindSeries(
+            @Valid @RequestBody SeriesFindReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(dimseService.findSeries(req.studyInstanceUid(), actor));
+    }
+
+    /** C-MOVE：让 PACS 把指定检查推送到白名单内的目的地 AE。 */
+    @PostMapping("/dimse/move")
+    public ApiResponse<MoveView> dimseMove(
+            @Valid @RequestBody MoveReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, TRANSFER);
+        return ApiResponse.ok(dimseService.move(req.studyInstanceUid(), req.destinationAe(), actor));
+    }
+
+    /** C-STORE：把单个 DICOM 实例推送到 PACS（multipart 上传）。 */
+    @PostMapping(value = "/dimse/store", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<StoreView> dimseStore(
+            @RequestPart("file") MultipartFile file,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(AuthHeaders.ACTOR) String actor) {
+        Permissions.require(permissions, TRANSFER);
+        return ApiResponse.ok(dimseService.store(file, actor));
     }
 
     /** 调阅审计：谁在何时看过该检查的序列/影像。 */
