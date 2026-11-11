@@ -4,7 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.api.PageResult;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.Masks;
-import com.medassist.empi.crypto.FieldCipher;
+import com.medassist.common.security.FieldCipher;
 import com.medassist.empi.domain.Patient;
 import com.medassist.empi.repo.PatientRepository;
 import com.medassist.empi.web.dto.CreatePatientReq;

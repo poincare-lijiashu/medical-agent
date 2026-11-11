@@ -150,6 +150,25 @@ spec:
     {{- include "medassist.selectorLabels" (dict "root" $ "component" "masterdata") | nindent 4 }}
 ---
 {{- end }}
+{{- if .Values.dataMigration.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "migration") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "migration") | nindent 4 }}
+spec:
+  type: {{ .Values.dataMigration.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.dataMigration.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "medassist.selectorLabels" (dict "root" $ "component" "migration") | nindent 4 }}
+---
+{{- end }}
 {{- if .Values.tech.enabled }}
 apiVersion: v1
 kind: Service

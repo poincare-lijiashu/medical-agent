@@ -35,6 +35,7 @@
 | `platform-material` | 8089 | 物资耗材：目录、批次库存、出库、高值追溯与召回 | 已交付 |
 | `platform-fhir` | 8090 | FHIR R4 只读开放层：Patient / Encounter / Observation / MedicationRequest + CapabilityStatement | 已交付（§259） |
 | `platform-masterdata` | 8091 | 主数据治理：域注册、条目版本链、外部编码映射、变更审批、批量导入与质量看板 | 已交付（§269） |
+| `platform-migration` | 8092 | 历史数据迁移：目标/字段字典、可复用映射档案、预检校验、分批应用、版本反向回滚、迁移对账 | 已交付（§270） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -507,6 +508,65 @@ CSV 表头至少包含 `域编码,本地编码,系统编码,外部编码`；可�
 - 未建立 LOINC/SNOMED/UDI 的标准术语映射，映射体系已就绪（`system_code` 可扩展），但对照内容需院方提供；
 - 版本链能发现单条被改/被删/被重排；整条链被一起重写需要把链尾哈希外锚（WORM/独立审计），列为 G5 后续；
 - 映射解析不会自动选择：返回候选并标 `ambiguous`，业务系统必须显式处理，避免"随便挑一个"导致收费/医保错配。
+
+## 历史数据迁移工具（§270）
+
+**定位**：把旧 HIS/EMR/台账里的数据**可控地**搬进新系统，而不是一次性脚本。
+迁移不是"能写进去就行"，商业系统的差别在于：模板可复用、逐行可解释、整批可撤销、前后可对账。
+
+| 能力 | 实现 |
+|---|---|
+| 目标注册 | `mig_target`：13 个目标（科室/收费项目/诊断/病区/床位字典 → 患者主索引/跨系统标识 → 就诊/住院/诊断/医嘱/收费单/费用明细），带自然键、依赖顺序与应用顺序 |
+| 字段字典 | `mig_field`：模板表头 = 字段键；中文标签、类型、必填、长度、枚举、引用目标统一在库 |
+| 模板下载 | `GET /api/v2/migration/targets/{code}/template`（UTF-8 BOM + CRLF，Excel 直接打开） |
+| 映射档案 | `mig_mapping_profile`：源列 → 目标字段，支持 TRIM/UPPER/LOWER/ENUM_MAP/DEFAULT/CONSTANT；同一源系统可复用、可停用 |
+| 预检 | 逐行归一化 + 类型/枚举/长度/引用/业务冲突检查，输出 CREATE/UPDATE/UNCHANGED/CONFLICT/ERROR；预检只读，不写业务表 |
+| 分批应用 | 应用前逐行复核目标现状（自然键、乐观锁版本）；任何一行冲突整批回滚，批次标记 FAILED；同内容重复应用幂等 |
+| 反向回滚 | 每行保存应用前/后完整镜像；回滚按目标依赖逆序、行号逆序，回滚前比对当前行与应用后镜像，被人工改过则拒绝 |
+| 迁移对账 | 应用前后记录目标表行数/金额合计；`GET /batches/{id}/reconciliation` 输出批次计数、表总量与金额 |
+| 审计 | `mig_change_log` 追加式（触发器拒绝 UPDATE/DELETE），记录谁在何时对哪一批做了什么 |
+
+**表（`mig_svc`）**：`mig_target` / `mig_target_dependency` / `mig_field` /
+`mig_mapping_profile` / `mig_batch` / `mig_row` / `mig_change_log`。
+
+**敏感字段**：患者证件号/手机号/住址在 `mig_row` 只保存**掩码投影**，完整归一化载荷用
+`EMPI_FIELD_KEY` 加密后存 `payload_enc`；写入 EMPI 时使用与在线建档完全相同的
+`FieldCipher`（`platform-common`）与哈希盐，保证查重哈希一致。
+
+**API 一览**（`/api/v2/migration/**`，控制器自带 `/migration`）：
+
+| 方法 | 路径 | 权限 | 说明 |
+|---|---|---|---|
+| `GET` | `/targets`、`/targets/{code}` | `migration:read` | 目标清单/详情（字段、依赖、被依赖） |
+| `GET` | `/targets/{code}/template` | `migration:read` | 下载 CSV 模板 |
+| `GET` | `/mapping-profiles?targetCode=&sourceSystem=` | `migration:read` | 映射档案 |
+| `POST` | `/mapping-profiles` | `migration:write` | 新建映射档案（必填字段必须都有映射） |
+| `POST` | `/mapping-profiles/{code}/retire` | `migration:write` | 停用档案（不物理删除） |
+| `POST` | `/batches/preview` | `migration:write` | 上传并预检（CSV 或 JSON rows） |
+| `GET` | `/batches?targetCode=&status=`、`/batches/{id}` | `migration:read` | 批次列表/详情（逐行结果分页） |
+| `POST` | `/batches/{id}/apply` | `migration:apply` | 应用（整批事务；预检后数据变化则 409） |
+| `POST` | `/batches/rollback` | `migration:rollback` | 回滚一个或多个批次（自动依赖逆序；冲突整批拒绝） |
+| `GET` | `/batches/{id}/reconciliation` | `migration:read` | 迁移对账报告 |
+| `GET` | `/audit?limit=` | `migration:audit:read` | 迁移审计 |
+
+**权限**（auth V88）：`migration:read` / `migration:write` / `migration:apply` /
+`migration:rollback` / `migration:audit:read`；新增角色 `MIGRATION_ENGINEER`
+（实施工程师：维护映射、预检、应用）。**回滚权限只给 `DATA_GOVERNOR`**，避免同一个人
+"导错了立刻抹掉痕迹"。
+
+**数据库账号建议**：迁移服务需要跨 schema 读写，生产单独建账号，只授予
+`empi_svc.patient` / `patient_crosswalk`、`clinical_svc` 字典与业务表、`mig_svc` 的 DML 权限；
+不得授予 DDL。迁移完成后可按需停用该服务与账号。
+
+**主数据字典的关系**：本工具迁移的是**源表真源**（`clinical_svc.md_dept` / `md_charge_item` /
+`md_diagnosis` / `ward` / `bed`）。迁移完成后执行一次
+`POST /api/v2/mdm/domains/{code}/sync`，MDM 会把它们索引为受治理的主数据条目
+（版本链/外部编码/审批），避免"迁移绕过治理层"。
+
+**已知边界**：
+- 不迁移历史病历正文、影像、医保结算清单（涉及不同的业务不变量，后续按域单独扩展目标）；
+- 患者 `MERGED` 状态不允许直接导入（需先 ACTIVE 再走合并流程，保留合并指针与留痕）；
+- 迁移批次按自然键 UPSERT；同一自然键在源文件内重复会在预检阶段报 ERROR，不做"后一条覆盖前一条"。
 
 ## 构建与运行
 

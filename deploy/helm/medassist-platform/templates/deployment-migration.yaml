@@ -1,0 +1,115 @@
+{{- if .Values.dataMigration.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "migration") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "migration") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "migration") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "migration") | nindent 4 }}
+spec:
+  {{- if not .Values.dataMigration.autoscaling.enabled }}
+  replicas: {{ .Values.dataMigration.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.dataMigration.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "migration") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "migration") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "migration") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.dataMigration.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: migration
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.dataMigration.image) }}
+          imagePullPolicy: {{ .Values.dataMigration.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.dataMigration.service.port }}
+              protocol: TCP
+          env:
+            # 迁移服务需要 EMPI 密钥（写入患者密文与查重哈希），但不签发 JWT、不直连其他业务服务：
+            # 它按自然键直接读写 empi_svc / clinical_svc（生产用单独 DML 账号，见 README）。
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "migration" "jwt" false "empi" true) | nindent 12 }}
+            - name: MIG_MAX_ROWS
+              value: {{ .Values.dataMigration.maxRows | quote }}
+            - name: MIG_PREVIEW_SAMPLE_ROWS
+              value: {{ .Values.dataMigration.previewSampleRows | quote }}
+            {{- with .Values.dataMigration.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.dataMigration.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.dataMigration.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.dataMigration.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.dataMigration.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.dataMigration.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.dataMigration.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.dataMigration.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.dataMigration.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.dataMigration.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.dataMigration.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.dataMigration.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.dataMigration.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.dataMigration.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "migration") | nindent 6 }}
+{{- end }}

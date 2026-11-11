@@ -39,6 +39,7 @@ $services = @(
     @{ name = "material";  port = 8089 },
     @{ name = "fhir";      port = 8090 },
     @{ name = "masterdata"; port = 8091 },
+    @{ name = "migration"; port = 8092 },
     @{ name = "gateway";   port = 8080 }
 )
 

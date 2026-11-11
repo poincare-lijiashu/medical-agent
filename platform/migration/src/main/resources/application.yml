@@ -1,0 +1,75 @@
+server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
+  port: 8092
+  # 优雅停机：在途批次应用/回滚处理完再退出
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-migration
+
+  datasource:
+    # 迁移服务需要跨 schema 读写：empi_svc（患者）、clinical_svc（业务历史）、mig_svc（自身台账）。
+    # 生产建议单独账号，只授予这三类 schema 的 DML 权限，禁止 DDL（见 platform/README.md「历史数据迁移」）。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: mig-pool
+      maximum-pool-size: 8
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: mig_svc
+    default-schema: mig_svc
+    locations: classpath:db/migration/migration
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+# ---- 患者敏感字段加密（与 platform-empi 同一配置键、同一实现）----
+# 迁移写入的证件号/手机号必须与在线建档使用同一密钥与盐，否则查重哈希对不上。
+empi:
+  field-key: ${EMPI_FIELD_KEY:}
+  hash-salt: ${EMPI_HASH_SALT:}
+
+medassist:
+  migration:
+    # 单批上限：迁移必须分批，避免长事务锁表与不可控的重试代价
+    max-rows: ${MIG_MAX_ROWS:5000}
+    preview-sample-rows: ${MIG_PREVIEW_SAMPLE_ROWS:100}
+    max-batch-page-size: ${MIG_MAX_BATCH_PAGE_SIZE:200}
+    audit-list-default: ${MIG_AUDIT_LIST_DEFAULT:50}
+    audit-list-max: ${MIG_AUDIT_LIST_MAX:200}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: INFO

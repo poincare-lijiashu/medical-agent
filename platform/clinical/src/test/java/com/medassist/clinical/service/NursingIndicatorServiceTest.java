@@ -62,6 +62,12 @@ class NursingIndicatorServiceTest {
     private final ZoneId zone = BusinessTime.zone();
     private final UUID deptId = UUID.randomUUID();
     private final LocalDate today = BusinessTime.today();
+    /**
+     * 事件时间必须早于"当前时间"（服务层拒绝未来事件）。
+     * 用固定钟点写"今天"会在凌晨跑测试时变成未来时间——这是测试自身的时间炸弹，
+     * 用两天前保证任何时刻执行都落在过去，同时不影响班次归属断言。
+     */
+    private final LocalDate eventDate = today.minusDays(2);
 
     @BeforeEach
     void setUp() {
@@ -133,14 +139,14 @@ class NursingIndicatorServiceTest {
         when(repo.listNursingShifts()).thenReturn(List.of(nightCross(), day()));
         when(repo.nextNursingIndicatorEventNo()).thenReturn("NE20261111000001");
 
-        service.reportEvent(eventReq(at(today, 2, 30), null, "NO_HARM"), "nurse01");
+        service.reportEvent(eventReq(at(eventDate, 2, 30), null, "NO_HARM"), "nurse01");
 
         ArgumentCaptor<NursingIndicatorEvent> captor =
                 ArgumentCaptor.forClass(NursingIndicatorEvent.class);
         verify(repo).insertNursingIndicatorEvent(captor.capture());
         NursingIndicatorEvent saved = captor.getValue();
         assertThat(saved.shiftCode()).isEqualTo("NIGHT");
-        assertThat(saved.shiftDate()).isEqualTo(today.minusDays(1));
+        assertThat(saved.shiftDate()).isEqualTo(eventDate.minusDays(1));
         assertThat(saved.shiftSource()).isEqualTo(NursingIndicatorEvent.SHIFT_AUTO);
         assertThat(saved.detail()).contains("卫生间");
     }
@@ -152,13 +158,13 @@ class NursingIndicatorServiceTest {
         when(repo.listNursingShifts()).thenReturn(List.of(nightCross(), day()));
         when(repo.nextNursingIndicatorEventNo()).thenReturn("NE20261111000002");
 
-        service.reportEvent(eventReq(at(today, 9, 0), null, "MILD"), "nurse01");
+        service.reportEvent(eventReq(at(eventDate, 9, 0), null, "MILD"), "nurse01");
 
         ArgumentCaptor<NursingIndicatorEvent> captor =
                 ArgumentCaptor.forClass(NursingIndicatorEvent.class);
         verify(repo).insertNursingIndicatorEvent(captor.capture());
         assertThat(captor.getValue().shiftCode()).isEqualTo("DAY");
-        assertThat(captor.getValue().shiftDate()).isEqualTo(today);
+        assertThat(captor.getValue().shiftDate()).isEqualTo(eventDate);
     }
 
     @Test
@@ -168,7 +174,7 @@ class NursingIndicatorServiceTest {
         when(repo.listNursingShifts()).thenReturn(List.of(nightCross(), day()));
 
         assertThatThrownBy(() -> service.reportEvent(
-                eventReq(at(today, 7, 0), null, "NO_HARM"), "nurse01"))
+                eventReq(at(eventDate, 7, 0), null, "NO_HARM"), "nurse01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.NURSING_INDICATOR_SHIFT_INVALID);
@@ -182,7 +188,7 @@ class NursingIndicatorServiceTest {
         when(repo.listNursingShifts()).thenReturn(List.of(nightCross(), day()));
 
         assertThatThrownBy(() -> service.reportEvent(
-                eventReq(at(today, 9, 0), "NIGHT", "NO_HARM"), "nurse01"))
+                eventReq(at(eventDate, 9, 0), "NIGHT", "NO_HARM"), "nurse01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.NURSING_INDICATOR_SHIFT_INVALID);

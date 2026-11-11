@@ -43,6 +43,42 @@ spec:
 ---
 {{- end }}
 {{- end }}
+{{- if and .Values.dataMigration.enabled .Values.dataMigration.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "migration") }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "migration") | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "migration") }}
+    kind: {{ include "medassist.workloadKind" (dict "root" $ "component" "migration") }}
+    name: {{ include "medassist.componentName" (dict "root" $ "component" "migration") }}
+  minReplicas: {{ .Values.dataMigration.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.dataMigration.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.dataMigration.autoscaling.targetCPUUtilizationPercentage }}
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+{{- end }}
 {{- if and .Values.aiCore.enabled .Values.aiCore.autoscaling.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler

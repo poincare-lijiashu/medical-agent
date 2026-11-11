@@ -489,7 +489,24 @@ public enum ErrorCode {
     MDM_SYNC_FAILED(50418, "源字典同步失败，请检查源服务与数据库权限后重试"),
     MDM_DOMAIN_NOT_SYNCABLE(50419, "该主数据域不支持从源表同步"),
     MDM_REASON_REQUIRED(50420, "变更或驳回必须填写原因（至少 2 个字符）"),
-    MDM_ACTOR_REQUIRED(50421, "主数据变更必须带真实操作人，禁止匿名写入");
+    MDM_ACTOR_REQUIRED(50421, "主数据变更必须带真实操作人，禁止匿名写入"),
+
+    // ---- 历史数据迁移（51xxx，§270）----
+    MIG_TARGET_NOT_FOUND(51401, "未找到该迁移目标，或该目标已停用"),
+    MIG_BATCH_NOT_FOUND(51402, "未找到该迁移批次"),
+    MIG_PROFILE_NOT_FOUND(51403, "未找到该列映射档案"),
+    MIG_PROFILE_DUPLICATE(51404, "映射档案编码已存在"),
+    MIG_BATCH_STATUS_INVALID(51405, "当前批次状态不允许该操作"),
+    MIG_BATCH_HAS_BLOCKING_ROWS(51406, "批次存在错误或冲突行，整批拒绝应用；请修正源数据后重新预检"),
+    MIG_TEMPLATE_INVALID(51407, "迁移模板不合法（缺少必填列或存在未知列）"),
+    MIG_ROW_INVALID(51408, "迁移行内容不合法（类型/枚举/长度/引用/业务校验未通过）"),
+    MIG_ROLLBACK_CONFLICT(51409, "批次应用后目标数据已被修改，拒绝回滚；请先核对差异再人工处理"),
+    MIG_DEPENDENCY_ORDER_INVALID(51410, "批次顺序不符合目标依赖关系（必须先主数据、后患者、再业务历史）"),
+    MIG_ACTOR_REQUIRED(51411, "迁移操作必须带真实操作人，禁止匿名写入"),
+    MIG_PROFILE_INVALID(51412, "映射档案内容不合法（源列/目标字段/转换规则有误）"),
+    MIG_PAYLOAD_UNREADABLE(51413, "迁移行加密载荷无法解密，请确认 EMPI_FIELD_KEY 未被更换"),
+    MIG_RECONCILIATION_FAILED(51414, "迁移对账未通过：目标行数或金额与批次台账不一致"),
+    MIG_REASON_REQUIRED(51415, "回滚必须填写原因（至少 2 个字符）");
 
     private final int code;
     private final String defaultMessage;

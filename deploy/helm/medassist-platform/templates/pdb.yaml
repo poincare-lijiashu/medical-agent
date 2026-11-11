@@ -20,6 +20,20 @@ spec:
 ---
 {{- end }}
 {{- end }}
+{{- if and .Values.dataMigration.enabled .Values.dataMigration.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "migration") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "migration") | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.dataMigration.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "migration") | nindent 6 }}
+{{- end }}
 {{- if and .Values.aiCore.enabled .Values.aiCore.podDisruptionBudget.enabled }}
 apiVersion: policy/v1
 kind: PodDisruptionBudget

@@ -536,6 +536,43 @@ masterdata:
   tolerations: []
   affinity: {}
 
+# ---- 历史数据迁移（模板/映射/预检/应用/回滚/对账；计划书 W4.3）----
+# 注意：键名用 dataMigration，避免与上面的 migration（Flyway Hook Job 开关）混淆。
+dataMigration:
+  enabled: true
+  image:
+    repository: platform-migration
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 2
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8092
+  resources:
+    requests: {cpu: 250m, memory: 512Mi}
+    limits: {cpu: "1", memory: 1Gi}
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 4
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 单批上限：迁移必须分批，避免长事务锁表与不可控的重试代价
+  maxRows: 5000
+  previewSampleRows: 100
+  env: []
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- 医技域（检查/检验申请、标本、报告、危急值）----
 tech:
   enabled: true

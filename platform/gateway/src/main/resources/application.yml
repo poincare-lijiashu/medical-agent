@@ -167,6 +167,18 @@ spring:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 # 导入预检/应用可能处理数千行，单次请求放宽到 60s（与知识库同级）
                 response-timeout: ${GATEWAY_MDM_RESPONSE_TIMEOUT_MS:60000}
+            # 历史数据迁移（目标/模板/映射档案/预检/应用/回滚/对账）
+            # 控制器自带 /migration 前缀，因此剥 2 段：/api/v2/migration/targets → /migration/targets
+            - id: platform-migration-v2
+              uri: ${PLATFORM_MIGRATION_URI:http://127.0.0.1:8092}
+              predicates:
+                - Path=/api/v2/migration/**
+              filters:
+                - StripPrefix=2
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                # 批量预检 5000 行、应用/回滚均在单次请求内完成，单独放宽到 120s
+                response-timeout: ${GATEWAY_MIGRATION_RESPONSE_TIMEOUT_MS:120000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2

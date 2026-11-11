@@ -1,0 +1,14 @@
+# ============================================================================
+# 本地开发专用覆盖（严禁用于 staging/prod）
+#
+# 用法：java -jar platform-migration.jar --spring.profiles.active=dev
+# 说明：这里的密钥与 platform-empi 的 application-dev.yml 完全一致——迁移与在线建档
+#       必须用同一密钥/盐，否则患者查重哈希对不上，会造出重复主索引。
+# ============================================================================
+empi:
+  field-key: DJuxRns5JAQu23iM3uFqcDhlUAFv9qBqedxWVK55UE4=
+  hash-salt: medassist-empi-dev-salt
+
+logging:
+  level:
+    com.medassist: DEBUG

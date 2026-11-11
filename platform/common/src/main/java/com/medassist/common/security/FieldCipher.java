@@ -1,9 +1,6 @@
-package com.medassist.empi.crypto;
+package com.medassist.common.security;
 
-import com.medassist.common.security.SecurityDefaults;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.env.Environment;
-import org.springframework.stereotype.Component;
 
 import javax.crypto.Cipher;
 import javax.crypto.SecretKey;
@@ -21,12 +18,16 @@ import java.util.HexFormat;
  * <p>设计（计划书 D7.4 数据合规）：
  * <ul>
  *   <li>加密：随机 12 字节 IV + AES/GCM/NoPadding，输出 Base64(iv || ciphertext+tag)；</li>
- *   <li>查重不依赖明文：另存 {@link #sha256Hex} 不可逆哈希，明文永不建索引；</li>
+ *   <li>查重不依赖明文：另存 {@link #hash} 不可逆哈希，明文永不建索引；</li>
  *   <li>密钥经环境变量 {@code EMPI_FIELD_KEY}（Base64 32 字节）注入，禁止硬编码进库；</li>
  *   <li>生产切换国密 SM4 时仅替换本类实现，调用方签名不变。</li>
  * </ul>
+ *
+ * <p>为什么放在 common：EMPI 建档与历史数据迁移必须使用<b>同一密钥、同一算法、同一哈希盐</b>，
+ * 否则迁移后患者档案与在线建档的查重哈希不一致，会造出"同一个人两条主索引"。
+ * 放在各服务里复制一份迟早漂移，因此由各服务以相同配置（{@code empi.field-key} /
+ * {@code empi.hash-salt}）构造同一实现。
  */
-@Component
 public class FieldCipher {
 
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
@@ -51,9 +52,7 @@ public class FieldCipher {
     /** 证件号/手机号哈希加盐（防止彩虹表反查）；与密钥分离配置。 */
     private final String hashSalt;
 
-    public FieldCipher(@Value("${empi.field-key:}") String base64Key,
-                       @Value("${empi.hash-salt:}") String hashSalt,
-                       Environment environment) {
+    public FieldCipher(String base64Key, String hashSalt, Environment environment) {
         // fail-fast：密钥缺失时绝不"用默认值继续跑"——那等于用公开密钥加密全院 PHI
         if (base64Key == null || base64Key.isBlank()) {
             throw new IllegalStateException(

@@ -276,6 +276,12 @@ masterdata:
   env:
     - {name: NACOS_NAMESPACE, value: production}
 
+dataMigration:
+  replicaCount: 2
+  image: {repository: platform-migration, tag: "0.1.0", pullPolicy: IfNotPresent}
+  env:
+    - {name: NACOS_NAMESPACE, value: production}
+
 serviceMonitor:
   enabled: true
   interval: 30s
