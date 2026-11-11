@@ -100,6 +100,7 @@ import com.medassist.clinical.domain.ClinicalModel.RoomDayUsageRow;
 import com.medassist.clinical.domain.ClinicalModel.Slot;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
+import com.medassist.clinical.domain.ClinicalModel.SurgerySafetyCheck;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryChargeRule;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryConsent;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryLevel;
@@ -8243,6 +8244,40 @@ public class ClinicalRepository {
                         rs.getLong("transfusing"), rs.getLong("completed_today"),
                         rs.getLong("reactions_today"), rs.getLong("total_today")))
                 .single();
+    }
+
+    // ---------------------------------------------------------------- 手术安全核查（§265）
+
+    private static final RowMapper<SurgerySafetyCheck> SAFETY_CHECK_MAPPER = (rs, i) ->
+            new SurgerySafetyCheck(rs.getObject("id", UUID.class),
+                    rs.getObject("case_id", UUID.class), rs.getString("phase"),
+                    rs.getString("checked_by"), rs.getTimestamp("checked_at").toInstant(),
+                    rs.getString("items"), rs.getString("missing_items"),
+                    rs.getString("issues"), rs.getBoolean("complete"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    public void insertSurgerySafetyCheck(SurgerySafetyCheck check) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.surgery_safety_check
+                            (id, case_id, phase, checked_by, items, missing_items, issues, complete)
+                        VALUES (:id, :caseId, :phase, :checkedBy, CAST(:items AS jsonb),
+                                CAST(:missing AS jsonb), :issues, :complete)
+                        """)
+                .param("id", check.id()).param("caseId", check.caseId())
+                .param("phase", check.phase()).param("checkedBy", check.checkedBy())
+                .param("items", check.items()).param("missing", check.missingItems())
+                .param("issues", check.issues()).param("complete", check.complete()).update();
+    }
+
+    /** 某台手术的全部核查证据（按时点、提交时间升序）；服务层取每时点最后一条。 */
+    public List<SurgerySafetyCheck> listSurgerySafetyChecks(UUID caseId) {
+        return jdbc.sql("""
+                        SELECT id, case_id, phase, checked_by, checked_at, items::text AS items,
+                               missing_items::text AS missing_items, issues, complete, created_at
+                          FROM clinical_svc.surgery_safety_check
+                         WHERE case_id = ?
+                         ORDER BY checked_at, created_at
+                        """).param(caseId).query(SAFETY_CHECK_MAPPER).list();
     }
 
     // ---------------------------------------------------------------- 审计

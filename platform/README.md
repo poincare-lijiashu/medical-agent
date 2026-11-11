@@ -266,6 +266,36 @@ python scripts/chs_sim.py --port 9099
 边界：证据表（评估/发血核对/观察）由库级触发器拒绝 UPDATE/DELETE；
 关闭配置项只用于历史数据补录，接口不会因为关闭而伪造证据。
 
+## 手术安全核查三时点（§265）
+
+手术状态机（PLANNED → IN_PROGRESS → COMPLETED / CANCELLED）上增加三个时点的电子核查，
+时点顺序不可颠倒，未完成不能进入下一节点：
+
+| 时点 | 允许状态 | 关键核查项 | 门禁 |
+|---|---|---|---|
+| `PRE_ANESTHESIA` 麻醉前 | PLANNED | 身份/部位标记/术式与同意书/过敏/气道/失血风险/影像/设备 | 手术开始前核查的前置 |
+| `TIME_OUT` 手术开始前 | PLANNED | 团队介绍/患者部位术式三方确认/预防性抗菌药物/影像展示/灭菌 | **开台**必须完成 |
+| `SIGN_OUT` 离室前 | IN_PROGRESS | 术式记录/标本标识/器械纱布清点/设备问题/复苏计划/失血量 | **完成手术**必须完成 |
+
+| 变量 | 说明 |
+|---|---|
+| `SURGERY_SAFETY_CHECKLIST_REQUIRED` | 是否启用三时点门禁（默认 `true`；仅历史演练可关闭） |
+
+**API**（`/clinical/visits/{visitId}/surgery-cases/{id}/safety-checks`）：
+
+| 方法 | 权限 | 说明 |
+|---|---|---|
+| `GET` | `clinical:surgery:read` | 三时点汇总（模板、勾选结果、缺失项、readyToStart/readyToComplete） |
+| `POST` | `clinical:surgery:write` | 提交某个时点核查（每次新增一条证据，最新一条为当前结论） |
+
+口径与边界：
+
+- **模板固定在服务端**：客户端只提交勾选了哪些核查项，自定义标签/模板外编码直接 422；
+- **追加式证据**：`surgery_safety_check` 由库级触发器拒绝 UPDATE/DELETE，不做"事后补勾"；
+- **缺项仍留证**：必需项未勾选也允许提交，但 `complete=false`，门禁按 complete 判断，
+  便于质控看到"谁在什么时间提交了不完整核查"；
+- **只认最新一条**：同一时点多次提交以最新一条为当前结论，历史提交全部保留。
+
 ## 构建与运行
 
 ```powershell

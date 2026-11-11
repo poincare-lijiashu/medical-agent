@@ -76,6 +76,8 @@ public enum ErrorCode {
     WARD_NOT_FOUND(42406, "未找到该病区"),
     SURGERY_CASE_NOT_FOUND(42407, "未找到该手术记录"),
     VISIT_STATUS_INVALID(42410, "当前就诊状态不允许该操作"),
+    SURGERY_SAFETY_CHECKLIST_REQUIRED(42411, "手术安全核查未完成，不能进入下一节点"),
+    SURGERY_SAFETY_CHECKLIST_INVALID(42412, "手术安全核查不合法（核查项/时序/内容有误）"),
 
     // ---- 医嘱（44xxx）----
     ORDER_ITEM_NOT_FOUND(44401, "未找到该医嘱项目，或该项目已停用"),

@@ -162,6 +162,22 @@ $r = Invoke-Api 'POST' "/api/v2/clinical/surgery-cases/$caseA/consents" @{
 } $token
 Check 'consent.anesthesia' $r.Status 200
 
+# 安全核查（§265）：麻醉前 + 手术开始前必须完成才能开台
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseA/safety-checks" @{
+    phase = 'PRE_ANESTHESIA'
+    checkedItems = @('PATIENT_ID', 'SITE_MARK', 'PROCEDURE_CONFIRM', 'ANESTHESIA_CONSENT',
+                     'ALLERGY', 'AIRWAY', 'BLOOD_LOSS_RISK', 'IMAGING', 'EQUIPMENT')
+} $token
+Check 'safety.preAnesthesia' $r.Status 200
+
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseA/safety-checks" @{
+    phase = 'TIME_OUT'
+    checkedItems = @('TEAM_INTRO', 'PATIENT_SITE_PROCEDURE', 'ANTIBIOTIC_PROPHYLAXIS',
+                     'IMAGING_DISPLAYED', 'STERILITY')
+} $token
+Check 'safety.timeOut' $r.Status 200
+Check 'safety.readyToStart' (Res $r).readyToStart $true
+
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseA/start" @{ version = 0 } $token
 Check 'surgery.a.start' $r.Status 200
 Check 'surgery.a.status' (Res $r).status 'IN_PROGRESS'
@@ -231,6 +247,15 @@ $r = Invoke-Api 'PUT' "/api/v2/clinical/surgery-cases/$caseA/nursing" @{
 Check 'nursing.afterSign.update.409' $r.Status 409
 
 # ---------------------------------------------------------------- 9. complete surgery -> schedule COMPLETED
+# 离室前核查（§265）：清点/标本/复苏计划完成才允许结束手术
+$r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseA/safety-checks" @{
+    phase = 'SIGN_OUT'
+    checkedItems = @('PROCEDURE_RECORDED', 'SPECIMEN_LABELED', 'INSTRUMENT_COUNT',
+                     'RECOVERY_PLAN', 'BLOOD_LOSS_RECORDED')
+} $token
+Check 'safety.signOut' $r.Status 200
+Check 'safety.readyToComplete' (Res $r).readyToComplete $true
+
 $r = Invoke-Api 'POST' "/api/v2/clinical/visits/$visitId/surgery-cases/$caseA/complete" @{ version = 1 } $token
 Check 'surgery.a.complete' $r.Status 200
 Check 'surgery.a.completed' (Res $r).status 'COMPLETED'

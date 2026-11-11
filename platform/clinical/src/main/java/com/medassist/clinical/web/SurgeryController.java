@@ -7,6 +7,8 @@ import com.medassist.clinical.service.VisitAccessGuard;
 import com.medassist.clinical.web.SurgeryDtos.CancelSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.PlanSurgeryReq;
 import com.medassist.clinical.web.SurgeryDtos.SurgeryVersionReq;
+import com.medassist.clinical.web.SurgerySafetyDtos.SafetyCheckReq;
+import com.medassist.clinical.web.SurgerySafetyDtos.SafetyChecklistView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.DataScope;
@@ -100,6 +102,30 @@ public class SurgeryController {
         Permissions.require(permissions, WRITE);
         guard.require(scope, visitId);
         return ApiResponse.ok(service.complete(visitId, id, req.version(), actor));
+    }
+
+    /** 三时点安全核查汇总（麻醉前 / 手术开始前 / 离室前）。 */
+    @GetMapping("/visits/{visitId}/surgery-cases/{id}/safety-checks")
+    public ApiResponse<SafetyChecklistView> safetyChecklist(
+            @PathVariable UUID visitId, @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        guard.requireRead(scope, visitId);
+        return ApiResponse.ok(service.checklist(visitId, id));
+    }
+
+    /** 提交某一个时点的安全核查（每次新增一条证据，最新一条为当前结论）。 */
+    @PostMapping("/visits/{visitId}/surgery-cases/{id}/safety-checks")
+    public ApiResponse<SafetyChecklistView> submitSafetyCheck(
+            @PathVariable UUID visitId, @PathVariable UUID id,
+            @Valid @RequestBody SafetyCheckReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, WRITE);
+        guard.require(scope, visitId);
+        return ApiResponse.ok(service.submitSafetyCheck(visitId, id, req, actor));
     }
 
     @PostMapping("/visits/{visitId}/surgery-cases/{id}/cancel")

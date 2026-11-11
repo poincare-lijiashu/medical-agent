@@ -196,6 +196,21 @@ public final class ClinicalModel {
         }
     }
 
+    /**
+     * 手术安全核查（§265）：三个时点各一条证据，只增不改。
+     *
+     * @param items        本次提交的完整模板快照（code/label/required/checked）
+     * @param missingItems 未勾选的必需项编码
+     */
+    public record SurgerySafetyCheck(UUID id, UUID caseId, String phase, String checkedBy,
+                                     Instant checkedAt, String items, String missingItems,
+                                     String issues, boolean complete, Instant createdAt) {
+
+        public static final String PRE_ANESTHESIA = "PRE_ANESTHESIA";
+        public static final String TIME_OUT = "TIME_OUT";
+        public static final String SIGN_OUT = "SIGN_OUT";
+    }
+
     /** 手术间（排台资源）。 */
     public record OperatingRoom(UUID id, String code, String name, UUID deptId, String location,
                                 String status, long version, Instant createdAt) {

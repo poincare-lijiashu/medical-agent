@@ -382,6 +382,9 @@ clinical:
   # 输血闭环（§264，WS/T 867）：生产保持默认 true；仅历史补录/演练可显式关闭
   #   TRANSFUSION_PRECHECK_REQUIRED / TRANSFUSION_OBSERVATION_REQUIRED
   # 详见 platform/README.md「输血闭环（WS/T 867—2025，§264）」
+  # 手术安全核查（§265）：生产保持默认 true；仅历史演练可关闭
+  #   SURGERY_SAFETY_CHECKLIST_REQUIRED
+  # 详见 platform/README.md「手术安全核查三时点（§265）」
   env: []
   nodeSelector: {}
   tolerations: []

@@ -1,8 +1,10 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.config.SurgeryProperties;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.OperationCatalog;
 import com.medassist.clinical.domain.ClinicalModel.SurgeryCase;
+import com.medassist.clinical.domain.ClinicalModel.SurgerySafetyCheck;
 import com.medassist.clinical.domain.ClinicalModel.Visit;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.SurgeryDtos.CancelSurgeryReq;
@@ -57,7 +59,8 @@ class SurgeryServiceTest {
         repo = mock(ClinicalRepository.class);
         levelService = mock(SurgeryLevelService.class);
         preopVisitService = mock(PreopVisitService.class);
-        service = new SurgeryService(repo, levelService, preopVisitService);
+        service = new SurgeryService(repo, levelService, preopVisitService,
+                new SurgeryProperties(true));
     }
 
     private Visit visit(String visitType) {
@@ -79,6 +82,21 @@ class SurgeryServiceTest {
 
     private PlanSurgeryReq req() {
         return new PlanSurgeryReq(code, Instant.now(), "doctor01", null, "general", "ii", "ii");
+    }
+
+    private SurgerySafetyCheck safety(String phase, boolean complete) {
+        String items = complete ? "[{\"code\":\"X\",\"label\":\"X\",\"required\":true,"
+                + "\"checked\":true}]" : "[]";
+        return new SurgerySafetyCheck(UUID.randomUUID(), caseId, phase, "doctor01",
+                Instant.now(), items, complete ? "[]" : "[\"X\"]", null, complete, Instant.now());
+    }
+
+    private void stubSafetyComplete(String... phases) {
+        List<SurgerySafetyCheck> rows = new java.util.ArrayList<>();
+        for (String phase : phases) {
+            rows.add(safety(phase, true));
+        }
+        when(repo.listSurgerySafetyChecks(caseId)).thenReturn(rows);
     }
 
     // ---------------------------------------------------------------- 计划
@@ -178,6 +196,7 @@ class SurgeryServiceTest {
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.IN_PROGRESS)));
         when(repo.listActiveConsentTypes(caseId)).thenReturn(List.of("SURGERY", "ANESTHESIA"));
+        stubSafetyComplete(SurgerySafetyCheck.PRE_ANESTHESIA, SurgerySafetyCheck.TIME_OUT);
         when(repo.startSurgery(eq(caseId), any(Instant.class), eq(0L))).thenReturn(true);
 
         SurgeryCase result = service.start(visitId, caseId, 0L, "doctor01");
@@ -195,6 +214,7 @@ class SurgeryServiceTest {
         when(repo.lockSurgeryCase(caseId))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)));
         when(repo.listActiveConsentTypes(caseId)).thenReturn(List.of("SURGERY", "ANESTHESIA"));
+        stubSafetyComplete(SurgerySafetyCheck.PRE_ANESTHESIA, SurgerySafetyCheck.TIME_OUT);
         when(repo.startSurgery(eq(caseId), any(Instant.class), eq(0L))).thenReturn(false);
 
         assertThatThrownBy(() -> service.start(visitId, caseId, 0L, "doctor01"))
@@ -243,6 +263,7 @@ class SurgeryServiceTest {
         when(repo.lockSurgeryCase(caseId))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.IN_PROGRESS)))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.COMPLETED)));
+        stubSafetyComplete(SurgerySafetyCheck.SIGN_OUT);
         when(repo.completeSurgery(eq(caseId), any(Instant.class), eq(1L))).thenReturn(true);
 
         SurgeryCase result = service.complete(visitId, caseId, 1L, "doctor01");
@@ -257,6 +278,7 @@ class SurgeryServiceTest {
     void completeRejectsPlanned() {
         when(repo.lockSurgeryCase(caseId))
                 .thenReturn(Optional.of(surgeryCase(SurgeryCase.PLANNED)));
+        stubSafetyComplete(SurgerySafetyCheck.SIGN_OUT);
         when(repo.completeSurgery(eq(caseId), any(Instant.class), eq(0L))).thenReturn(false);
 
         assertThatThrownBy(() -> service.complete(visitId, caseId, 0L, "doctor01"))

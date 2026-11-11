@@ -76,6 +76,9 @@ clinical:
   ai:
     base-url: ${CLINICAL_AI_BASE_URL:}
     timeout: ${CLINICAL_AI_TIMEOUT:PT3S}
+  # 手术安全核查（第 265 批）：默认要求开台前两个时点、离室前一个时点全部完成
+  surgery:
+    safety-checklist-required: ${SURGERY_SAFETY_CHECKLIST_REQUIRED:true}
   # 输血闭环约束（第 264 批，WS/T 867—2025）：默认要求发血前评估与输注观察
   transfusion:
     precheck-required: ${TRANSFUSION_PRECHECK_REQUIRED:true}
