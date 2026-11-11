@@ -157,6 +157,7 @@ import type {
   SurgeryChargePreview,
   SurgeryLevel,
   SurgerySchedule,
+  AuditActionOption,
   AuditEvent,
   OrgRef,
   PacsAccessLog,
@@ -1611,6 +1612,9 @@ export const systemApi = {
     page?: number
     size?: number
   }) => get<PageResult<AuditEvent>>('/audit/events', params),
+  /** 审计动作字典（第 243 批）：时间窗内出现过的动作 + 次数，用于筛选下拉。 */
+  auditActions: (params: { from?: string; to?: string; limit?: number } = {}) =>
+    get<AuditActionOption[]>('/audit/events/actions', params),
 }
 
 export const kbApi = {

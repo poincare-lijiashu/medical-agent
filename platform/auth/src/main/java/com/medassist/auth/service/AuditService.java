@@ -1,6 +1,7 @@
 package com.medassist.auth.service;
 
 import com.medassist.auth.repo.AuditRepository;
+import com.medassist.auth.web.dto.AuditActionOption;
 import com.medassist.auth.web.dto.AuditEventResp;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.api.PageResult;
@@ -23,6 +24,9 @@ import java.util.List;
 @Service
 public class AuditService {
 
+    /** 动作字典上限：屏幕放不下更多；低频动作仍可手输。 */
+    private static final int MAX_ACTIONS = 200;
+
     private final AuditRepository repo;
 
     public AuditService(AuditRepository repo) {
@@ -44,5 +48,19 @@ public class AuditService {
         int offset = (safePage - 1) * safeSize;
         return PageResult.of(safePage, safeSize, total,
                 repo.search(actor, action, targetType, targetId, from, to, safeSize, offset));
+    }
+
+    /**
+     * 动作字典（第 243 批）：时间窗内出现过的 action + 次数。
+     *
+     * <p>上限 200 条：屏幕一次也放不下更多；动作再多时按次数倒序截断，
+     * 低频动作仍可手输——字典是“少打字”，不是“只能从这里选”。
+     */
+    public List<AuditActionOption> actionCatalog(Instant from, Instant to, int limit) {
+        if (from != null && to != null && from.isAfter(to)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始时间不能晚于结束时间");
+        }
+        int safeLimit = Math.min(Math.max(limit, 1), MAX_ACTIONS);
+        return repo.actionCatalog(from, to, safeLimit);
     }
 }

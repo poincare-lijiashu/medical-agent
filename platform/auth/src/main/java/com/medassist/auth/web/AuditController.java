@@ -1,6 +1,7 @@
 package com.medassist.auth.web;
 
 import com.medassist.auth.service.AuditService;
+import com.medassist.auth.web.dto.AuditActionOption;
 import com.medassist.auth.web.dto.AuditEventResp;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.PageResult;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 审计查询 API（跨域汇聚）。
@@ -46,5 +48,20 @@ public class AuditController {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.search(actor, action, targetType, targetId, from, to,
                 page, size));
+    }
+
+    /**
+     * 动作字典（第 243 批）：筛选下拉用，避免运维在页面上猜动作名。
+     *
+     * <p>与 `/events` 同一时间窗口径；只回原始 action 与次数（中文名由前端翻译）。
+     */
+    @GetMapping("/actions")
+    public ApiResponse<List<AuditActionOption>> actions(
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
+            @RequestParam(defaultValue = "100") int limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.actionCatalog(from, to, limit));
     }
 }

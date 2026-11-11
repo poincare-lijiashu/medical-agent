@@ -2513,6 +2513,12 @@ export interface OrgRef {
   sortNo: number
 }
 
+/** 审计动作字典项（第 243 批）：动作 + 时间窗内出现次数。 */
+export interface AuditActionOption {
+  action: string
+  count: number
+}
+
 /** 跨域审计事件（detail 为原始 jsonb 文本）。 */
 export interface AuditEvent {
   source: string

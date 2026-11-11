@@ -284,7 +284,22 @@
             </label>
             <label class="field">
               <span class="label">动作</span>
-              <input v-model.trim="auditForm.action" class="input" placeholder="例如 USER_DISABLE" @keydown.enter="resetAuditPage" />
+              <input
+                v-model.trim="auditForm.action"
+                class="input"
+                list="audit-action-options"
+                placeholder="可输入或从下拉选择"
+                @keydown.enter="resetAuditPage"
+              />
+              <!-- 第 243 批：动作字典来自服务端实际出现过的动作；加载失败也不影响手输 -->
+              <datalist id="audit-action-options">
+                <option
+                  v-for="a in auditActionOptions"
+                  :key="a.action"
+                  :value="a.action"
+                  :label="`${actionLabel(a.action)} · ${a.count} 次`"
+                />
+              </datalist>
             </label>
             <label class="field">
               <span class="label">对象类型</span>
@@ -638,7 +653,7 @@ import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { clinicalApi, systemApi } from '@/api'
 import { errorText, isForbidden } from '@/api/http'
-import type { AuditEvent, Campus, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
+import type { AuditActionOption, AuditEvent, Campus, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -1087,6 +1102,24 @@ const auditPage = ref(1)
 const auditLoading = ref(false)
 const auditForm = reactive({ actor: '', action: '', targetType: '', targetId: '', from: '', to: '' })
 
+/* ---- 第 243 批：动作字典（筛选下拉） ---- */
+const auditActionOptions = ref<AuditActionOption[]>([])
+let auditActionsLoaded = false
+
+/**
+ * 加载动作字典：失败静默——下拉只是“少打字”，没有它仍能手输，
+ * 不能在审计页弹一个取数失败的红色提示。失败后本次会话不再重试，刷新页面再看。
+ */
+async function loadAuditActions() {
+  if (auditActionsLoaded || !canReadAudit.value) return
+  auditActionsLoaded = true
+  try {
+    auditActionOptions.value = await systemApi.auditActions({ limit: 200 })
+  } catch {
+    auditActionOptions.value = []
+  }
+}
+
 const auditPages = computed(() => Math.max(1, Math.ceil(auditTotal.value / AUDIT_PAGE_SIZE)))
 
 function toIso(local: string): string | undefined {
@@ -1180,7 +1213,10 @@ function switchTab(next: Tab) {
   tab.value = next
   if (next === 'users' && users.value.length === 0) void loadUsers()
   if (next === 'campus' && campuses.value.length === 0) void loadCampuses()
-  if (next === 'audit' && auditRows.value.length === 0) void loadAudit()
+  if (next === 'audit' && auditRows.value.length === 0) {
+    void loadAuditActions()
+    void loadAudit()
+  }
 }
 
 /** 顶栏刷新：按当前分区重新拉取，避免"刷新按钮在院区页却去刷账号"。 */
@@ -1213,7 +1249,10 @@ onMounted(() => {
     void loadUsers()
   }
   if (canReadCampus.value) void loadCampuses()
-  if (tab.value === 'audit') void loadAudit()
+  if (tab.value === 'audit') {
+    void loadAuditActions()
+    void loadAudit()
+  }
 })
 </script>
 

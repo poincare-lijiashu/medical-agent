@@ -1,5 +1,6 @@
 package com.medassist.auth.repo;
 
+import com.medassist.auth.web.dto.AuditActionOption;
 import com.medassist.auth.web.dto.AuditEventResp;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -121,6 +122,28 @@ public class AuditRepository {
             spec = spec.param("targetId", targetIdValue);
         }
         return spec.query(Long.class).single();
+    }
+
+    /**
+     * 动作字典（第 243 批）：各域出现过的 action + 次数，用于筛选下拉。
+     *
+     * <p>为什么不做成枚举表：新增动作由各域代码决定，写一份静态清单必然过期；
+     * 直接按时间窗 group 出实际出现过的动作，永远是“当前真实在写的东西”。
+     * `limit` 由服务层收敛，避免动作爆炸时把整页拉满。
+     */
+    public List<AuditActionOption> actionCatalog(Instant from, Instant to, int limit) {
+        return jdbc.sql("SELECT e.action AS action, count(*) AS n FROM ("
+                        + union("", "", "", "") + ") e"
+                        + """
+                           GROUP BY e.action
+                           ORDER BY n DESC, e.action
+                           LIMIT :limit
+                          """)
+                .param("fromTs", Timestamp.from(from == null ? BEGINNING : from))
+                .param("toTs", Timestamp.from(to == null ? END : to))
+                .param("limit", limit)
+                .query((rs, i) -> new AuditActionOption(rs.getString("action"), rs.getLong("n")))
+                .list();
     }
 
     /**
