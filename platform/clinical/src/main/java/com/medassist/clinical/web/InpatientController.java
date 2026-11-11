@@ -26,6 +26,7 @@ import com.medassist.clinical.web.ClinicalDtos.DischargeReadinessSummary;
 import com.medassist.clinical.web.ClinicalDtos.HandoverBriefView;
 import com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverStatusSummary;
+import com.medassist.clinical.web.ClinicalDtos.HandoverTaskCloseReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverView;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
@@ -303,6 +304,25 @@ public class InpatientController {
         Permissions.require(permissions, NURSING_EXECUTE);
         guard.requireWard(scope, wardId);
         return ApiResponse.ok(handoverService.save(wardId, req, actor, true));
+    }
+
+    /**
+     * 闭环交班事项：接班者确认办完（只允许 OPEN → DONE，重复点击 409）。
+     *
+     * <p>与交班保存同权限（护理执行），且只能闭环本病区事项。
+     */
+    @PostMapping("/wards/{wardId}/handover/tasks/{taskId}/close")
+    public ApiResponse<Void> closeHandoverTask(
+            @PathVariable UUID wardId,
+            @PathVariable UUID taskId,
+            @RequestBody(required = false) HandoverTaskCloseReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, NURSING_EXECUTE);
+        guard.requireWard(scope, wardId);
+        handoverService.closeTask(wardId, taskId, req == null ? null : req.note(), actor);
+        return ApiResponse.ok(null);
     }
 
     @GetMapping("/wards/{wardId}/admissions")

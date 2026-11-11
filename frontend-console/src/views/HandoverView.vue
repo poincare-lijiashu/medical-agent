@@ -215,6 +215,116 @@
         </div>
       </div>
 
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">本班待办事项</span>
+          <span v-if="openTasks.length > 0" class="badge badge--warn">{{ openTasks.length }} 项待办</span>
+          <span class="spacer" />
+          <span class="hint">交给下一班接着办；随交班记录一起留痕</span>
+        </div>
+
+        <template v-if="data.editable && canWrite">
+          <div v-for="(row, idx) in taskRows" :key="row.key" class="task-row">
+            <select v-model="row.admissionId" class="select task-patient">
+              <option value="">病区级（不绑患者）</option>
+              <option v-for="it in data.items" :key="it.admissionId" :value="it.admissionId">
+                {{ it.bedNo || '未分床' }} · {{ it.patientNo }}
+              </option>
+            </select>
+            <input
+              v-model="row.content"
+              class="input"
+              maxlength="300"
+              placeholder="如：复查电解质后调整补钾；家属沟通待跟进"
+            />
+            <button class="btn btn--sm" type="button" @click="removeTaskRow(idx)">删除</button>
+          </div>
+          <p v-if="taskRows.length === 0" class="hint">暂无待办事项；本班没有需要下一班接着办的事可留空。</p>
+          <div class="task-actions">
+            <button class="btn btn--sm" type="button" @click="addTaskRow">+ 添加事项</button>
+            <span v-if="doneTasks.length > 0" class="hint">
+              本班已闭环 {{ doneTasks.length }} 项（保留记录，不可再编辑）
+            </span>
+          </div>
+        </template>
+
+        <template v-else>
+          <p v-if="data.tasks.length === 0" class="hint">本班没有登记待办事项。</p>
+          <div v-else class="table-wrap">
+            <table class="table table--compact">
+              <thead>
+                <tr>
+                  <th style="width: 90px">床位</th>
+                  <th style="width: 130px">病案号</th>
+                  <th>事项</th>
+                  <th style="width: 100px">状态</th>
+                  <th style="width: 130px">闭环人</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in data.tasks" :key="t.id">
+                  <td class="mono">{{ t.bedNo || '—' }}</td>
+                  <td class="mono">{{ t.patientNo || '—' }}</td>
+                  <td>{{ t.content }}</td>
+                  <td>
+                    <span class="badge" :class="t.status === 'DONE' ? 'badge--ok' : 'badge--warn'">
+                      {{ t.status === 'DONE' ? '已闭环' : '待办' }}
+                    </span>
+                  </td>
+                  <td>
+                    <span v-if="t.closedBy">{{ t.closedBy }}</span>
+                    <span v-else class="muted">—</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+
+      <div v-if="data.carriedTasks.length > 0" class="card">
+        <div class="card-head">
+          <span class="card-title">接班未完成事项</span>
+          <span class="badge badge--warn">{{ data.carriedTasks.length }} 项</span>
+          <span class="spacer" />
+          <span class="hint">来自之前班次；办完请逐条闭环，不要只写在备注里</span>
+        </div>
+        <div class="table-wrap">
+          <table class="table table--compact">
+            <thead>
+              <tr>
+                <th style="width: 130px">来源班次</th>
+                <th style="width: 90px">床位</th>
+                <th style="width: 120px">病案号</th>
+                <th>事项</th>
+                <th style="width: 110px">交班人</th>
+                <th style="width: 110px" />
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="t in data.carriedTasks" :key="t.id">
+                <td>{{ t.shiftDate }} {{ shiftLabel(t.shiftCode) }}</td>
+                <td class="mono">{{ t.bedNo || '—' }}</td>
+                <td class="mono">{{ t.patientNo || '—' }}</td>
+                <td>{{ t.content }}</td>
+                <td>{{ t.createdBy }}</td>
+                <td class="is-num">
+                  <button
+                    v-if="canWrite"
+                    class="btn btn--sm"
+                    type="button"
+                    :disabled="closeSaving"
+                    @click="openClose(t)"
+                  >
+                    标记完成
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="card actions">
         <span class="hint">
           签字后内容冻结并留痕；如需更正，只能另写下一班次交班。
@@ -264,6 +374,32 @@
       </template>
     </AppModal>
 
+    <!-- 交班事项闭环 -->
+    <AppModal v-model="closeOpen" title="闭环交班事项" subtitle="确认这件事已经办完" width="480px">
+      <div class="stack">
+        <p class="task-close-text">{{ closing?.content }}</p>
+        <p class="hint">
+          来源：{{ closing?.shiftDate }} {{ closing ? shiftLabel(closing.shiftCode) : '' }} ·
+          {{ closing?.createdBy || '—' }} 交班
+        </p>
+        <label class="field">
+          <span class="label">办理说明（可留空）</span>
+          <input
+            v-model="closeNote"
+            class="input"
+            maxlength="500"
+            placeholder="如：已复查，血钾 4.1，补钾医嘱已停"
+          />
+        </label>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" :disabled="closeSaving" @click="closeOpen = false">取消</button>
+        <button class="btn btn--primary" type="button" :disabled="closeSaving" @click="confirmClose">
+          {{ closeSaving ? '提交中…' : '确认闭环' }}
+        </button>
+      </template>
+    </AppModal>
+
     <!-- 未保存切换确认 -->
     <AppModal v-model="discardOpen" title="放弃未保存的修改？" width="440px">
       <p class="hint">切换病区/日期/班次会重新加载交班清单，当前未保存的备注会丢失。</p>
@@ -285,7 +421,13 @@ import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import { clinicalApi } from '@/api'
 import { errorText } from '@/api/http'
-import type { HandoverBrief, HandoverSaveBody, HandoverView, Ward } from '@/api/types'
+import type {
+  HandoverBrief,
+  HandoverSaveBody,
+  HandoverTaskView,
+  HandoverView,
+  Ward,
+} from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { checkCodeLabel } from '@/utils/clinicalLabels'
@@ -325,6 +467,16 @@ const itemNotes = reactive<Record<string, string>>({})
 const history = ref<HandoverBrief[]>([])
 const historyLoading = ref(false)
 const historyErr = ref('')
+/** 本班待办（只编辑 OPEN；DONE 只读展示）。 */
+interface TaskRow { key: number; admissionId: string; content: string }
+const taskRows = ref<TaskRow[]>([])
+let taskKey = 1
+const openTasks = computed(() => (data.value?.tasks ?? []).filter((t) => t.status === 'OPEN'))
+const doneTasks = computed(() => (data.value?.tasks ?? []).filter((t) => t.status === 'DONE'))
+const closeOpen = ref(false)
+const closing = ref<HandoverTaskView | null>(null)
+const closeNote = ref('')
+const closeSaving = ref(false)
 /** 载入时的备注快照：用于判断是否有未保存修改。 */
 let baseline = ''
 /** 当前已加载的查询条件：放弃修改时用于回滚控件值。 */
@@ -346,7 +498,8 @@ const dirty = computed(() => {
 
 function contentSignature(): string {
   const items = (data.value?.items ?? []).map((i) => `${i.admissionId}:${itemNotes[i.admissionId] ?? ''}`)
-  return `${note.value}\u0000${items.join('\u0001')}`
+  const tasks = taskRows.value.map((t) => `${t.admissionId}:${t.content}`)
+  return `${note.value}\u0000${items.join('\u0001')}\u0002${tasks.join('\u0003')}`
 }
 
 function shiftLabel(value: Shift): string {
@@ -364,10 +517,50 @@ function applyLoaded(view: HandoverView) {
   note.value = view.note ?? ''
   for (const key of Object.keys(itemNotes)) delete itemNotes[key]
   for (const item of view.items) itemNotes[item.admissionId] = item.note ?? ''
+  taskRows.value = view.tasks
+    .filter((t) => t.status === 'OPEN')
+    .map((t) => ({ key: taskKey++, admissionId: t.admissionId ?? '', content: t.content }))
   baseline = contentSignature()
   loadedWardId = wardId.value
   loadedShiftDate = shiftDate.value
   loadedShift = shift.value
+}
+
+function addTaskRow() {
+  taskRows.value.push({ key: taskKey++, admissionId: '', content: '' })
+}
+
+function removeTaskRow(index: number) {
+  taskRows.value.splice(index, 1)
+}
+
+function openClose(task: HandoverTaskView) {
+  closing.value = task
+  closeNote.value = ''
+  closeOpen.value = true
+}
+
+/** 闭环后只把该条从“接班未完成”移除，不整页重载：避免丢掉正在编辑的备注。 */
+async function confirmClose() {
+  const task = closing.value
+  if (!task || !wardId.value || closeSaving.value) return
+  closeSaving.value = true
+  try {
+    await clinicalApi.closeHandoverTask(wardId.value, task.id, closeNote.value.trim() || undefined)
+    closeOpen.value = false
+    closing.value = null
+    if (data.value) {
+      data.value = {
+        ...data.value,
+        carriedTasks: data.value.carriedTasks.filter((t) => t.id !== task.id),
+      }
+    }
+    toast.ok('交班事项已闭环', '已记录闭环人与时间')
+  } catch (e) {
+    toast.error('闭环交班事项失败', errorText(e))
+  } finally {
+    closeSaving.value = false
+  }
 }
 
 async function loadWards() {
@@ -488,6 +681,10 @@ function payload(): HandoverSaveBody {
       admissionId: i.admissionId,
       note: (itemNotes[i.admissionId] ?? '').trim() || undefined,
     })),
+    tasks: taskRows.value.map((t) => ({
+      admissionId: t.admissionId || undefined,
+      content: t.content.trim() || undefined,
+    })),
   }
 }
 
@@ -531,6 +728,18 @@ function printHandover() {
       <td>${it.flags.length ? it.flags.map((f) => esc(checkCodeLabel(f))).join('、') : '—'}</td>
       <td>${esc(it.note || '—')}</td>
     </tr>`).join('')
+  const taskRowsHtml = view.tasks.map((t) => `<tr>
+      <td class="mono">${esc(t.bedNo || '—')}</td>
+      <td class="mono">${esc(t.patientNo || '—')}</td>
+      <td>${esc(t.content)}</td>
+      <td>${t.status === 'DONE' ? `已闭环${t.closedBy ? `（${esc(t.closedBy)}）` : ''}` : '待办'}</td>
+    </tr>`).join('')
+  const carriedRowsHtml = view.carriedTasks.map((t) => `<tr>
+      <td>${esc(t.shiftDate)} ${esc(shiftLabel(t.shiftCode))}</td>
+      <td class="mono">${esc(t.bedNo || '—')}</td>
+      <td class="mono">${esc(t.patientNo || '—')}</td>
+      <td>${esc(t.content)}</td>
+    </tr>`).join('')
   const statusText = view.editable ? '草稿（未签字）' : `已签字 · ${view.signedBy}`
   const body = `
     <h1>病区交班报告</h1>
@@ -543,8 +752,18 @@ function printHandover() {
       <thead><tr><th>床位</th><th>病案号</th><th>风险项</th><th>交班备注</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="4" class="muted">该病区当前没有在院患者</td></tr>'}</tbody>
     </table>
+    ${view.tasks.length ? `<h2>本班待办</h2>
+    <table class="items">
+      <thead><tr><th>床位</th><th>病案号</th><th>事项</th><th>状态</th></tr></thead>
+      <tbody>${taskRowsHtml}</tbody>
+    </table>` : ''}
+    ${view.carriedTasks.length ? `<h2>接班未完成事项</h2>
+    <table class="items">
+      <thead><tr><th>来源班次</th><th>床位</th><th>病案号</th><th>事项</th></tr></thead>
+      <tbody>${carriedRowsHtml}</tbody>
+    </table>` : ''}
     <div class="foot">
-      风险项与出院预检同口径；交班备注只作交接记录，不改变医嘱、床位与费用。
+      风险项与出院预检同口径；交班备注与待办只作交接记录，不改变医嘱、床位与费用。
       <br/>交班护士：__________　接班护士：__________　交班时间：____:____
     </div>`
   const ok = printHtml({
@@ -553,6 +772,7 @@ function printHandover() {
     css: `
       .meta { margin-bottom: 10px; }
       .note { font-size: 12px; margin: 10px 0 14px; line-height: 1.7; white-space: pre-wrap; }
+      h2 { font-size: 13px; margin: 14px 0 4px; }
       .items { font-size: 12px; margin-top: 8px; }
       .items th, .items td { padding: 6px 8px; vertical-align: top; }
       .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
@@ -626,6 +846,30 @@ onMounted(async () => {
 
 .hint--warn {
   color: var(--warn, #b45309);
+}
+
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+}
+
+.task-patient {
+  width: 210px;
+  flex: none;
+}
+
+.task-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+}
+
+.task-close-text {
+  font-weight: 600;
+  line-height: 1.6;
 }
 
 .signed-banner {

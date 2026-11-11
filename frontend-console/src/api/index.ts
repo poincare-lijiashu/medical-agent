@@ -403,6 +403,8 @@ export const clinicalApi = {
     post<HandoverView>(`/clinical/wards/${wardId}/handover`, body),
   signHandover: (wardId: string, body: HandoverSaveBody) =>
     post<HandoverView>(`/clinical/wards/${wardId}/handover/sign`, body),
+  closeHandoverTask: (wardId: string, taskId: string, note?: string) =>
+    post<void>(`/clinical/wards/${wardId}/handover/tasks/${taskId}/close`, { note }),
   admissions: (wardId: string, status?: string) =>
     get<AdmissionView[]>(`/clinical/wards/${wardId}/admissions`, { status }),
   admit: (body: { patientId: string; wardId: string; bedId?: string; attendingDoctor: string }) =>

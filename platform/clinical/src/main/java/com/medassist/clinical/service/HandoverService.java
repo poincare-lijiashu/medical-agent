@@ -5,6 +5,8 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Handover;
 import com.medassist.clinical.domain.ClinicalModel.HandoverBrief;
 import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
+import com.medassist.clinical.domain.ClinicalModel.HandoverTask;
+import com.medassist.clinical.domain.ClinicalModel.HandoverTaskEntry;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.HandoverBriefView;
@@ -12,6 +14,8 @@ import com.medassist.clinical.web.ClinicalDtos.HandoverItemReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverItemView;
 import com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverStatusSummary;
+import com.medassist.clinical.web.ClinicalDtos.HandoverTaskReq;
+import com.medassist.clinical.web.ClinicalDtos.HandoverTaskView;
 import com.medassist.clinical.web.ClinicalDtos.HandoverView;
 import com.medassist.clinical.web.ClinicalDtos.WardHandoverStatus;
 import com.medassist.common.api.ErrorCode;
@@ -79,7 +83,9 @@ public class HandoverService {
             Handover h = saved.get();
             return new HandoverView(h.id(), wardId, ward.name(), h.shiftDate(), h.shiftCode(),
                     h.status(), h.note(), h.createdBy(), h.signedBy(), h.signedAt(), false,
-                    toViews(repo.listHandoverItems(h.id())));
+                    toViews(repo.listHandoverItems(h.id())),
+                    taskViews(repo.listHandoverTasks(h.id()), h.shiftDate(), h.shiftCode()),
+                    carriedViews(repo.listOpenHandoverTasks(wardId, h.id())));
         }
         Map<UUID, String> notes = new HashMap<>();
         UUID handoverId = null;
@@ -94,8 +100,12 @@ public class HandoverService {
             }
         }
         List<HandoverItemView> items = liveItems(wardId, date, notes);
+        List<HandoverTaskView> tasks = handoverId == null ? List.of()
+                : taskViews(repo.listHandoverTasks(handoverId), date, shift);
+        List<HandoverTaskView> carried = carriedViews(
+                repo.listOpenHandoverTasks(wardId, handoverId));
         return new HandoverView(handoverId, wardId, ward.name(), date, shift, Handover.DRAFT,
-                note, createdBy, null, null, true, items);
+                note, createdBy, null, null, true, items, tasks, carried);
     }
 
     /**
@@ -149,6 +159,7 @@ public class HandoverService {
         detail.put("shiftCode", shift);
         detail.put("patients", items.size());
         detail.put("notedPatients", items.stream().filter(i -> i.note() != null).count());
+        detail.put("tasks", replaceOpenTasks(handover.id(), items, req.tasks(), actor));
 
         if (sign) {
             Handover current = repo.lockHandover(handover.id())
@@ -161,6 +172,34 @@ public class HandoverService {
             audit(actor, "HANDOVER_SAVE", handover.id(), detail);
         }
         return view(wardId, date, shift);
+    }
+
+    /**
+     * 闭环一条交班事项（接班者确认办完）。
+     *
+     * <p>只允许 OPEN → DONE；重复点击返回 409，不覆盖第一次的闭环人与时间。
+     * 只能闭环本病区事项（SQL 里 JOIN handover 限制 ward_id）。
+     */
+    @Transactional
+    public void closeTask(UUID wardId, UUID taskId, String note, String actor) {
+        requireWard(wardId);
+        HandoverTask task = repo.findHandoverTaskInWard(wardId, taskId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "交班事项不存在"));
+        if (!task.open()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该交班事项已闭环，请刷新");
+        }
+        String closeNote = trimToNull(note);
+        if (closeNote != null && closeNote.length() > 500) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "闭环说明最多 500 字");
+        }
+        if (!repo.closeHandoverTask(taskId, actor, closeNote)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该交班事项已被他人闭环，请刷新");
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("content", task.content());
+        detail.put("patientNo", task.patientNo());
+        detail.put("closeNote", closeNote);
+        audit(actor, "HANDOVER_TASK_CLOSE", task.handoverId(), detail);
     }
 
     /**
@@ -227,6 +266,71 @@ public class HandoverService {
     private static HandoverBriefView toBriefView(HandoverBrief b) {
         return new HandoverBriefView(b.id(), b.shiftDate(), b.shiftCode(), b.status(),
                 b.createdBy(), b.signedBy(), b.signedAt(), b.patientCount(), b.notedCount());
+    }
+
+    /**
+     * 用本次提交的事项替换本报告的 OPEN 事项（已闭环的保留）。
+     *
+     * <p>为什么只替换 OPEN：接班者可能已经闭环了上一版草稿里的某条事项，
+     * 全量删除会让“已办完”的证据消失；保留 DONE 才符合交接责任链。
+     *
+     * @return 本次登记的事项数（写审计用）
+     */
+    private int replaceOpenTasks(UUID handoverId, List<LiveItem> items,
+                                 List<HandoverTaskReq> requested, String actor) {
+        Map<UUID, LiveItem> byAdmission = new HashMap<>();
+        for (LiveItem item : items) {
+            byAdmission.put(item.admissionId(), item);
+        }
+        // 先校验并构造，再删旧数据：非法请求不该先清空草稿事项（虽然事务会回滚，
+        // 但少一次无效写入，日志与锁都更干净）
+        List<HandoverTask> tasks = new ArrayList<>();
+        if (requested != null) {
+            for (HandoverTaskReq req : requested) {
+                if (req == null) {
+                    continue;
+                }
+                String content = trimToNull(req.content());
+                if (content == null) {
+                    continue;
+                }
+                if (content.length() > 300) {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED, "交班事项最多 300 字");
+                }
+                UUID admissionId = req.admissionId();
+                LiveItem item = admissionId == null ? null : byAdmission.get(admissionId);
+                if (admissionId != null && item == null) {
+                    throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                            "交班事项关联的患者不在本病区在院清单中");
+                }
+                tasks.add(new HandoverTask(UUID.randomUUID(), handoverId, admissionId,
+                        item == null ? null : item.bedNo(),
+                        item == null ? null : item.patientNo(),
+                        content, HandoverTask.OPEN, actor, null, null, null));
+            }
+        }
+        repo.deleteOpenHandoverTasks(handoverId);
+        for (HandoverTask task : tasks) {
+            repo.insertHandoverTask(task);
+        }
+        return tasks.size();
+    }
+
+    private static List<HandoverTaskView> taskViews(List<HandoverTask> tasks,
+                                                    LocalDate date, String shift) {
+        return tasks.stream().map(t -> toTaskView(t, date, shift)).toList();
+    }
+
+    private static List<HandoverTaskView> carriedViews(List<HandoverTaskEntry> entries) {
+        return entries.stream()
+                .map(e -> toTaskView(e.task(), e.shiftDate(), e.shiftCode()))
+                .toList();
+    }
+
+    private static HandoverTaskView toTaskView(HandoverTask t, LocalDate date, String shift) {
+        return new HandoverTaskView(t.id(), t.admissionId(), t.bedNo(), t.patientNo(),
+                t.content(), t.status(), t.createdBy(), date, shift,
+                t.closedBy(), t.closedAt(), t.closeNote());
     }
 
     private List<HandoverItemView> liveItems(UUID wardId, LocalDate today,

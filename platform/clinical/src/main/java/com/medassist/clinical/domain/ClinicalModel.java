@@ -729,6 +729,27 @@ public final class ClinicalModel {
     }
 
     /**
+     * 交班待办事项：一条“下一班接着办”的具体事项。
+     *
+     * <p>只允许 OPEN → DONE（不物理删除）；闭环人/时间/说明保留，用于回答“谁在什么时候确认办完”。
+     */
+    public record HandoverTask(UUID id, UUID handoverId, UUID admissionId, String bedNo,
+                               String patientNo, String content, String status, String createdBy,
+                               String closedBy, Instant closedAt, String closeNote) {
+
+        public static final String OPEN = "OPEN";
+        public static final String DONE = "DONE";
+
+        public boolean open() {
+            return OPEN.equals(status);
+        }
+    }
+
+    /** 待办事项 + 来源班次（跨班次结转列表用）。 */
+    public record HandoverTaskEntry(HandoverTask task, LocalDate shiftDate, String shiftCode) {
+    }
+
+    /**
      * 住院登记。
      *
      * @param plannedDischargeDate 预计出院日（业务日期，仅用于床位计划与超期预警，不阻断出院）

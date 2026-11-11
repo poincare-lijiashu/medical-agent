@@ -270,7 +270,7 @@ class InpatientControllerPermissionTest {
         verify(handoverService).view(wardId, null, null);
 
         var req = new com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq(
-                java.time.LocalDate.now(), "DAY", "夜班注意 3 床血压", List.of());
+                java.time.LocalDate.now(), "DAY", "夜班注意 3 床血压", List.of(), List.of());
         assertThatThrownBy(() -> controller.saveHandover(wardId, req, "inpatient:read",
                 "nurse01", scope))
                 .isInstanceOf(BusinessException.class)
@@ -308,6 +308,25 @@ class InpatientControllerPermissionTest {
         when(service.listWards(any(), any())).thenReturn(List.of(ward));
         controller.handoverStatus(null, null, "inpatient:read", scope);
         verify(handoverService).status(List.of(ward), null, null);
+    }
+
+    @Test
+    @DisplayName("交班事项闭环：需护理执行权限，且先校验病区范围")
+    void closeHandoverTaskPermissions() {
+        UUID taskId = UUID.randomUUID();
+        var req = new com.medassist.clinical.web.ClinicalDtos.HandoverTaskCloseReq("已补液");
+
+        assertThatThrownBy(() -> controller.closeHandoverTask(wardId, taskId, req,
+                "inpatient:read", "nurse01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(handoverService, never()).closeTask(any(), any(), any(), anyString());
+
+        controller.closeHandoverTask(wardId, taskId, req, "inpatient:nursing:execute",
+                "nurse01", scope);
+        verify(guard).requireWard(scope, wardId);
+        verify(handoverService).closeTask(wardId, taskId, "已补液", "nurse01");
     }
 
     @Test

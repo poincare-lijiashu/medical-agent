@@ -235,7 +235,33 @@ public final class ClinicalDtos {
             @NotNull LocalDate shiftDate,
             @NotBlank String shiftCode,
             @Size(max = 4000) String note,
-            List<HandoverItemReq> items) {
+            List<HandoverItemReq> items,
+            List<HandoverTaskReq> tasks) {
+    }
+
+    /**
+     * 交班待办事项：下一班要接着办的事。
+     *
+     * @param admissionId 可空：病区级事项（如“抢救车药品补齐”）不绑患者
+     * @param content     事项正文（服务端去空白，空内容会被忽略）
+     */
+    public record HandoverTaskReq(@Size(max = 300) String content, UUID admissionId) {
+    }
+
+    /**
+     * 交班待办事项视图。
+     *
+     * @param shiftDate/shiftCode 来源班次（跨班次结转时前端显示“上一班交代”）
+     * @param status              OPEN / DONE
+     */
+    public record HandoverTaskView(UUID id, UUID admissionId, String bedNo, String patientNo,
+                                   String content, String status, String createdBy,
+                                   LocalDate shiftDate, String shiftCode, String closedBy,
+                                   Instant closedAt, String closeNote) {
+    }
+
+    /** 交班事项闭环（接班者确认办完）；说明可空。 */
+    public record HandoverTaskCloseReq(@Size(max = 500) String note) {
     }
 
     /**
@@ -250,13 +276,16 @@ public final class ClinicalDtos {
     /**
      * 交班报告视图。
      *
-     * @param id       未保存过草稿时为 null（前端据此判断"尚未保存"）
-     * @param editable 已签字为 false，界面必须只读
+     * @param id        未保存过草稿时为 null（前端据此判断"尚未保存"）
+     * @param editable  已签字为 false，界面必须只读
+     * @param tasks     本班次登记的待办事项（含已闭环）
+     * @param carriedTasks 之前班次遗留的 OPEN 事项（接班者要接着办）
      */
     public record HandoverView(UUID id, UUID wardId, String wardName, LocalDate shiftDate,
                                String shiftCode, String status, String note, String createdBy,
                                String signedBy, Instant signedAt, boolean editable,
-                               List<HandoverItemView> items) {
+                               List<HandoverItemView> items, List<HandoverTaskView> tasks,
+                               List<HandoverTaskView> carriedTasks) {
     }
 
     /**

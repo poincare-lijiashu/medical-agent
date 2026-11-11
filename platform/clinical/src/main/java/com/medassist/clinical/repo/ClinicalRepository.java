@@ -24,6 +24,8 @@ import com.medassist.clinical.domain.ClinicalModel.DischargeMedicationItem;
 import com.medassist.clinical.domain.ClinicalModel.Handover;
 import com.medassist.clinical.domain.ClinicalModel.HandoverBrief;
 import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
+import com.medassist.clinical.domain.ClinicalModel.HandoverTask;
+import com.medassist.clinical.domain.ClinicalModel.HandoverTaskEntry;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBed;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyBoardRow;
 import com.medassist.clinical.domain.ClinicalModel.EmergencyObservation;
@@ -2839,6 +2841,107 @@ public class ClinicalRepository {
                 .param("wardIds", wardIds)
                 .query((rs, i) -> rs.getObject("ward_id", UUID.class))
                 .list().stream().collect(Collectors.toSet());
+    }
+
+    // ---------------------------------------------------------------- 交班待办事项
+
+    private static final RowMapper<HandoverTask> HANDOVER_TASK_MAPPER = (rs, i) ->
+            new HandoverTask(
+                    rs.getObject("id", UUID.class),
+                    rs.getObject("handover_id", UUID.class),
+                    rs.getObject("admission_id", UUID.class),
+                    rs.getString("bed_no"),
+                    rs.getString("patient_no"),
+                    rs.getString("content"),
+                    rs.getString("status"),
+                    rs.getString("created_by"),
+                    rs.getString("closed_by"),
+                    rs.getTimestamp("closed_at") == null
+                            ? null : rs.getTimestamp("closed_at").toInstant(),
+                    rs.getString("close_note"));
+
+    private static final String HANDOVER_TASK_COLUMNS = """
+            t.id, t.handover_id, t.admission_id, t.bed_no, t.patient_no, t.content, t.status,
+            t.created_by, t.closed_by, t.closed_at, t.close_note
+            """;
+
+    private static final RowMapper<HandoverTaskEntry> HANDOVER_TASK_ENTRY_MAPPER = (rs, i) ->
+            new HandoverTaskEntry(HANDOVER_TASK_MAPPER.mapRow(rs, i),
+                    rs.getObject("shift_date", LocalDate.class), rs.getString("shift_code"));
+
+    public List<HandoverTask> listHandoverTasks(UUID handoverId) {
+        return jdbc.sql("SELECT " + HANDOVER_TASK_COLUMNS + """
+                           FROM clinical_svc.handover_task t
+                          WHERE t.handover_id = ?
+                          ORDER BY t.created_at, t.id
+                          """)
+                .param(handoverId).query(HANDOVER_TASK_MAPPER).list();
+    }
+
+    /**
+     * 某病区其他班次遗留的 OPEN 事项（跨班次结转）。
+     *
+     * <p>按来源班次从早到晚：上一班最先交代的事应该最先被看到。
+     */
+    public List<HandoverTaskEntry> listOpenHandoverTasks(UUID wardId, UUID excludeHandoverId) {
+        return jdbc.sql("SELECT " + HANDOVER_TASK_COLUMNS + """
+                           , h.shift_date, h.shift_code
+                           FROM clinical_svc.handover_task t
+                           JOIN clinical_svc.handover h ON h.id = t.handover_id
+                          WHERE h.ward_id = :wardId AND t.status = 'OPEN'
+                            AND (CAST(:excludeId AS uuid) IS NULL
+                                 OR t.handover_id <> CAST(:excludeId AS uuid))
+                          ORDER BY h.shift_date,
+                                   CASE h.shift_code
+                                       WHEN 'NIGHT' THEN 3 WHEN 'EVENING' THEN 2 ELSE 1 END,
+                                   t.created_at, t.id
+                          """)
+                .param("wardId", wardId).param("excludeId", excludeHandoverId)
+                .query(HANDOVER_TASK_ENTRY_MAPPER).list();
+    }
+
+    /** 草稿/签字保存时只替换本报告的 OPEN 事项；已闭环事项永远保留。 */
+    public void deleteOpenHandoverTasks(UUID handoverId) {
+        jdbc.sql("DELETE FROM clinical_svc.handover_task WHERE handover_id = ? AND status = 'OPEN'")
+                .param(handoverId).update();
+    }
+
+    public void insertHandoverTask(HandoverTask task) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.handover_task
+                            (id, handover_id, admission_id, bed_no, patient_no, content,
+                             status, created_by)
+                        VALUES (:id, :handoverId, :admissionId, :bedNo, :patientNo, :content,
+                                :status, :createdBy)
+                        """)
+                .param("id", task.id()).param("handoverId", task.handoverId())
+                .param("admissionId", task.admissionId()).param("bedNo", task.bedNo())
+                .param("patientNo", task.patientNo()).param("content", task.content())
+                .param("status", task.status()).param("createdBy", task.createdBy())
+                .update();
+    }
+
+    /** 病区范围内的待办事项（防止跨病区闭环别人的事项）。 */
+    public Optional<HandoverTask> findHandoverTaskInWard(UUID wardId, UUID taskId) {
+        return jdbc.sql("SELECT " + HANDOVER_TASK_COLUMNS + """
+                           FROM clinical_svc.handover_task t
+                           JOIN clinical_svc.handover h ON h.id = t.handover_id
+                          WHERE t.id = :taskId AND h.ward_id = :wardId
+                          """)
+                .param("taskId", taskId).param("wardId", wardId)
+                .query(HANDOVER_TASK_MAPPER).optional();
+    }
+
+    /** 闭环（CAS）：只有 OPEN 可闭环，重复点击不会覆盖第一次的闭环人与时间。 */
+    public boolean closeHandoverTask(UUID taskId, String actor, String note) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.handover_task
+                           SET status = 'DONE', closed_by = :actor, closed_at = now(),
+                               close_note = :note
+                         WHERE id = :taskId AND status = 'OPEN'
+                        """)
+                .param("taskId", taskId).param("actor", actor).param("note", note)
+                .update() > 0;
     }
 
     public String nextAdmissionNo() {

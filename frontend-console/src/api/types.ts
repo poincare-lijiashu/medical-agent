@@ -355,7 +355,7 @@ export interface HandoverItemView {
   note: string | null
 }
 
-/** 病区交班报告；id 为空表示该班次尚未保存，editable=false 表示已签字冻结。 */
+/** 交班报告：id 为空表示该班次尚未保存，editable=false 表示已签字冻结。 */
 export interface HandoverView {
   id: string | null
   wardId: string
@@ -369,14 +369,35 @@ export interface HandoverView {
   signedAt: string | null
   editable: boolean
   items: HandoverItemView[]
+  /** 本班次登记的待办事项（含已闭环）。 */
+  tasks: HandoverTaskView[]
+  /** 之前班次遗留的 OPEN 事项（接班者要接着办）。 */
+  carriedTasks: HandoverTaskView[]
 }
 
-/** 保存交班草稿 / 交班签字的上送体（只含备注，患者与风险由服务端生成）。 */
+/** 交班待办事项：下一班要接着办的事；DONE 保留闭环人与时间。 */
+export interface HandoverTaskView {
+  id: string
+  admissionId: string | null
+  bedNo: string | null
+  patientNo: string | null
+  content: string
+  status: 'OPEN' | 'DONE'
+  createdBy: string
+  shiftDate: string
+  shiftCode: 'DAY' | 'EVENING' | 'NIGHT'
+  closedBy: string | null
+  closedAt: string | null
+  closeNote: string | null
+}
+
+/** 保存交班草稿 / 交班签字的上送体（只含备注与事项，患者与风险由服务端生成）。 */
 export interface HandoverSaveBody {
   shiftDate: string
   shiftCode: 'DAY' | 'EVENING' | 'NIGHT'
   note?: string
   items: { admissionId: string; note?: string }[]
+  tasks: { admissionId?: string; content?: string }[]
 }
 
 /** 交班历史条目：只有班次与人数，点开某一班次再拉明细。 */

@@ -5,10 +5,13 @@ import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Handover;
 import com.medassist.clinical.domain.ClinicalModel.HandoverBrief;
 import com.medassist.clinical.domain.ClinicalModel.HandoverItem;
+import com.medassist.clinical.domain.ClinicalModel.HandoverTask;
+import com.medassist.clinical.domain.ClinicalModel.HandoverTaskEntry;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.HandoverItemReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverSaveReq;
+import com.medassist.clinical.web.ClinicalDtos.HandoverTaskReq;
 import com.medassist.clinical.web.ClinicalDtos.HandoverView;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -16,6 +19,7 @@ import com.medassist.common.time.BusinessTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
@@ -34,6 +38,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -134,7 +139,7 @@ class HandoverServiceTest {
         when(repo.findHandover(wardId, today, "DAY")).thenReturn(Optional.empty());
 
         HandoverView view = service.save(wardId, new HandoverSaveReq(today, "DAY", "班次说明",
-                List.of(new HandoverItemReq(admissionId, "重点看血压"))), "nurse01", false);
+                List.of(new HandoverItemReq(admissionId, "重点看血压")), List.of()), "nurse01", false);
 
         assertThat(view.status()).isEqualTo(Handover.DRAFT);
         verify(repo).insertHandover(any(Handover.class));
@@ -150,7 +155,7 @@ class HandoverServiceTest {
         Handover signed = handover(Handover.SIGNED, 4L);
         when(repo.findHandover(wardId, today, "DAY")).thenReturn(Optional.of(signed));
         when(repo.lockHandover(signed.id())).thenReturn(Optional.of(signed));
-        var req = new HandoverSaveReq(today, "DAY", "改一下", List.of());
+        var req = new HandoverSaveReq(today, "DAY", "改一下", List.of(), List.of());
 
         assertThatThrownBy(() -> service.save(wardId, req, "nurse01", false))
                 .isInstanceOf(BusinessException.class)
@@ -172,7 +177,7 @@ class HandoverServiceTest {
         when(repo.signHandover(draft.id(), "nurse01", 1L)).thenReturn(true);
         when(repo.listActiveAdmissions(wardId)).thenReturn(List.of(admission(UUID.randomUUID())));
 
-        service.save(wardId, new HandoverSaveReq(today, "DAY", "交班说明", List.of()),
+        service.save(wardId, new HandoverSaveReq(today, "DAY", "交班说明", List.of(), List.of()),
                 "nurse01", true);
 
         verify(repo).signHandover(draft.id(), "nurse01", 1L);
@@ -246,7 +251,112 @@ class HandoverServiceTest {
         assertThat(idle.wards()).isZero();
     }
 
+    @Test
+    @DisplayName("交班事项：保存时只替换 OPEN 事项；绑定患者自动带床位/病案号，空白内容忽略")
+    void saveReplacesOpenTasks() {
+        UUID bedId = UUID.randomUUID();
+        Admission a = admission("P7", bedId, today.minusDays(1), null);
+        when(repo.listActiveAdmissions(wardId)).thenReturn(List.of(a));
+        when(repo.listBeds(wardId)).thenReturn(List.of(
+                new Bed(bedId, wardId, "07", Bed.OCCUPIED, 0L)));
+        when(repo.findHandover(wardId, today, "DAY")).thenReturn(Optional.empty());
+
+        service.save(wardId, new HandoverSaveReq(today, "DAY", null, List.of(), List.of(
+                new HandoverTaskReq("  复查电解质  ", a.id()),
+                new HandoverTaskReq("抢救车药品补齐", null),
+                new HandoverTaskReq("   ", a.id()))), "nurse01", false);
+
+        ArgumentCaptor<HandoverTask> captor = ArgumentCaptor.forClass(HandoverTask.class);
+        verify(repo).deleteOpenHandoverTasks(any());
+        verify(repo, times(2)).insertHandoverTask(captor.capture());
+        HandoverTask bound = captor.getAllValues().get(0);
+        assertThat(bound.content()).isEqualTo("复查电解质");
+        assertThat(bound.bedNo()).isEqualTo("07");
+        assertThat(bound.patientNo()).isEqualTo("P7");
+        assertThat(bound.status()).isEqualTo(HandoverTask.OPEN);
+        assertThat(bound.createdBy()).isEqualTo("nurse01");
+        HandoverTask wardLevel = captor.getAllValues().get(1);
+        assertThat(wardLevel.admissionId()).isNull();
+        assertThat(wardLevel.bedNo()).isNull();
+    }
+
+    @Test
+    @DisplayName("交班事项：关联的患者不在本病区在院清单时 422，且不清空已有事项")
+    void saveRejectsForeignAdmissionTask() {
+        when(repo.listActiveAdmissions(wardId)).thenReturn(List.of());
+        when(repo.listBeds(wardId)).thenReturn(List.of());
+        when(repo.findHandover(wardId, today, "DAY")).thenReturn(Optional.empty());
+
+        var req = new HandoverSaveReq(today, "DAY", null, List.of(), List.of(
+                new HandoverTaskReq("交代别科患者", UUID.randomUUID())));
+
+        assertThatThrownBy(() -> service.save(wardId, req, "nurse01", false))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不在本病区")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).deleteOpenHandoverTasks(any());
+        verify(repo, never()).insertHandoverTask(any());
+    }
+
+    @Test
+    @DisplayName("交班事项闭环：OPEN → DONE 并留痕；已闭环 409；不存在 404")
+    void closeTaskGuardsState() {
+        HandoverTask open = task(HandoverTask.OPEN);
+        when(repo.findHandoverTaskInWard(wardId, open.id())).thenReturn(Optional.of(open));
+        when(repo.closeHandoverTask(open.id(), "nurse02", "已补液")).thenReturn(true);
+
+        service.closeTask(wardId, open.id(), " 已补液 ", "nurse02");
+
+        verify(repo).closeHandoverTask(open.id(), "nurse02", "已补液");
+        verify(repo).logChange(eq("nurse02"), eq("HANDOVER_TASK_CLOSE"), eq("HANDOVER"),
+                eq(open.handoverId().toString()), anyString());
+
+        HandoverTask done = task(HandoverTask.DONE);
+        when(repo.findHandoverTaskInWard(wardId, done.id())).thenReturn(Optional.of(done));
+        assertThatThrownBy(() -> service.closeTask(wardId, done.id(), null, "nurse02"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已闭环")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+
+        UUID missing = UUID.randomUUID();
+        when(repo.findHandoverTaskInWard(wardId, missing)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.closeTask(wardId, missing, null, "nurse02"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("已签字视图：返回本班事项与之前班次遗留的 OPEN 事项（带来源班次）")
+    void signedViewCarriesOpenTasks() {
+        Handover signed = handover(Handover.SIGNED, 5L);
+        HandoverTask own = task(HandoverTask.OPEN);
+        HandoverTaskEntry carried = new HandoverTaskEntry(task(HandoverTask.OPEN),
+                today.minusDays(1), "NIGHT");
+        when(repo.findHandover(wardId, today, "DAY")).thenReturn(Optional.of(signed));
+        when(repo.listHandoverTasks(signed.id())).thenReturn(List.of(own));
+        when(repo.listOpenHandoverTasks(wardId, signed.id())).thenReturn(List.of(carried));
+
+        HandoverView view = service.view(wardId, today, "DAY");
+
+        assertThat(view.tasks()).hasSize(1);
+        assertThat(view.tasks().get(0).shiftDate()).isEqualTo(today);
+        assertThat(view.tasks().get(0).shiftCode()).isEqualTo("DAY");
+        assertThat(view.carriedTasks()).hasSize(1);
+        assertThat(view.carriedTasks().get(0).shiftDate()).isEqualTo(today.minusDays(1));
+        assertThat(view.carriedTasks().get(0).shiftCode()).isEqualTo("NIGHT");
+    }
+
     // ---------------------------------------------------------------- 构造
+
+    private HandoverTask task(String status) {
+        return new HandoverTask(UUID.randomUUID(), UUID.randomUUID(), null, null, null,
+                "复查电解质", status, "nurse01",
+                HandoverTask.DONE.equals(status) ? "nurse02" : null,
+                HandoverTask.DONE.equals(status) ? Instant.now() : null, null);
+    }
 
     private Handover handover(String status, long version) {
         return new Handover(UUID.randomUUID(), wardId, today, "DAY", "班次说明",
