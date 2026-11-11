@@ -66,6 +66,39 @@ insurance:
     secret: ${INSURANCE_REALTIME_SECRET:}
     allowed-hosts: ${INSURANCE_REALTIME_ALLOWED_HOSTS:}
     timeout-ms: ${INSURANCE_REALTIME_TIMEOUT_MS:3000}
+  # ---- 国家医保信息平台 2.0（CHS）报文适配（第 261 批）----
+  # 默认关闭：关闭时沿用上面 realtime 的私有报文，升级不改既有行为。
+  # 开启后：信封字段按国家规范固定；交易号/路径/input 模板按统筹区配置。
+  chs:
+    enabled: ${CHS_ENABLED:false}
+    base-url: ${CHS_BASE_URL:}
+    # 未单独配置时沿用 realtime.allowed-hosts（fail-closed，空集拒绝）
+    allowed-hosts: ${CHS_ALLOWED_HOSTS:}
+    timeout: ${CHS_TIMEOUT:PT10S}
+    fixmedins-code: ${CHS_FIXMEDINS_CODE:}
+    fixmedins-name: ${CHS_FIXMEDINS_NAME:}
+    recer-sys-code: ${CHS_RECER_SYS_CODE:HIS}
+    mdtrtarea-admvs: ${CHS_MDTRTAREA_ADMVS:}
+    insuplc-admdvs: ${CHS_INSUPLC_ADMDVS:}
+    inf-ver: ${CHS_INF_VER:V1.0}
+    # HMAC_SHA256 / MD5 / NONE（NONE = 由前置机或 CA 签名）
+    sign-type: ${CHS_SIGN_TYPE:HMAC_SHA256}
+    secret: ${CHS_SECRET:}
+    opter: ${CHS_OPTER:medassist}
+    opter-name: ${CHS_OPTER_NAME:MedAssist}
+    ret-code-field: ${CHS_RET_CODE_FIELD:ret_code}
+    ret-msg-field: ${CHS_RET_MSG_FIELD:ret_msg}
+    settlement-id-path: ${CHS_SETTLEMENT_ID_PATH:output.setl_id}
+    success-codes: ${CHS_SUCCESS_CODES:0}
+    # 交易号仅为国家口径常用值示例，上线前必须按统筹区规范核对/覆盖。
+    # template 留空使用内置模板（{{field}} 占位符），可按地区覆盖 input 字段。
+    transactions:
+      PRE_SETTLE:
+        infno: ${CHS_INFNO_PRE_SETTLE:2202}
+        path: ${CHS_PATH_PRE_SETTLE:}
+      SETTLE:
+        infno: ${CHS_INFNO_SETTLE:2201}
+        path: ${CHS_PATH_SETTLE:}
 
 management:
   endpoints:

@@ -11355,3 +11355,66 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
   C-MOVE 真实回推需院方 PACS 联调（本批已用内嵌 SCP 验证请求/响应与计数解析）；
 - 未实现 C-GET、C-STORE SCP、DICOM TLS（院方 PACS 启 TLS 时需补证书与 AE 白名单）；
 - C-FIND 只做患者号/姓名掩码，未做 DICOM 标签级脱敏。
+
+## 261. 2026-11-11 国家医保 CHS 2.0 报文适配（第 261 批）
+
+**问题**
+
+- 既有实时结算只发私有报文（platform/bizType/金额），不是国家医保 2.0 信封：
+  换一家统筹区就要改代码，且无法直接对接省局/前置机；
+- 各统筹区的交易号、路径、业务 input 字段、成功码差异大，写死一套等于只支持一个城市；
+- 没有本地联调手段，只能等院方前置机到位后才能验证报文结构。
+
+**本批做了什么**
+
+1. **国家 2.0 信封**（`ChsEnvelopeService`，`insurance.chs` 配置）：
+   固定字段 `infno/msgid/mdtrtarea_admvs/insuplc_admdvs/recer_sys_code/dev_no/
+   dev_safe_info/cainfo/signtype/infver/opter/opter_name/inf_time/fixmedins_code/
+   fixmedins_name/input/sign`；
+2. **可配置交易**：`transactions.PRE_SETTLE/SETTLE` 的 `infno` 与 `path` 可配；
+   `input` 支持 JSON 模板（占位符 `{{field}}`），未配时用内置最小模板
+   （只放本地确实有值的字段，不填地区差异大的"看起来完整"字段）；
+3. **签名可配**：HMAC-SHA256 / MD5 / NONE（NONE 表示由前置机或 CA 签名）；
+   签名对"不含 sign 的信封 JSON"计算，写入信封 `sign` 字段，不再加私有 HTTP 头；
+4. **响应可配**：`ret_code`/`ret_msg`/`output.setl_id`/成功码集合均可配；
+   非成功码落 FAILED 并保留原因，可人工重试；
+5. **服务集成**：`RealtimeSettlementService` 在 `insurance.chs.enabled=true` 时切换
+   报文/端点/签名/响应解析；关闭时与旧私有报文完全一致（升级不改口径）；
+   原有"同一清单一笔 SETTLE、抢占投递、失败重试上限、域名白名单、密钥 fail-closed"全部保留；
+6. **联调脚本**：`scripts/chs_sim.py`（stdlib，仅监听回环），校验信封必填字段与 sign
+   存在性，返回成功/失败回执；README 与 Helm values 记录全部环境变量；
+7. **测试**：`ChsEnvelopeServiceTest`（信封/模板/签名复算/响应）、
+   `RealtimeSettlementChsTest`（本机 HttpServer 真实 HTTP 往返、成功与失败回执）。
+
+**验证**
+
+```
+后端：mvn -pl insurance -am test → 通过（含既有实时结算/导出/分组/目录测试）
+      ChsEnvelopeServiceTest 4 条：信封字段、模板覆盖、NONE 不写 sign、响应成功/失败
+      RealtimeSettlementChsTest 2 条：真实 HTTP 校验 infno/msgid/input/sign；
+           ret_code=0 → SETTLED + setl_id；ret_code=-1 → FAILED + 原因
+真实联调（本机模拟器 127.0.0.1:9099，CHS_ENABLED=true）：
+      admin01 提交清单 7631edb1... → status=SETTLED，externalNo=SIM-00431D5A3AA3
+      模拟器日志：infno=2201 msgid=CHS-LIVE-20261111-1 fixmedins=H0001
+      库内核对：request_payload.infno=2201、msgid 一致、input.psn_no 有值、sign 长度 64
+迁移 lint：scanned=253 new=0 PASS
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **默认关闭**：`CHS_ENABLED=false` 时保持旧报文，避免升级即改结算口径；
+- **交易号只是示例**：默认 2202/2201 必须在联调前按统筹区规范核对，不作为"已符合当地"的依据；
+- **不内置 SM2/SM3**：国密签名通常由前置机/CA 完成（`CHS_SIGN_TYPE=NONE`）；
+  HMAC/MD5 只用于本地与联调，不能替代证书链验证；
+- **input 模板最小化**：不为了"看起来完整"硬填 med_type、诊断、明细等地区差异字段，
+  需要时在配置里补，模板写错会在发送前被 JSON 解析拦住；
+- **不新增台账表**：`realtime_settlement` 已保存原始请求/响应、状态、对端流水与尝试次数，
+  足够回答"当时报了什么、对方回了什么"。
+
+**遗留**
+
+- 省局真实前置机/专网/CA 证书链联调未做（本批只验证报文与服务链路）；
+- 国密 SM2/SM3/SM4 与签名验签由院方前置机负责，本平台未实现；
+- 医保目录/病种/耗材映射沿用既有能力，映射准确率需在接入真实目录后抽样核对；
+- 日结/月结三方对账与差异工单仍是后续批次（W2.5）。

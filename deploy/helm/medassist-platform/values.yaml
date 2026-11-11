@@ -626,6 +626,11 @@ insurance:
     startup: {failureThreshold: 30, periodSeconds: 5}
     liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
     readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 国家医保 CHS 2.0：按统筹区注入，不要在此写明文密钥（用 external Secret）：
+  #   CHS_ENABLED / CHS_BASE_URL / CHS_ALLOWED_HOSTS / CHS_FIXMEDINS_CODE / _NAME
+  #   CHS_MDTRTAREA_ADMVS / CHS_INSUPLC_ADMDVS / CHS_SIGN_TYPE / CHS_SECRET
+  #   CHS_INFNO_SETTLE / CHS_INFNO_PRE_SETTLE / CHS_PATH_SETTLE / CHS_PATH_PRE_SETTLE
+  # 详见 platform/README.md「医保 CHS 2.0 报文适配（§261）」
   env: []
   nodeSelector: {}
   tolerations: []

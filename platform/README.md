@@ -133,6 +133,36 @@ docker compose --profile imaging up -d orthanc
 DIMSE 查询是 **PACS 级**（远端不提供院区维度），因此只授予集成/技师/管理员；
 控制台内的阅片队列与调阅仍按院区收敛。
 
+## 医保 CHS 2.0 报文适配（§261）
+
+默认关闭（`insurance.chs.enabled=false`），关闭时沿用原来的私有实时结算报文，升级不改口径。
+开启后按**国家 2.0 信封**发送，交易号/路径/业务 input 按统筹区配置：
+
+| 配置 | 说明 |
+|---|---|
+| `CHS_BASE_URL` / `CHS_ALLOWED_HOSTS` | 平台地址与域名白名单（为空沿用 `INSURANCE_REALTIME_ALLOWED_HOSTS`，fail-closed） |
+| `CHS_FIXMEDINS_CODE` / `_NAME` | 定点医疗机构编码/名称 |
+| `CHS_MDTRTAREA_ADMVS` / `CHS_INSUPLC_ADMDVS` | 参保地/经办地行政区划 |
+| `CHS_SIGN_TYPE` | `HMAC_SHA256` / `MD5` / `NONE`（NONE 表示由前置机或 CA 签名） |
+| `CHS_SECRET` | HMAC/MD5 密钥（NONE 时可为空） |
+| `CHS_INFNO_PRE_SETTLE` / `CHS_INFNO_SETTLE` | 交易编号（默认 2202/2201，上线前按当地规范核对） |
+| `CHS_PATH_PRE_SETTLE` / `CHS_PATH_SETTLE` | 相对 `base-url` 的路径；为空表示 base-url 即完整端点 |
+| `CHS_RET_CODE_FIELD` / `_RET_MSG_FIELD` / `_SETTLEMENT_ID_PATH` / `_SUCCESS_CODES` | 响应解析口径（默认 `ret_code` / `ret_msg` / `output.setl_id` / `0`） |
+
+`insurance.chs.transactions.*.template` 可覆盖业务 `input`（占位符 `{{field}}`，可用字段见
+`ChsEnvelopeService`）；不配置时使用内置最小模板，只放本地确实有值的字段。
+
+**本地联调**：
+
+```powershell
+python scripts/chs_sim.py --port 9099
+# .env.local：CHS_ENABLED=true、CHS_BASE_URL=http://127.0.0.1:9099、
+#              CHS_ALLOWED_HOSTS=127.0.0.1、CHS_SECRET=chs-secret、
+#              CHS_PATH_SETTLE=/chs/settle
+```
+
+模拟器只检查信封必填字段与 `sign` 是否存在，**不验签**；签名算法与证书链需在院方前置机联调时验证。
+
 ## 构建与运行
 
 ```powershell

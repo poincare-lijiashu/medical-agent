@@ -2,12 +2,14 @@ package com.medassist.insurance.service;
 
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.insurance.config.ChsProperties;
 import com.medassist.insurance.domain.InsuranceModel.RealtimeSettlement;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import com.medassist.insurance.repo.InsuranceRepository;
 import com.medassist.insurance.web.InsuranceDtos.RealtimeSettlementView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
@@ -65,17 +67,31 @@ public class RealtimeSettlementService {
     private final String secret;
     private final Set<String> allowedHosts;
     private final RestClient client;
+    private final ChsProperties chs;
+    private final ChsEnvelopeService chsEnvelope;
 
+    /** 测试/旧调用兼容入口：CHS 关闭，行为与之前完全一致。 */
+    public RealtimeSettlementService(InsuranceRepository repo, ObjectMapper objectMapper,
+                                     String baseUrl, String secret, String allowedHosts,
+                                     int timeoutMs) {
+        this(repo, objectMapper, baseUrl, secret, allowedHosts, timeoutMs,
+                ChsProperties.disabled());
+    }
+
+    @Autowired
     public RealtimeSettlementService(InsuranceRepository repo, ObjectMapper objectMapper,
                                      @Value("${insurance.realtime.base-url:}") String baseUrl,
                                      @Value("${insurance.realtime.secret:}") String secret,
                                      @Value("${insurance.realtime.allowed-hosts:}") String allowedHosts,
-                                     @Value("${insurance.realtime.timeout-ms:3000}") int timeoutMs) {
+                                     @Value("${insurance.realtime.timeout-ms:3000}") int timeoutMs,
+                                     ChsProperties chs) {
         this.repo = repo;
         this.objectMapper = objectMapper;
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.secret = secret == null ? "" : secret.trim();
         this.allowedHosts = parseHosts(allowedHosts);
+        this.chs = chs == null ? ChsProperties.disabled() : chs;
+        this.chsEnvelope = new ChsEnvelopeService(objectMapper);
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(timeoutMs);
         factory.setReadTimeout(timeoutMs);
@@ -101,8 +117,8 @@ public class RealtimeSettlementService {
         if (RealtimeSettlement.SETTLED.equals(settlement.status())) {
             return toView(settlement, false);
         }
-        String endpoint = requireEndpoint();
-        requireSecret();
+        String endpoint = requireEndpoint(normalizedBiz);
+        requireCredentials();
         return toView(deliver(settlement, endpoint, actor), true);
     }
 
@@ -119,8 +135,8 @@ public class RealtimeSettlementService {
             throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
                     "清单已不是已确认状态，不能重试实时结算，当前：" + bill.status());
         }
-        String endpoint = requireEndpoint();
-        requireSecret();
+        String endpoint = requireEndpoint(settlement.bizType());
+        requireCredentials();
         return toView(deliver(settlement, endpoint, actor), false);
     }
 
@@ -180,8 +196,8 @@ public class RealtimeSettlementService {
 
     private RealtimeSettlement createTransaction(SettlementBill bill, String requestId,
                                                  String bizType, String actor) {
-        String endpoint = requireEndpoint();
-        requireSecret();
+        requireEndpoint(bizType);
+        requireCredentials();
         RealtimeSettlement candidate = new RealtimeSettlement(UUID.randomUUID(), bill.id(),
                 bill.visitId(), requestId, bizType, PLATFORM, RealtimeSettlement.PENDING, 0,
                 null, null, buildPayload(bill, requestId, bizType), null, actor,
@@ -238,16 +254,19 @@ public class RealtimeSettlementService {
         String error = null;
         String responsePayload = null;
         try {
-            String signature = sign(current.requestPayload());
-            String response = client.post()
+            RestClient.RequestBodySpec request = client.post()
                     .uri(endpoint)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .header("X-Signature", "sha256=" + signature)
-                    .body(current.requestPayload())
-                    .retrieve()
-                    .body(String.class);
+                    .contentType(MediaType.APPLICATION_JSON);
+            if (isChs()) {
+                // 国家医保 2.0：签名在信封 sign 字段里，不再额外加 HTTP 头
+                request.body(current.requestPayload());
+            } else {
+                request.header("X-Signature", "sha256=" + sign(current.requestPayload()))
+                        .body(current.requestPayload());
+            }
+            String response = request.retrieve().body(String.class);
             responsePayload = truncate(response, MAX_RESPONSE_BYTES);
-            externalNo = validateResponse(response);
+            externalNo = isChs() ? validateChsResponse(response) : validateResponse(response);
             status = RealtimeSettlement.SETTLED;
             log.info("insurance.realtime.settled billId={} requestId={} externalNo={}",
                     current.billId(), current.requestId(), externalNo);
@@ -270,6 +289,9 @@ public class RealtimeSettlementService {
     }
 
     private String buildPayload(SettlementBill bill, String requestId, String bizType) {
+        if (isChs()) {
+            return chsEnvelope.buildPayload(chs, bill, requestId, bizType);
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("platform", PLATFORM);
         body.put("bizType", bizType);
@@ -325,33 +347,88 @@ public class RealtimeSettlementService {
         return externalNo == null || externalNo.isBlank() ? null : externalNo;
     }
 
-    private String requireEndpoint() {
+    private String requireEndpoint(String bizType) {
+        if (isChs()) {
+            String chsBase = chs.baseUrlOrEmpty();
+            if (chsBase.isBlank()) {
+                throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                        "未配置国家医保 CHS 平台地址（insurance.chs.base-url），暂不能提交");
+            }
+            ChsProperties.Transaction transaction = chs.transaction(bizType);
+            if (transaction == null || transaction.infno() == null
+                    || transaction.infno().isBlank()) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "未配置医保 CHS 交易：" + bizType + "（insurance.chs.transactions）");
+            }
+            String endpoint = appendPath(chsBase, transaction.path());
+            return requireAllowedHost(endpoint, chsHosts(), "国家医保 CHS");
+        }
         if (baseUrl.isBlank()) {
             throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
                     "未配置医保实时结算平台地址（insurance.realtime.base-url），暂不能提交");
         }
-        URI uri;
-        try {
-            uri = URI.create(baseUrl);
-        } catch (IllegalArgumentException e) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "医保实时结算平台地址格式不正确");
-        }
-        String host = uri.getHost();
-        if (host == null || host.isBlank()) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "医保实时结算平台地址缺少合法域名");
-        }
-        if (!allowedHosts.contains(host.toLowerCase(Locale.ROOT))) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "医保实时结算平台域名不在允许列表内：" + host);
-        }
-        return baseUrl;
+        return requireAllowedHost(baseUrl, allowedHosts, "医保实时结算");
     }
 
-    private void requireSecret() {
+    private void requireCredentials() {
+        if (isChs()) {
+            if (!"NONE".equals(chs.signTypeOrDefault()) && chs.secretOrEmpty().isBlank()) {
+                throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                        "未配置医保 CHS 签名密钥（insurance.chs.secret 或 CHS_SECRET），暂不能提交");
+            }
+            return;
+        }
         if (secret.isBlank()) {
             throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
                     "未配置医保实时结算密钥（insurance.realtime.secret），暂不能提交");
         }
+    }
+
+    private boolean isChs() {
+        return chs.enabledOrDefault();
+    }
+
+    private Set<String> chsHosts() {
+        Set<String> chsAllowed = chs.allowedHostSet();
+        // 未单独配置时沿用旧的域名白名单，避免升级后必须再配一份
+        return chsAllowed.isEmpty() ? allowedHosts : chsAllowed;
+    }
+
+    private static String appendPath(String base, String path) {
+        String normalizedBase = base.endsWith("/") ? base.substring(0, base.length() - 1) : base;
+        if (path == null || path.isBlank()) {
+            return normalizedBase;
+        }
+        String normalizedPath = path.startsWith("/") ? path : "/" + path;
+        return normalizedBase + normalizedPath;
+    }
+
+    private static String requireAllowedHost(String endpoint, Set<String> hosts, String label) {
+        URI uri;
+        try {
+            uri = URI.create(endpoint);
+        } catch (IllegalArgumentException e) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, label + "平台地址格式不正确");
+        }
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, label + "平台地址缺少合法域名");
+        }
+        if (!hosts.contains(host.toLowerCase(Locale.ROOT))) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    label + "平台域名不在允许列表内：" + host);
+        }
+        return endpoint;
+    }
+
+    private String validateChsResponse(String response) {
+        ChsEnvelopeService.ChsResponse parsed = chsEnvelope.parse(chs, response);
+        if (!parsed.success()) {
+            throw new IllegalStateException("医保 CHS 返回错误 "
+                    + (parsed.retCode().isBlank() ? "（无 ret_code）" : parsed.retCode())
+                    + "：" + (parsed.retMsg().isBlank() ? "未返回原因" : parsed.retMsg()));
+        }
+        return parsed.externalNo();
     }
 
     private static String normalizeBizType(String bizType) {
