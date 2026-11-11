@@ -222,6 +222,21 @@ class TicketServiceTest {
         assertThat(event.getValue().action()).isEqualTo("SLA_RESPONSE_BREACH");
     }
 
+    @Test
+    @DisplayName("已取消：不再显示 SLA 倒计时")
+    void cancelledHasNoSlaCountdown() {
+        Ticket cancelled = ticket(OpsModel.CANCELLED, 3, null,
+                NOW.plusSeconds(1800), null, null, 0, NOW.plusSeconds(3600), 0);
+        when(repo.listTickets(any(), anyInt(), anyInt())).thenReturn(List.of(cancelled));
+
+        List<Ticket> list = service.list(
+                new OpsRepository.TicketFilter(null, null, null, null, null, null), 20, 0);
+
+        assertThat(list).hasSize(1);
+        assertThat(list.get(0).responseState()).isEqualTo("CANCELLED");
+        assertThat(list.get(0).resolveState()).isEqualTo("CANCELLED");
+    }
+
     private void stubTicket(Ticket ticket) {
         when(repo.findTicket(TICKET_ID)).thenReturn(Optional.of(ticket));
     }

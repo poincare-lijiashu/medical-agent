@@ -1,0 +1,345 @@
+import { get, post, put } from './http'
+import type { PageResult } from './types'
+
+/**
+ * 运营支撑 API（§271/§272）。
+ *
+ * 与其它业务模块不同，运营域的身份来自网关注入的 `X-Actor`：
+ * 前端不传 reporter/actor，避免"替别人建单"。
+ */
+export type OpsPriority = 'P1' | 'P2' | 'P3' | 'P4'
+export type TicketStatus =
+  | 'NEW'
+  | 'ASSIGNED'
+  | 'IN_PROGRESS'
+  | 'PENDING'
+  | 'RESOLVED'
+  | 'CLOSED'
+  | 'REOPENED'
+  | 'CANCELLED'
+export type TicketSource = 'PHONE' | 'EMAIL' | 'PORTAL' | 'MONITOR' | 'ONCALL' | 'OTHER'
+export type SlaState = 'ON_TRACK' | 'AT_RISK' | 'BREACHED' | 'PAUSED' | 'MET'
+export type IncidentSeverity = 'SEV1' | 'SEV2' | 'SEV3' | 'SEV4'
+export type IncidentStatus =
+  | 'OPEN'
+  | 'MITIGATING'
+  | 'MONITORING'
+  | 'RESOLVED'
+  | 'CLOSED'
+  | 'REOPENED'
+export type PostmortemStatus = 'DRAFT' | 'REVIEWED' | 'APPROVED'
+
+export interface OpsService {
+  id: string
+  serviceCode: string
+  name: string
+  domain: 'PLATFORM' | 'INFRA' | 'SECURITY' | 'INTEGRATION' | 'OTHER'
+  owner: string | null
+  supportGroup: string
+  description: string | null
+  status: 'ACTIVE' | 'INACTIVE'
+  sortNo: number
+  version: number
+}
+
+export interface OpsCalendar {
+  code: string
+  name: string
+  timezone: string
+  workdays: number[]
+  startTime: string
+  endTime: string
+  holidays: string[]
+  status: string
+  version: number
+}
+
+export interface SlaPolicy {
+  id: string
+  serviceCode: string
+  priority: OpsPriority
+  responseMinutes: number
+  resolveMinutes: number
+  escalationMinutes: number
+  businessHours: boolean
+  calendarCode: string | null
+  status: string
+  version: number
+}
+
+export interface TicketEvent {
+  id: number
+  ticketId: string
+  ts: string
+  actor: string
+  action: string
+  fromStatus: string | null
+  toStatus: string | null
+  note: string | null
+  detail: Record<string, unknown>
+}
+
+export interface Ticket {
+  id: string
+  ticketNo: string
+  title: string
+  description: string | null
+  serviceCode: string
+  priority: OpsPriority
+  reporter: string
+  reporterDept: string | null
+  assignee: string | null
+  assigneeGroup: string | null
+  status: TicketStatus
+  source: TicketSource
+  slaPolicyId: string | null
+  responseDueAt: string | null
+  resolveDueAt: string | null
+  firstResponseAt: string | null
+  resolvedAt: string | null
+  closedAt: string | null
+  reopenedAt: string | null
+  reopenCount: number
+  pendingReason: string | null
+  slaPausedAt: string | null
+  slaPausedTotalMinutes: number
+  satisfaction: number | null
+  resolution: string | null
+  tags: string[]
+  responseBreached: boolean
+  resolveBreached: boolean
+  version: number
+  createdAt: string
+  updatedAt: string
+  events: TicketEvent[]
+  responseState: SlaState
+  resolveState: SlaState
+}
+
+export interface OnCallRotation {
+  id: string
+  groupCode: string
+  name: string
+  timezone: string
+  startDate: string
+  cycleDays: number
+  members: string[]
+  handoverTime: string
+  status: string
+  version: number
+}
+
+export interface OnCallShift {
+  id: string
+  rotationId: string
+  shiftDate: string
+  primaryUser: string
+  secondaryUser: string | null
+  note: string | null
+}
+
+export interface OnCallTodayItem {
+  group_code: string
+  name: string
+  shift_date: string
+  primary_user: string
+  secondary_user: string | null
+}
+
+export interface IncidentEvent {
+  id: number
+  incidentId: string
+  ts: string
+  actor: string
+  action: string
+  fromStatus: string | null
+  toStatus: string | null
+  note: string | null
+  detail: Record<string, unknown>
+}
+
+export interface Incident {
+  id: string
+  incidentNo: string
+  title: string
+  severity: IncidentSeverity
+  status: IncidentStatus
+  commander: string | null
+  detectedAt: string | null
+  startedAt: string
+  resolvedAt: string | null
+  closedAt: string | null
+  affectedServices: string[]
+  ticketId: string | null
+  summary: string | null
+  rootCause: string | null
+  impact: string | null
+  version: number
+  createdAt: string
+  updatedAt: string
+  events: IncidentEvent[]
+}
+
+export interface Postmortem {
+  id: string
+  incidentId: string
+  author: string
+  status: PostmortemStatus
+  timeline: Record<string, unknown>[]
+  rootCause: string | null
+  contributingFactors: string[]
+  correctiveActions: Record<string, unknown>[]
+  approvedBy: string | null
+  approvedAt: string | null
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface OpsDashboard {
+  generatedAt: string
+  byStatus: Record<string, number>
+  openByPriority: Record<string, number>
+  openByService: { service_code: string; name: string; n: number }[]
+  open: number
+  overdueResponse: number
+  overdueResolve: number
+  windowDays: number
+  createdInWindow: number
+  breachedInWindow: number
+  breachRate: number
+  avgFirstResponseMinutes: number
+  avgResolveMinutes: number
+  avgSatisfaction: number
+  openIncidents: number
+  openIncidentsBySeverity: Record<string, number>
+  trend: { day: string; created: number; resolved: number }[]
+}
+
+export interface OpsAuditLog {
+  id: number
+  ts: string
+  actor: string
+  action: string
+  targetRef: string
+  detail: Record<string, unknown>
+  clientIp: string | null
+  traceId: string | null
+}
+
+export interface TicketFilter {
+  status?: string
+  priority?: string
+  serviceCode?: string
+  assignee?: string
+  keyword?: string
+  overdue?: boolean
+  page?: number
+  size?: number
+}
+
+export const opsApi = {
+  dashboard: (trendDays = 14) => get<OpsDashboard>('/ops/dashboard', { trendDays }),
+
+  services: (onlyActive = true) => get<OpsService[]>('/ops/services', { onlyActive }),
+  calendars: () => get<OpsCalendar[]>('/ops/calendars'),
+  policies: (serviceCode?: string) => get<SlaPolicy[]>('/ops/sla/policies', { serviceCode }),
+
+  tickets: (filter: TicketFilter) => get<PageResult<Ticket>>('/ops/tickets', { ...filter }),
+  ticket: (id: string, eventLimit = 100) => get<Ticket>(`/ops/tickets/${id}`, { eventLimit }),
+  createTicket: (body: {
+    title: string
+    description?: string
+    serviceCode: string
+    priority: OpsPriority
+    reporterDept?: string
+    source?: TicketSource
+    tags?: string[]
+  }) => post<Ticket>('/ops/tickets', body),
+  assign: (id: string, body: { assignee: string; assigneeGroup?: string }) =>
+    post<Ticket>(`/ops/tickets/${id}/assign`, body),
+  accept: (id: string) => post<Ticket>(`/ops/tickets/${id}/accept`),
+  progress: (id: string, note: string) => post<Ticket>(`/ops/tickets/${id}/progress`, { note }),
+  comment: (id: string, note: string) => post<Ticket>(`/ops/tickets/${id}/comments`, { note }),
+  pending: (id: string, reason: string) => post<Ticket>(`/ops/tickets/${id}/pending`, { reason }),
+  resume: (id: string, note?: string) => post<Ticket>(`/ops/tickets/${id}/resume`, { note }),
+  resolve: (id: string, resolution: string) =>
+    post<Ticket>(`/ops/tickets/${id}/resolve`, { resolution }),
+  close: (id: string, body: { satisfaction?: number; note?: string }) =>
+    post<Ticket>(`/ops/tickets/${id}/close`, body),
+  reopen: (id: string, reason: string) => post<Ticket>(`/ops/tickets/${id}/reopen`, { reason }),
+  cancel: (id: string, reason: string) => post<Ticket>(`/ops/tickets/${id}/cancel`, { reason }),
+  priority: (id: string, priority: OpsPriority, reason: string) =>
+    post<Ticket>(`/ops/tickets/${id}/priority`, { priority, reason }),
+  scanSla: () => post<Record<string, number>>('/ops/sla/scan'),
+
+  rotations: () => get<OnCallRotation[]>('/ops/oncall/rotations'),
+  createRotation: (body: {
+    groupCode: string
+    name: string
+    timezone?: string
+    startDate: string
+    cycleDays: number
+    members: string[]
+    handoverTime?: string
+  }) => post<OnCallRotation>('/ops/oncall/rotations', body),
+  generateShifts: (id: string, from: string, to: string) =>
+    post<{ rotation: string; from: string; to: string; created: number; existing: number }>(
+      `/ops/oncall/rotations/${id}/generate`,
+      undefined,
+      { query: { from, to } },
+    ),
+  shifts: (id: string, from?: string, to?: string) =>
+    get<OnCallShift[]>(`/ops/oncall/rotations/${id}/shifts`, { from, to }),
+  onCallToday: (groupCode?: string) =>
+    get<{ date: string; items: OnCallTodayItem[] }>('/ops/oncall/today', { groupCode }),
+  overrideShift: (
+    rotationId: string,
+    date: string,
+    body: { primaryUser: string; secondaryUser?: string; reason: string },
+  ) => put<{ ok: boolean }>(`/ops/oncall/shifts/${rotationId}/${date}`, body),
+
+  incidents: (params: { status?: string; severity?: string; page?: number; size?: number }) =>
+    get<PageResult<Incident>>('/ops/incidents', { ...params }),
+  incident: (id: string, eventLimit = 100) =>
+    get<Incident>(`/ops/incidents/${id}`, { eventLimit }),
+  createIncident: (body: {
+    title: string
+    severity: IncidentSeverity
+    commander?: string
+    affectedServices: string[]
+    ticketId?: string
+    summary?: string
+    impact?: string
+  }) => post<Incident>('/ops/incidents', body),
+  incidentStatus: (id: string, status: IncidentStatus, note: string) =>
+    post<Incident>(`/ops/incidents/${id}/status`, { status, note }),
+  incidentCommander: (id: string, commander: string, reason: string) =>
+    post<Incident>(`/ops/incidents/${id}/commander`, { commander, reason }),
+  incidentComment: (id: string, note: string) =>
+    post<Incident>(`/ops/incidents/${id}/comments`, { note }),
+  postmortem: (id: string) => get<Postmortem>(`/ops/incidents/${id}/postmortem`),
+  createPostmortem: (
+    id: string,
+    body: {
+      timeline?: Record<string, unknown>[]
+      rootCause?: string
+      contributingFactors?: string[]
+      correctiveActions?: Record<string, unknown>[]
+    },
+  ) => post<Postmortem>(`/ops/incidents/${id}/postmortem`, body),
+  updatePostmortem: (
+    id: string,
+    body: {
+      timeline?: Record<string, unknown>[]
+      rootCause?: string
+      contributingFactors?: string[]
+      correctiveActions?: Record<string, unknown>[]
+    },
+  ) => put<Postmortem>(`/ops/incidents/${id}/postmortem`, body),
+  submitPostmortem: (id: string) => post<Postmortem>(`/ops/incidents/${id}/postmortem/submit`),
+  approvePostmortem: (id: string, note?: string) =>
+    post<Postmortem>(`/ops/incidents/${id}/postmortem/approve`, { note }),
+
+  audit: (limit = 100) => get<OpsAuditLog[]>('/ops/audit', { limit }),
+}

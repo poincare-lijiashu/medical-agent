@@ -485,6 +485,10 @@ public class TicketService {
     }
 
     private Ticket decorate(Ticket ticket, Map<String, SlaPolicy> index, Instant now) {
+        // 已取消的工单不再参与 SLA 计时：继续显示"剩余 N 小时"会让一线误以为还要处理
+        if (OpsModel.CANCELLED.equals(ticket.status())) {
+            return ticket.withStates("CANCELLED", "CANCELLED");
+        }
         SlaPolicy policy = slaService.policyOf(index, ticket);
         int responseWindow = policy == null ? 0 : policy.responseMinutes();
         int resolveWindow = policy == null ? 0 : policy.resolveMinutes();

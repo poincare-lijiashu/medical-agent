@@ -481,6 +481,26 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:report:subscription:read'],
   },
   {
+    // 第 275 批：运营工作台（SLA 工单 / 值班 / 重大事件与复盘）
+    name: 'ops-console',
+    path: '/ops',
+    title: '运营工作台',
+    hint: 'SLA 工单 · 首响/解决倒计时 · 值班轮换 · 重大事件与复盘',
+    icon: 'inbox',
+    group: '平台运维',
+    permissions: ['ops:read'],
+  },
+  {
+    // 第 275 批：发布管理（版本 / 列车 / 兼容 / 补丁 / 窗口 / 部署）
+    name: 'release-console',
+    path: '/release',
+    title: '发布管理',
+    hint: '组件与不可变版本 · 发布列车 · 兼容矩阵 · 补丁审批 · 冻结窗口 · 部署回滚',
+    icon: 'package',
+    group: '平台运维',
+    permissions: ['release:read'],
+  },
+  {
     name: 'his-workbench',
     path: '/his-workbench',
     title: 'HIS 集成工作台',
@@ -615,6 +635,7 @@ export const NAV_GROUPS = [
   '医保结算',
   '质量与知识',
   '报表与通知',
+  '平台运维',
   '系统管理',
 ]
 

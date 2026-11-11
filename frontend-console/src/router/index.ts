@@ -211,6 +211,18 @@ const router = createRouter({
           component: () => import('@/views/ReportSubscriptionView.vue'),
         },
         {
+          // 第 275 批：运营工作台（SLA 工单 / 值班 / 重大事件与复盘）
+          path: 'ops',
+          name: 'ops-console',
+          component: () => import('@/views/OpsConsoleView.vue'),
+        },
+        {
+          // 第 275 批：发布管理（版本 / 列车 / 兼容 / 补丁 / 窗口 / 部署）
+          path: 'release',
+          name: 'release-console',
+          component: () => import('@/views/ReleaseConsoleView.vue'),
+        },
+        {
           // 第 172 批：HIS 深度整合自检（适配器状态 / 患者与医嘱读取 / 就地审方）
           path: 'his-workbench',
           name: 'his-workbench',

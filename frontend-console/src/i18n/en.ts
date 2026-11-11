@@ -97,6 +97,11 @@ const messages: Record<MessageKey, string> = {
   'nav.group.医保结算': 'Insurance',
   'nav.group.质量与知识': 'Quality & Knowledge',
   'nav.group.报表与通知': 'Reports & Alerts',
+  'nav.group.平台运维': 'Platform Operations',
+  'nav.ops-console.title': 'Operations Console',
+  'nav.ops-console.hint': 'SLA tickets · response/resolve countdown · on-call rotation · incidents & postmortems',
+  'nav.release-console.title': 'Release Management',
+  'nav.release-console.hint': 'Components & immutable versions · release trains · compatibility matrix · patch approval · freeze windows · deploy & rollback',
   'nav.group.系统管理': 'Administration',
 
   /* ---------- Navigation items ---------- */

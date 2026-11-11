@@ -100,6 +100,11 @@ const messages = {
   'nav.group.医保结算': '医保结算',
   'nav.group.质量与知识': '质量与知识',
   'nav.group.报表与通知': '报表与通知',
+  'nav.group.平台运维': '平台运维',
+  'nav.ops-console.title': '运营工作台',
+  'nav.ops-console.hint': 'SLA 工单 · 首响/解决倒计时 · 值班轮换 · 重大事件与复盘',
+  'nav.release-console.title': '发布管理',
+  'nav.release-console.hint': '组件与不可变版本 · 发布列车 · 兼容矩阵 · 补丁审批 · 冻结窗口 · 部署回滚',
   'nav.group.系统管理': '系统管理',
 
   /* ---------- 导航条目 ---------- */
