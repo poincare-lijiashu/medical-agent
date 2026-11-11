@@ -11042,6 +11042,77 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 事项正文不支持结构化分类（管路/用药/费用/家属沟通等）；
 - 移动护理端尚未接入交班与事项闭环。
 
+## 257. 2026-11-11 集成消息台账与 HL7 MLLP 投递（第 257 批）
+
+**问题**
+
+- 院内集成（HIS/LIS/PACS/EMR/医保/CA）真正的风险不是"接口写不出来"，而是
+  "网络抖一下、对端重启一次，数据就悄悄丢了"；此前 EMR 归档、AI 质控等 client
+  失败只打日志，事后无法回答"哪条没发出去、重试了几次、错在哪、回执号是多少"；
+- 业务代码直接调外部接口会把用户操作绑在对端可用性上（对端一慢，挂号/出院就卡）；
+- 没有台账就无法对账，也无法安全地人工补发（不知道是否已经发过）。
+
+**本批做了什么**
+
+1. **V67 台账表**：`clinical_svc.integration_message`（system_code / message_type /
+   business_key / payload / status / attempts / next_retry_at / last_error / external_id），
+   三个索引支撑到期扫描、业务号对账、按系统查看。
+2. **状态机**：`PENDING → SENDING → ACKED`，失败 `FAILED` 指数退避重试
+   （30s 起、上限 30 分钟），超过 8 次进入 `DEAD`；人工重投只允许 FAILED/DEAD，
+   **ACKED 禁止重发**（避免重复记账/重复签名）。
+3. **多实例安全**：`FOR UPDATE SKIP LOCKED` 认领；`SENDING` 超过 3 分钟未回执视为
+   发送进程已死，可被重新认领（自愈）；认领事务与网络发送分离，不长时间持锁。
+4. **HL7 v2 MLLP 发送器**：标准 `0x0B … 0x1C 0x0D` 帧、Socket 超时、
+   校验 `MSA|AA/CA`（拒绝则抛错进入重试）、取 MSA-3 作为回执号落库；
+   未配置对端地址时明确失败，不伪造成功。
+5. **API 与权限**：`GET /clinical/integration/messages`、`/summary`、
+   `POST /messages`、`POST /messages/{id}/retry`；auth V80 新增
+   `integration:message:read|retry` 与 `INTEGRATION`（集成运维）角色。
+6. **配置**：`medassist.integration.systems.<CODE>.host/port/timeout-ms` 与
+   `max-attempts/base-backoff-seconds/max-backoff-seconds`，可按 HIS/LIS/PACS 分别配置。
+
+**验证**
+
+```
+真实库：事务内执行 V67 DDL + 3 条消息，验证到期认领（未到期/DEAD 不被认领）、
+        SENDING→ACKED 的版本 CAS、失败退避写入、DEAD、DEAD→PENDING 人工重投、
+        按状态/系统汇总与列表过滤；全部 ROLLBACK
+后端：mvn -pl clinical -am compile → 通过
+      IntegrationMessageServiceTest（6 条：登记规范化与审计 / 空报文 422 /
+           重投状态机 / 汇总合并 SENDING / 发送成功 / 退避与 DEAD 审计）
+      Hl7MllpSenderTest（3 条：真实 socket 帧与 ACK 回执号 / MSA|AE 拒绝 / 未配置明确失败）
+      IntegrationControllerPermissionTest（2 条：查看与重投权限分离）
+      mvn -pl clinical -am test（整模块）→ 通过
+迁移安全检查：scanned=247 new=0，PASS
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**参考标准与实现**
+
+- 医保便民服务：GB/T 45938—2025《医疗保障信息平台 便民服务相关技术规范》；
+- 电子签名与时间戳：WS/T 847—2024《医学电子文档数字签名技术标准》，
+  以及《电子病历应用管理规范（试行）》对可靠电子签名与权威时间源的要求；
+- FHIR：HAPI FHIR（Java，R4/R5 模型与客户端/服务端框架）；
+- DICOM/PACS：dcm4che / dcm4chee-arc-light（C-FIND/C-GET/C-MOVE/C-STORE）；
+- 集成引擎参考：Mirth Connect / Eclipse Open Integration Engine（HL7 v2、FHIR、DICOM）。
+
+**取舍**
+
+- **先台账后适配器**：没有可靠的"发没发出去"事实，做再多协议适配也无法对账；
+- **业务只 enqueue，不直连对端**：把对端可用性从用户操作路径上移走；
+- **ACKED 不可重投**：重发同一条结算/签名消息的风险远大于"少发一次"，宁可要求新消息；
+- **未配置就失败**：不静默丢、不假装成功，失败原因直接落 last_error；
+- **暂放在 clinical 模块**：复用现有迁移/权限/审计设施；接口稳定后可平移到独立
+  integration 服务，迁移脚本与 API 契约不需要改。
+
+**遗留**
+
+- 入站消息（HIS/LIS 推送到平台）尚无统一入口与幂等去重；
+- 只有 HL7 MLLP，尚未实现 FHIR REST、DICOM（dcm4che）、医保 CHS 接口与 CA 签名适配；
+- 无集成运维页面（当前用 API 台账），无按业务号自动对账与差异补发；
+- MLLP 未上 TLS、对端证书/白名单与连接池；
+- 未把集成失败接入 Prometheus 指标与告警规则（可复用现有 observability 栈）。
+
 
 
 
