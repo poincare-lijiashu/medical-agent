@@ -276,6 +276,7 @@ const DOC_TYPE_OPTIONS = [
   { value: 'INPATIENT_FINANCE', label: '住院费用汇总单' },
   { value: 'WRISTBAND', label: '住院腕带' },
   { value: 'NURSING_SHEET', label: '护理执行单' },
+  { value: 'DISCHARGE_READINESS', label: '出院预检交接单' },
 ]
 
 const docType = ref('')

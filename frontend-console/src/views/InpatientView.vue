@@ -494,6 +494,14 @@
       <p v-else class="hint">预检加载失败（{{ readinessError || '网络异常' }}），请稍后重试。</p>
       <template #footer>
         <button class="btn" type="button" :disabled="readinessLoading" @click="loadReadiness">重新预检</button>
+        <button
+          class="btn"
+          type="button"
+          :disabled="readinessLoading || printingReadiness"
+          @click="printReadiness"
+        >
+          {{ printingReadiness ? '准备中…' : '打印交接单' }}
+        </button>
         <button class="btn" type="button" @click="readinessOpen = false">关闭</button>
       </template>
     </AppModal>
@@ -608,7 +616,7 @@ import type {
 } from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
-import { ageOf, dateTime, genderLabel, money } from '@/utils/format'
+import { ageOf, dateTime, genderLabel, money, todayIso } from '@/utils/format'
 import { escapeHtml } from '@/utils/html'
 import { printHtml } from '@/utils/print'
 import { recordPrint } from '@/utils/printAudit'
@@ -1152,6 +1160,79 @@ async function loadReadiness() {
 function openDischargeFromReadiness(it: WardDischargeReadiness) {
   readinessOpen.value = false
   openDischarge({ id: it.admissionId, admissionNo: it.admissionNo, patientNo: it.patientNo })
+}
+
+/* ---------- 交接单打印（第 250 批） ---------- */
+const printingReadiness = ref(false)
+
+/**
+ * 打印病区出院预检交接单。
+ *
+ * <p>交接单是“纸上的一次快照”：数据还没加载就先拉一次，但**不重新计算**已展示的结论，
+ * 避免打印出来的数字与屏幕上看到的不是同一时刻。
+ * 单据号按“病区 + 日期”固定，同一天再打即视为补打，走既有补打原因通道。
+ */
+async function printReadiness() {
+  if (printingReadiness.value) return
+  if (!readiness.value) await loadReadiness()
+  const data = readiness.value
+  const ward = currentWard.value
+  if (!data || !ward) {
+    toast.error('预检数据未加载', '请先重新预检再打印')
+    return
+  }
+  printingReadiness.value = true
+  try {
+    const esc = escapeHtml
+    const rows = data.items
+      .map(
+        (it) => `<tr>
+          <td class="mono">${esc(it.bedNo || '未分床')}</td>
+          <td class="mono">${esc(it.patientNo)}</td>
+          <td class="mono">${esc(it.admissionNo)}</td>
+          <td>${it.ready ? '可出院' : `${it.blockerCount} 项阻断`}</td>
+          <td>${it.blockers.length ? it.blockers.map((c) => esc(checkCodeLabel(c))).join('、') : '—'}</td>
+          <td>${it.warnings.length ? it.warnings.map((c) => esc(checkCodeLabel(c))).join('、') : '—'}</td>
+        </tr>`,
+      )
+      .join('')
+    const body = `
+      <h1>病区出院预检交接单</h1>
+      <div class="muted meta">${esc(ward.name)}（${esc(ward.code)}） · ${esc(dateTime(data.checkedAt))}
+        · 在院 ${data.total} 人 / 可出院 ${data.readyCount} 人 / 受阻 ${data.blockedCount} 人</div>
+      <table class="items">
+        <thead><tr><th>床位</th><th>病案号</th><th>住院号</th><th>结论</th><th>阻断项</th><th>建议项</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="6" class="muted">该病区暂无在院患者</td></tr>'}</tbody>
+      </table>
+      <div class="foot">
+        阻断项与出院门禁同口径，必须处理完才能出院；建议项不阻断出院。
+        ${data.emrChecked ? '' : '<br/>病历归档未核查：电子病历未接入或暂不可达。'}
+        <br/>交班护士：__________　接班护士：__________
+      </div>`
+    const ok = printHtml({
+      title: `出院预检 ${ward.name}`,
+      body,
+      css: `
+        .meta { margin-bottom: 14px; }
+        .items { font-size: 12px; margin-top: 8px; }
+        .items th, .items td { padding: 6px 8px; }
+        .mono { font-family: ui-monospace, Menlo, Consolas, monospace; }
+        .foot { margin-top: 16px; font-size: 12px; color: #444; line-height: 1.8; }
+      `,
+    })
+    if (!ok) {
+      toast.error('浏览器拦截了打印窗口', '请允许弹窗后重试')
+      return
+    }
+    recordPrint({
+      docType: 'dischargeReadiness',
+      docNo: `DR-${ward.code}-${todayIso()}`,
+      targetType: 'WARD',
+      targetId: ward.id,
+    })
+  } finally {
+    printingReadiness.value = false
+  }
 }
 
 /* ------------------------------ 批量建床 ------------------------------ */

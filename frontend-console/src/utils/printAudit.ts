@@ -25,6 +25,7 @@ export const PRINT_DOC_TYPES = {
   inpatientFinance: 'INPATIENT_FINANCE',
   wristband: 'WRISTBAND',
   nursingSheet: 'NURSING_SHEET',
+  dischargeReadiness: 'DISCHARGE_READINESS',
 } as const
 
 /** 与留痕页、原因弹窗同一套中文口径（弹窗标题用）。 */
@@ -36,6 +37,7 @@ export const PRINT_DOC_LABELS: Record<(typeof PRINT_DOC_TYPES)[keyof typeof PRIN
   INPATIENT_FINANCE: '住院费用汇总单',
   WRISTBAND: '住院腕带',
   NURSING_SHEET: '护理执行单',
+  DISCHARGE_READINESS: '出院预检交接单',
 }
 
 /** 服务端错误码：补打未登记原因（ErrorCode.PRINT_REASON_REQUIRED）。 */
@@ -78,7 +80,7 @@ export interface PrintAuditInput {
   docType: keyof typeof PRINT_DOC_TYPES
   /** 打印件上的业务号（票据号 / 处方号 / 住院号）。 */
   docNo: string
-  targetType?: 'RECEIPT' | 'CONSENT' | 'PRESCRIPTION' | 'PIVAS' | 'ADMISSION'
+  targetType?: 'RECEIPT' | 'CONSENT' | 'PRESCRIPTION' | 'PIVAS' | 'ADMISSION' | 'WARD'
   targetId?: string
   patientNo?: string
   /** 补打原因；首次打印不传，补打时由通道弹窗补齐。 */
