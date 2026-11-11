@@ -1030,6 +1030,30 @@ public class EmrRepository {
     }
 
     /**
+     * 按就诊统计病历归档情况（出院体检用）。
+     *
+     * <p>只回计数、不取正文：体检每秒都可能被点开，`content::text` 属于大字段，
+     * 为了三个数字把整份病历拉出来没有意义。
+     */
+    public RecordArchiveCounts archiveCounts(UUID visitId) {
+        return jdbc.sql("""
+                        SELECT count(*) AS total,
+                               count(*) FILTER (WHERE status = 'ARCHIVED') AS archived,
+                               count(*) FILTER (WHERE status = 'DRAFT') AS draft
+                          FROM emr_svc.medical_record
+                         WHERE visit_id = ?
+                        """)
+                .param(visitId)
+                .query((rs, i) -> new RecordArchiveCounts(rs.getInt("total"), rs.getInt("archived"),
+                        rs.getInt("draft")))
+                .single();
+    }
+
+    /** 病历归档计数投影（{@code unarchived = total - archived}）。 */
+    public record RecordArchiveCounts(int total, int archived, int draft) {
+    }
+
+    /**
      * 保存草稿（仅 DRAFT；CAS 版本号）。
      *
      * <p>只允许改"首页专有信息"与科室/病区/床位/主治医师的书写修正；

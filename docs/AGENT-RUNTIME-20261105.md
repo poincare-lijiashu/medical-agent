@@ -10402,6 +10402,64 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - 撤销出院/重新入院尚未实现（届时需要恢复长嘱，当前系统不支持撤销出院）；
 - 出院带药仍停在建议项：未提交/未发药不会阻断出院，后续按真实发药流程再定门禁。
 
+## 246. 2026-11-11 病历归档核查接入（第 246 批）
+
+**问题**
+
+- §244 的“病历归档”一直是 `UNKNOWN`：临床核心服务没有 EMR 客户端，
+  界面只能说“本系统没查”，出院时最容易漏的一项仍然没人兜；
+- 直接照抄药房/医技客户端也不行：它们是**必需**依赖（令牌缺失拒绝启动），
+  而病历归档是**可选**只读核查——EMR 没上线不能害临床服务起不来；
+- 内网令牌校验原本只写在首页接口里，再加一个内部接口就会出现第二份比较逻辑。
+
+**本批做了什么**
+
+1. **EMR 侧新增只读内部接口** `GET /internal/records/by-visit/{visitId}/archive-summary`：
+   返回 `total / archived / draft / homepageFound / homepageStatus / homepageArchived`，
+   **只回计数与状态**，不返回病历标题、作者、正文（体检不需要，也不该出域）。
+2. **新增聚合 SQL** `EmrRepository.archiveCounts`：一条 `count(*) FILTER (...)` 出三个数，
+   不取 `content::text` 大字段。
+3. **抽出 `InternalToken`**：`X-Internal-Token` 常量时间比较只有一份实现，
+   首页接口与新的病历接口共用；未配置令牌时一律拒绝（fail-closed）。
+4. **clinical 侧新增可选客户端** `EmrArchiveClient` / `HttpEmrArchiveClient`：
+   令牌未配置 = 未接入（不建连接、不发请求）；超时/4xx/5xx 一律返回 empty 并记 warn，
+   **不把异常抛给出院流程**。
+5. **体检接入真实数据**：拿到摘要后按未归档份数给 PASS/FAIL（严重级别仍为 WARNING），
+   详情带“共 N 份 / M 份未归档 / 草稿 D 份 / 病案首页状态”；EMR 不可达仍显示 UNKNOWN。
+6. **部署补齐**：Helm `deployment-clinical.yaml` 注入 `EMR_INTERNAL_URI`（随 `emr.enabled`），
+   NetworkPolicy 给 emr 入站放行 clinical（缺这段 prod 开策略后只会超时），
+   `deploy/README.md` 调用边表格补一行。
+7. **回归锁**：新增 10 条——emr 接口 4 条（缺令牌/错令牌/正常计数/首页已归档）、
+   客户端 3 条（解析与令牌透传/5xx 降级为空/未配置不发请求）、
+   体检 3 条（未归档仍不阻断、不可达为 UNKNOWN、无病历记录被标出）；
+   另跑既有体检 6 条与 ADT 11 条回归。
+
+**验证**
+
+```
+Java：mvn -pl emr -am -DskipTests compile → 通过
+      mvn -pl clinical -am -DskipTests compile → 通过
+定向：InternalRecordControllerTest 4 passed；HttpEmrArchiveClientTest 3 passed；
+      DischargeCheckServiceTest 9 passed（+3）；InpatientServiceTest 11 passed（回归）；
+      AiAssistClientTest 8 passed（ClinicalProperties 增参后的回归）
+前端：无改动（条目文案由后端下发），沿用 95.72 KB gzip 产物
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- 病历未归档仍是 **WARNING** 不是 BLOCKER：归档通常在出院后由病案室完成，
+  出院门禁也不拦；标成阻断会造成“界面不让走、接口能走”的分裂；
+- 查不到 ≠ 通过：未接入/超时/上游 400 全部落到 `UNKNOWN`，绝不显示“已归档”；
+- 不把 EMR 做成必需依赖：令牌为空直接禁用客户端，临床服务照常启动；
+- 接口只回计数：病历正文属于高敏内容，出院体检没有理由把它带出来。
+
+**遗留**
+
+- 病历归档核查未做缓存：每次打开出院弹窗都会打一次 EMR（2s 超时上限，可接受）；
+- 病案首页与病历分开统计，但“首页未生成”没有升级为单独条目（避免清单继续变长）；
+- 未做“按病区批量出院体检”，护士站仍只能逐个患者点开。
+
 
 
 

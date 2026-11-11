@@ -1,5 +1,6 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.client.EmrArchiveClient;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedication;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -60,10 +62,13 @@ public class DischargeCheckService {
     private static final int ORDER_PREVIEW_LIMIT = 5;
 
     private final ClinicalRepository repo;
+    private final EmrArchiveClient emrClient;
     private final ObjectMapper objectMapper;
 
-    public DischargeCheckService(ClinicalRepository repo, ObjectMapper objectMapper) {
+    public DischargeCheckService(ClinicalRepository repo, EmrArchiveClient emrClient,
+                                 ObjectMapper objectMapper) {
         this.repo = repo;
+        this.emrClient = emrClient;
         this.objectMapper = objectMapper;
     }
 
@@ -80,7 +85,7 @@ public class DischargeCheckService {
         items.add(unbilledDailyOrderItem(admission, today));
         items.add(unstoppedLongOrderItem(admission.visitId()));
         items.add(dischargeMedicationItem(admission.id()));
-        items.add(emrArchiveItem());
+        items.add(emrArchiveItem(admission.visitId()));
 
         int blockers = count(items, SEVERITY_BLOCKER, RESULT_FAIL);
         int warnings = count(items, SEVERITY_WARNING, RESULT_FAIL);
@@ -183,15 +188,57 @@ public class DischargeCheckService {
     }
 
     /**
-     * 病历归档：clinical 未接入 emr，固定返回 UNKNOWN。
+     * 病历归档：读 EMR 内网接口。
      *
-     * <p>为什么不隐藏这一条：出院时最容易漏的就是病历归档，界面至少要让医护知道
-     * "这一项本系统没有替你查"，而不是让它从清单里消失、被默认当作通过。
+     * <p>三种结果必须分清：
+     * <ul>
+     *   <li>拿到了 → 按未归档份数给 PASS/FAIL；</li>
+     *   <li>EMR 未接入或不可达 → UNKNOWN，并写明"未核查"；</li>
+     *   <li>拿不到 ≠ 通过：任何情况下都不把未知当成已归档。</li>
+     * </ul>
+     *
+     * <p>严重级别固定 WARNING：出院门禁不拦病历归档（归档通常在出院后由病案室完成），
+     * 体检若标 BLOCKER 会与真实门禁打架。
      */
-    private DischargeCheckItem emrArchiveItem() {
-        return new DischargeCheckItem(CODE_EMR_ARCHIVE, "EMR", SEVERITY_INFO, RESULT_UNKNOWN,
-                "病历归档", "临床核心服务未接入电子病历，未核查病历与病案首页是否已归档",
-                "请在电子病历系统确认病历已归档", null, null);
+    private DischargeCheckItem emrArchiveItem(UUID visitId) {
+        Optional<EmrArchiveClient.ArchiveSummary> found = emrClient.archiveSummary(visitId);
+        if (found.isEmpty()) {
+            return new DischargeCheckItem(CODE_EMR_ARCHIVE, "EMR", SEVERITY_WARNING, RESULT_UNKNOWN,
+                    "病历归档", "电子病历服务未接入或暂不可达，本次未核查病历与病案首页归档",
+                    "请在电子病历系统确认病历已归档", null, null);
+        }
+        EmrArchiveClient.ArchiveSummary summary = found.get();
+        String homepage = homepageState(summary);
+        if (summary.total() == 0) {
+            return new DischargeCheckItem(CODE_EMR_ARCHIVE, "EMR", SEVERITY_WARNING, RESULT_FAIL,
+                    "病历归档", "EMR 中未检索到本次就诊的病历记录；" + homepage,
+                    "确认本次住院病历是否已书写，并在电子病历系统完成归档", 0, null);
+        }
+        int unarchived = summary.unarchived();
+        if (unarchived > 0) {
+            return new DischargeCheckItem(CODE_EMR_ARCHIVE, "EMR", SEVERITY_WARNING, RESULT_FAIL,
+                    "病历归档",
+                    "共 " + summary.total() + " 份病历，" + unarchived + " 份未归档（草稿 "
+                            + summary.draft() + " 份）；" + homepage,
+                    "在电子病历系统完成签名与归档后再出院", unarchived, null);
+        }
+        return new DischargeCheckItem(CODE_EMR_ARCHIVE, "EMR", SEVERITY_WARNING, RESULT_PASS,
+                "病历归档", "共 " + summary.total() + " 份病历均已归档；" + homepage, null,
+                summary.total(), null);
+    }
+
+    /** 病案首页状态的中文说明（首页与病历分开统计，未生成不等于病历没写）。 */
+    private static String homepageState(EmrArchiveClient.ArchiveSummary summary) {
+        if (!summary.homepageFound()) {
+            return "病案首页未生成";
+        }
+        String status = summary.homepageStatus() == null ? "" : summary.homepageStatus();
+        return "病案首页" + switch (status) {
+            case "DRAFT" -> "为草稿";
+            case "SUBMITTED" -> "已提交未归档";
+            case "ARCHIVED" -> "已归档";
+            default -> "状态 " + status;
+        };
     }
 
     // ---------------------------------------------------------------- 内部

@@ -1,5 +1,7 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.client.EmrArchiveClient;
+import com.medassist.clinical.client.EmrArchiveClient.ArchiveSummary;
 import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.DischargeMedication;
@@ -35,6 +37,7 @@ import static org.mockito.Mockito.when;
 class DischargeCheckServiceTest {
 
     private ClinicalRepository repo;
+    private EmrArchiveClient emrClient;
     private DischargeCheckService service;
 
     private final UUID admissionId = UUID.randomUUID();
@@ -47,25 +50,29 @@ class DischargeCheckServiceTest {
     @BeforeEach
     void setUp() {
         repo = mock(ClinicalRepository.class);
-        service = new DischargeCheckService(repo, JsonMapper.builder().build());
+        emrClient = mock(EmrArchiveClient.class);
+        service = new DischargeCheckService(repo, emrClient, JsonMapper.builder().build());
         when(repo.findAdmission(admissionId)).thenReturn(Optional.of(admission(Admission.IN_HOSPITAL)));
         when(repo.findVisit(visitId)).thenReturn(Optional.of(visit()));
+        // 默认 EMR 可达且全部归档，避免每条用例都被"未核查"干扰
+        when(emrClient.archiveSummary(visitId)).thenReturn(Optional.of(
+                new ArchiveSummary(3, 3, 0, true, "ARCHIVED", true)));
     }
 
     // ---------------------------------------------------------------- 用例
 
     @Test
-    @DisplayName("门禁全部通过：ready=true，七项条目齐全，病历归档显式未核查")
+    @DisplayName("门禁全部通过：ready=true，七项条目齐全，病历归档与 EMR 一致")
     void readyWhenAllGatesPass() {
         DischargeCheckView view = service.check(admissionId, "doctor01");
 
         assertThat(view.ready()).isTrue();
         assertThat(view.blockerCount()).isZero();
         assertThat(view.warningCount()).isZero();
-        assertThat(view.uncheckedCount()).isEqualTo(1);
+        assertThat(view.uncheckedCount()).isZero();
         assertThat(view.items()).hasSize(7);
         assertThat(item(view, DischargeCheckService.CODE_EMR_ARCHIVE).result())
-                .isEqualTo(DischargeCheckService.RESULT_UNKNOWN);
+                .isEqualTo(DischargeCheckService.RESULT_PASS);
         assertThat(view.visitNo()).isEqualTo("V1");
         assertThat(view.status()).isEqualTo(Admission.IN_HOSPITAL);
     }
@@ -137,6 +144,54 @@ class DischargeCheckServiceTest {
         assertThat(med.result()).isEqualTo(DischargeCheckService.RESULT_FAIL);
         assertThat(med.detail()).contains("尚未提交");
         assertThat(med.nextAction()).contains("提交");
+    }
+
+    @Test
+    @DisplayName("病历未归档：计入建议项，不阻断出院（归档通常在出院后由病案室完成）")
+    void unarchivedRecordsAreWarningOnly() {
+        when(emrClient.archiveSummary(visitId)).thenReturn(Optional.of(
+                new ArchiveSummary(5, 3, 2, true, "SUBMITTED", false)));
+
+        DischargeCheckView view = service.check(admissionId, "doctor01");
+
+        assertThat(view.ready()).isTrue();
+        assertThat(view.blockerCount()).isZero();
+        assertThat(view.warningCount()).isEqualTo(1);
+
+        DischargeCheckItem emr = item(view, DischargeCheckService.CODE_EMR_ARCHIVE);
+        assertThat(emr.severity()).isEqualTo(DischargeCheckService.SEVERITY_WARNING);
+        assertThat(emr.result()).isEqualTo(DischargeCheckService.RESULT_FAIL);
+        assertThat(emr.count()).isEqualTo(2);
+        assertThat(emr.detail()).contains("共 5 份").contains("2 份未归档")
+                .contains("草稿 2 份").contains("已提交未归档");
+    }
+
+    @Test
+    @DisplayName("EMR 未接入或不可达：显示未核查，绝不冒充已归档")
+    void emrUnavailableIsUnchecked() {
+        when(emrClient.archiveSummary(visitId)).thenReturn(Optional.empty());
+
+        DischargeCheckView view = service.check(admissionId, "doctor01");
+
+        assertThat(view.ready()).isTrue();
+        assertThat(view.uncheckedCount()).isEqualTo(1);
+        assertThat(item(view, DischargeCheckService.CODE_EMR_ARCHIVE).result())
+                .isEqualTo(DischargeCheckService.RESULT_UNKNOWN);
+        assertThat(item(view, DischargeCheckService.CODE_EMR_ARCHIVE).detail())
+                .contains("未核查");
+    }
+
+    @Test
+    @DisplayName("EMR 中检索不到病历：提示补写/归档，而不是当作通过")
+    void noRecordsIsFlagged() {
+        when(emrClient.archiveSummary(visitId)).thenReturn(Optional.of(
+                new ArchiveSummary(0, 0, 0, false, null, false)));
+
+        DischargeCheckItem emr = item(service.check(admissionId, "doctor01"),
+                DischargeCheckService.CODE_EMR_ARCHIVE);
+
+        assertThat(emr.result()).isEqualTo(DischargeCheckService.RESULT_FAIL);
+        assertThat(emr.detail()).contains("未检索到").contains("病案首页未生成");
     }
 
     @Test

@@ -72,7 +72,7 @@ class AiAssistClientTest {
     }
 
     private static ClinicalProperties props(String baseUrl) {
-        return new ClinicalProperties(null, null, null,
+        return new ClinicalProperties(null, null, null, null,
                 new ClinicalProperties.Ai(baseUrl, Duration.ofSeconds(2)));
     }
 

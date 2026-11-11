@@ -268,6 +268,7 @@ helm template medassist deploy/helm/medassist-platform -n medassist-prod `
 | pharmacy → clinical | `CLINICAL_INTERNAL_URI` | clinical 入站放行 pharmacy | `clinical: [..., pharmacy]` |
 | clinical → pharmacy | `PHARMACY_INTERNAL_URI` | pharmacy 入站放行 clinical | `pharmacy: [pharmacy, clinical]` |
 | clinical → tech | `TECH_INTERNAL_URI` | tech 入站放行 clinical | `tech: [tech, clinical]` |
+| clinical → emr | `EMR_INTERNAL_URI` | emr 入站放行 clinical | `emr: [emr, clinical, insurance]` |
 | insurance → emr | `EMR_INTERNAL_URI` | emr 入站放行 insurance | `emr: [emr, insurance]` |
 
 > 回退地址是 `127.0.0.1:<port>`（本地单机自验用）。**任何新调用边只要漏了上表任一件套，

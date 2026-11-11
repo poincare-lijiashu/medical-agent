@@ -1,7 +1,5 @@
 package com.medassist.emr.web;
 
-import com.medassist.common.api.ErrorCode;
-import com.medassist.common.exception.BusinessException;
 import com.medassist.emr.config.EmrProperties;
 import com.medassist.emr.domain.EmrModel.Homepage;
 import com.medassist.emr.repo.EmrRepository;
@@ -13,8 +11,6 @@ import org.springframework.web.bind.annotation.RestController;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,7 +55,7 @@ public class InternalHomepageController {
     public Map<String, Object> procedures(@PathVariable UUID visitId,
                                           @RequestHeader(value = "X-Internal-Token", required = false)
                                           String provided) {
-        requireToken(provided);
+        InternalToken.require(token, provided);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("visitId", visitId);
         Homepage homepage = repo.findHomepageByVisit(visitId).orElse(null);
@@ -89,17 +85,6 @@ public class InternalHomepageController {
             return codes;
         } catch (JacksonException e) {
             return List.of();
-        }
-    }
-
-    /** 统一泛化文案：不区分"未启用/令牌错误/令牌缺失"。 */
-    private void requireToken(String provided) {
-        if (token.isBlank()) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
-        }
-        if (provided == null || !MessageDigest.isEqual(
-                token.getBytes(StandardCharsets.UTF_8), provided.getBytes(StandardCharsets.UTF_8))) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "内部接口不可用");
         }
     }
 }

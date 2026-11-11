@@ -64,6 +64,12 @@ clinical:
     base-url: ${TECH_INTERNAL_URI:http://127.0.0.1:8085}
     internal-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
     timeout: ${TECH_TIMEOUT:PT3S}
+  # 电子病历内网直连：出院体检核查病历/病案首页归档。
+  # 令牌留空 = 未接入，体检对"病历归档"显示"未核查"；调用超时只降级为未核查，不影响出院。
+  emr:
+    base-url: ${EMR_INTERNAL_URI:http://127.0.0.1:8086}
+    internal-token: ${INTERNAL_API_TOKEN:${CLINICAL_INTERNAL_TOKEN:}}
+    timeout: ${EMR_TIMEOUT:PT2S}
   # Python AI 中台（评测「HIS 深度集成」）：医生在 HIS 界面内直接触发质控/审方。
   # 令牌由医护端 JWT 透传（两端共享同一 HS256 身份源），不在此配置服务账号。
   # 留空 = 未对接：调用返回 503 明确提示，不静默降级成空结果。

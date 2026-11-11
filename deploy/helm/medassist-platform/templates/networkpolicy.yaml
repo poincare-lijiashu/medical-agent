@@ -140,6 +140,13 @@ spec:
           podSelector:
             matchLabels:
               {{- include "medassist.selectorLabels" (dict "root" $ "component" "insurance") | nindent 14 }}
+        # 临床域出院体检核查病历/病案首页归档（/internal/records/by-visit/*/archive-summary）
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $.Release.Namespace }}
+          podSelector:
+            matchLabels:
+              {{- include "medassist.selectorLabels" (dict "root" $ "component" "clinical") | nindent 14 }}
         {{- end }}
         - namespaceSelector:
             {{- toYaml $.Values.networkPolicy.monitoringNamespaceSelector | nindent 12 }}
