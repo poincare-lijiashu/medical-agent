@@ -368,7 +368,23 @@
       <div class="sheet-head">
         <span class="sheet-title">住院床位</span>
         <span class="badge badge--neutral">{{ inpatient.wards }} 个病区</span>
+        <template v-if="dischargeReadiness">
+          <span
+            class="badge"
+            :class="dischargeReadiness.blocked > 0 ? 'badge--danger' : 'badge--ok'"
+          >
+            出院受阻 {{ dischargeReadiness.blocked }} 人
+          </span>
+          <span class="badge badge--neutral">可出院 {{ dischargeReadiness.ready }} 人</span>
+        </template>
         <span class="spacer" />
+        <RouterLink
+          v-if="dischargeReadiness"
+          class="btn btn--sm btn--primary"
+          :to="{ path: '/inpatient', query: { readiness: '1' } }"
+        >
+          出院预检
+        </RouterLink>
         <RouterLink class="btn btn--sm" to="/inpatient">去住院工作台</RouterLink>
       </div>
       <p v-if="sectionError.inpatient" class="section-error">{{ sectionError.inpatient }}</p>
@@ -478,6 +494,7 @@ import { clinicalApi, codingApi, materialApi, pharmacyApi, techApi } from '@/api
 import { errorText } from '@/api/http'
 import type {
   CodingSummary,
+  DischargeReadinessSummary,
   DispenseTrendView,
   InpatientTrendView,
   IssueTrendView,
@@ -487,7 +504,7 @@ import type {
   SnapshotList,
   StockWarning,
 } from '@/api/types'
-import { session } from '@/stores/session'
+import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { money, todayIso } from '@/utils/format'
 
@@ -519,6 +536,8 @@ interface WardRow {
   occupiedBeds: number
 }
 const wardRows = ref<WardRow[]>([])
+/** 第 249 批：出院协调（与出院门禁同口径）；无权限时保持 null，整块不渲染。 */
+const dischargeReadiness = ref<DischargeReadinessSummary | null>(null)
 
 const sectionError = reactive<Record<string, string>>({})
 
@@ -1021,7 +1040,13 @@ async function loadInpatient() {
   try {
     // 第 188 批：一次拿汇总。此前对每个病区各拉 beds + admissions（243 个病区 ≈ 486 个请求），
     // 必然触发网关限流（429），「住院床位」整块降级为空态。
-    const summary = await clinicalApi.wardSummary()
+    // 第 249 批：并行取“出院受阻”汇总（两条计数 SQL），失败只隐藏这一角标，不影响床位表。
+    const [summary, readiness] = await Promise.all([
+      clinicalApi.wardSummary(),
+      hasPermission('inpatient:read')
+        ? clinicalApi.dischargeReadinessSummary().catch(() => null)
+        : Promise.resolve(null),
+    ])
     wardRows.value = summary.map((w) => ({
       id: w.wardId,
       name: w.name,
@@ -1030,8 +1055,10 @@ async function loadInpatient() {
       totalBeds: w.totalBeds,
       occupiedBeds: w.occupiedBeds,
     }))
+    dischargeReadiness.value = readiness
   } catch (e) {
     wardRows.value = []
+    dischargeReadiness.value = null
     sectionError.inpatient = `住院床位加载失败：${errorText(e)}`
   }
 }

@@ -78,7 +78,7 @@ export async function loadTodoItems(): Promise<TodoItem[]> {
     // 第 248 批：出院受阻人数（口径与出院门禁一致）；入口是住院工作台，
     // 点进去后按病区看“出院预检”，不会出现“有角标没入口”。
     jobs.push(
-      tally('dischargeBlocked', t('todo.dischargeBlocked'), '/inpatient', async () => {
+      tally('dischargeBlocked', t('todo.dischargeBlocked'), '/inpatient?readiness=1', async () => {
         const data = await clinicalApi.dischargeReadinessSummary()
         return {
           count: data.blocked ?? 0,

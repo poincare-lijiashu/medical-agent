@@ -582,6 +582,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -613,6 +614,7 @@ import { printHtml } from '@/utils/print'
 import { recordPrint } from '@/utils/printAudit'
 
 const role = computed(() => session.roleLabel.value)
+const route = useRoute()
 const loading = ref(false)
 const busy = ref(false)
 /** 主数据加载失败：非空即错误态，不能退化成"没有患者/床位"。 */
@@ -666,7 +668,6 @@ function patientOfBed(bedId: string) {
 }
 
 /* ------------------------------ 加载 ------------------------------ */
-
 async function loadWards() {
   try {
     wards.value = await clinicalApi.wards()
@@ -722,6 +723,22 @@ async function reloadAll() {
   loadErr.value = ''
   await loadWards()
   if (!loadErr.value) await reloadWard()
+}
+
+/**
+ * 第 249 批：深链 `/inpatient?readiness=1[&ward=<id>]`。
+ *
+ * <p>驾驶舱与全局待办都指向这里：有 ward 就切到该病区，没有就用当前默认病区；
+ * 最终一定落到“病区出院预检”弹窗，避免用户落页后还要自己找入口。
+ */
+function applyReadinessDeepLink() {
+  if (String(route.query.readiness ?? '') !== '1') return
+  const ward = String(route.query.ward ?? '')
+  if (ward && ward !== selectedWardId.value && wards.value.some((w) => w.id === ward)) {
+    selectedWardId.value = ward
+    void reloadWard()
+  }
+  if (selectedWardId.value) openReadiness()
 }
 
 /* ------------------------------ 入院登记 ------------------------------ */
@@ -1190,6 +1207,7 @@ onMounted(async () => {
     /* 科室名失败不影响住院主流程 */
   }
   await reloadAll()
+  applyReadinessDeepLink()
 })
 </script>
 
