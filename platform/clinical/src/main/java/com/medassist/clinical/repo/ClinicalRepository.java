@@ -1009,7 +1009,12 @@ public class ClinicalRepository {
         return out;
     }
 
-    /** 病区范围内在院/待入科患者数（出院预检角标的分母）。 */
+    /**
+     * 病区范围内在院患者数（出院预检角标的分母）。
+     *
+     * <p>只算 `IN_HOSPITAL`：登记未入科（ADMITTED）还没有床位与医嘱，
+     * 把他们算进“出院受阻”会让人以为要去处理一件不存在的事。
+     */
     public int countActiveAdmissionsByWards(Collection<UUID> wardIds) {
         if (wardIds.isEmpty()) {
             return 0;
@@ -1017,7 +1022,7 @@ public class ClinicalRepository {
         Long n = jdbc.sql("""
                         SELECT count(*) FROM clinical_svc.admission
                          WHERE ward_id = ANY(CAST(:wardIds AS uuid[]))
-                           AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                           AND status = 'IN_HOSPITAL'
                         """)
                 .param("wardIds", wardIds.toArray(UUID[]::new))
                 .query(Long.class).single();
@@ -1025,7 +1030,10 @@ public class ClinicalRepository {
     }
 
     /**
-     * 病区范围内"出院受阻"患者数：与单患者体检的四个阻断项**同口径**，一条 SQL。
+     * 病区范围内"出院受阻"在院患者数：与单患者体检的三个**账单/医嘱**阻断项同口径。
+     *
+     * <p>刻意不含 `ADMISSION_STATUS`：角标的语义是“在院的人为什么走不了”，
+     * 未入科患者不属于此列（病区预检列表仍会显示他们，并标出状态异常）。
      *
      * <p>用 UNION 而不是 OR：每个条件各自走索引，逻辑上也不会把同一个人重复计数。
      * 长嘱计费按"入院日（按业务时区）至今天"逐日展开，与出院门禁的
@@ -1039,26 +1047,21 @@ public class ClinicalRepository {
                         SELECT count(*) FROM (
                             SELECT a.id FROM clinical_svc.admission a
                              WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
-                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
-                               AND a.status <> 'IN_HOSPITAL'
-                            UNION
-                            SELECT a.id FROM clinical_svc.admission a
-                             WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
-                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND a.status = 'IN_HOSPITAL'
                                AND EXISTS (SELECT 1 FROM clinical_svc.charge c
                                             WHERE c.visit_id = a.visit_id AND c.status = 'UNPAID'
                                               AND c.total_amount > 0)
                             UNION
                             SELECT a.id FROM clinical_svc.admission a
                              WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
-                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND a.status = 'IN_HOSPITAL'
                                AND EXISTS (SELECT 1 FROM clinical_svc.visit_order o
                                             WHERE o.visit_id = a.visit_id AND o.status = 'PLACED'
                                               AND o.order_mode = 'TEMP')
                             UNION
                             SELECT a.id FROM clinical_svc.admission a
                              WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
-                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND a.status = 'IN_HOSPITAL'
                                AND EXISTS (
                                      SELECT 1
                                        FROM clinical_svc.visit_order o

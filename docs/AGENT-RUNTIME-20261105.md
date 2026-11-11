@@ -10530,9 +10530,11 @@ Java：mvn -pl emr -am -DskipTests compile → 通过
 1. **汇总端点** `GET /clinical/inpatient/discharge-readiness/summary`：
    范围 = 当前账号可见病区（院区/科室下推，与病区列表同口径），
    返回 `wardCount / total / blocked / ready`。
-2. **一条 SQL 数阻断**：四个阻断项用 `UNION` 合并计数（不是 `OR`），
+2. **一条 SQL 数阻断**：三个账单/医嘱阻断项用 `UNION` 合并计数（不是 `OR`），
    每个条件各走索引、同一个人不会被重复计数；
-   长嘱计费按“入院日（业务时区）至今天”逐日展开，与出院门禁逐字同口径。
+   长嘱计费按“入院日（业务时区）至今天”逐日展开，与出院门禁逐字同口径；
+   **刻意不含“状态异常”**：角标语是“在院的人为什么走不了”，登记未入科不属于此列
+   （病区预检列表仍会显示他们并标出状态异常）。
 3. **角标只算阻断项**：建议项（未停长嘱/带药/病历）不进待办——
    待办是“必须处理才能推进”的清单，什么都往里塞等于没有优先级。
 4. **权限前置**：前端按 `inpatient:read` 决定是否请求；没有该权限的角色连这条待办都不出现，
@@ -10549,6 +10551,8 @@ Java：mvn -pl emr -am -DskipTests compile → 通过
 ```
 Java：mvn -pl clinical -am -DskipTests compile → 通过
 定向：WardDischargeCheckServiceTest 7 passed（+2）；InpatientControllerPermissionTest 15 passed（+1）
+真实库：在本地 PG（153 条登记 / 115 在院）执行汇总 SQL → 在院 115、受阻 31；
+        分项未结费用 13、临时医嘱 9、长嘱未计费 24（含重叠），lateral 逐日展开无报错
 前端：npm run typecheck → 通过；npm run build → 通过
       （入口 95.81 KB gzip / 预算 110；住院页 11.10 KB）
 全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
@@ -10557,6 +10561,8 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 **取舍**
 
 - 汇总不缓存：两次计数查询（一条在院数、一条阻断数），比缓存失效逻辑更可靠；
+- 角标只算 `IN_HOSPITAL`：真实库里 153 条登记里有 38 条是“登记未入科”，
+  把他们算成“出院受阻”会让人去处理一件不存在的事（本批用真实数据发现并改掉）；
 - 不把“EMR 未核查”放进角标：那是“我们没查”，不是“患者不能出院”，
   混进待办会让人误以为要去处理病历；
 - 角标只对本人的可见病区计数：跨院区汇总会给一个“看得见数字、点进去只有一半”的错觉。

@@ -348,8 +348,8 @@ public final class ClinicalDtos {
      * 出院预检汇总（全局待办角标 / 驾驶舱用）。
      *
      * @param wardCount 当前账号可见病区数
-     * @param total     在院 + 待入科患者数
-     * @param blocked   出院受阻人数（与单患者体检的四个阻断项同口径）
+     * @param total     在院患者数（只算 IN_HOSPITAL，不含登记未入科）
+     * @param blocked   出院受阻人数（账单/医嘱三类阻断；不含“状态异常”）
      * @param ready     可出院人数（total − blocked）
      */
     public record DischargeReadinessSummary(int wardCount, int total, int blocked, int ready) {
