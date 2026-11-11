@@ -1009,6 +1009,90 @@ public class ClinicalRepository {
         return out;
     }
 
+    /** 病区范围内在院/待入科患者数（出院预检角标的分母）。 */
+    public int countActiveAdmissionsByWards(Collection<UUID> wardIds) {
+        if (wardIds.isEmpty()) {
+            return 0;
+        }
+        Long n = jdbc.sql("""
+                        SELECT count(*) FROM clinical_svc.admission
+                         WHERE ward_id = ANY(CAST(:wardIds AS uuid[]))
+                           AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """)
+                .param("wardIds", wardIds.toArray(UUID[]::new))
+                .query(Long.class).single();
+        return n == null ? 0 : n.intValue();
+    }
+
+    /**
+     * 病区范围内"出院受阻"患者数：与单患者体检的四个阻断项**同口径**，一条 SQL。
+     *
+     * <p>用 UNION 而不是 OR：每个条件各自走索引，逻辑上也不会把同一个人重复计数。
+     * 长嘱计费按"入院日（按业务时区）至今天"逐日展开，与出院门禁的
+     * {@link #countUnbilledDailyOrders(UUID, LocalDate, LocalDate)} 完全一致。
+     */
+    public int countDischargeBlockedByWards(Collection<UUID> wardIds, LocalDate today, String zone) {
+        if (wardIds.isEmpty()) {
+            return 0;
+        }
+        Long n = jdbc.sql("""
+                        SELECT count(*) FROM (
+                            SELECT a.id FROM clinical_svc.admission a
+                             WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
+                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND a.status <> 'IN_HOSPITAL'
+                            UNION
+                            SELECT a.id FROM clinical_svc.admission a
+                             WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
+                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND EXISTS (SELECT 1 FROM clinical_svc.charge c
+                                            WHERE c.visit_id = a.visit_id AND c.status = 'UNPAID'
+                                              AND c.total_amount > 0)
+                            UNION
+                            SELECT a.id FROM clinical_svc.admission a
+                             WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
+                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND EXISTS (SELECT 1 FROM clinical_svc.visit_order o
+                                            WHERE o.visit_id = a.visit_id AND o.status = 'PLACED'
+                                              AND o.order_mode = 'TEMP')
+                            UNION
+                            SELECT a.id FROM clinical_svc.admission a
+                             WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
+                               AND a.status IN ('ADMITTED', 'IN_HOSPITAL')
+                               AND EXISTS (
+                                     SELECT 1
+                                       FROM clinical_svc.visit_order o
+                                       JOIN LATERAL generate_series(
+                                              LEAST(COALESCE(
+                                                        (a.admitted_at AT TIME ZONE CAST(:zone AS text))::date,
+                                                        CAST(:today AS date)),
+                                                    CAST(:today AS date)),
+                                              CAST(:today AS date), interval '1 day') AS d(day) ON TRUE
+                                      WHERE o.visit_id = a.visit_id
+                                        AND o.order_mode = 'LONG' AND o.status = 'PLACED'
+                                        AND o.start_date <= d.day::date
+                                        AND (o.stop_date IS NULL OR o.stop_date >= d.day::date)
+                                        AND NOT EXISTS (
+                                              SELECT 1 FROM clinical_svc.charge_item ci
+                                                JOIN clinical_svc.charge c ON c.id = ci.charge_id
+                                               WHERE c.visit_id = o.visit_id
+                                                 AND ci.source_key = 'DAILY:' || o.id::text
+                                                     || ':' || d.day::date::text)
+                                        AND NOT EXISTS (
+                                              SELECT 1 FROM clinical_svc.nursing_execution ne
+                                                LEFT JOIN clinical_svc.nursing_execution_correction nc
+                                                       ON nc.execution_id = ne.id
+                                               WHERE ne.order_id = o.id AND ne.exec_date = d.day::date
+                                                 AND coalesce(nc.to_status, ne.status) <> 'EXECUTED')
+                                   )
+                        ) blocked
+                        """)
+                .param("wardIds", wardIds.toArray(UUID[]::new))
+                .param("today", today).param("zone", zone)
+                .query(Long.class).single();
+        return n == null ? 0 : n.intValue();
+    }
+
     /** 某医嘱某日是否已按日计费（护理补记非 EXECUTED 前必须确认未收费）。 */
     public boolean existsDailyCharge(UUID orderId, LocalDate date) {
         Long n = jdbc.sql("SELECT count(*) FROM clinical_svc.charge_item WHERE source_key = ?")

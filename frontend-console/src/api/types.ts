@@ -471,6 +471,14 @@ export interface WardDischargeReadinessView {
   items: WardDischargeReadiness[]
 }
 
+/** 出院预检汇总（待办角标）：口径与出院门禁一致。 */
+export interface DischargeReadinessSummary {
+  wardCount: number
+  total: number
+  blocked: number
+  ready: number
+}
+
 /** 护理执行记录（长嘱逐日执行，追加式）。 */
 export interface NursingExecutionView {
   id: string

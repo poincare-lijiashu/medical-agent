@@ -161,6 +161,34 @@ class WardDischargeCheckServiceTest {
         verify(emrClient, times(0)).batchArchiveSummary(any());
     }
 
+    @Test
+    @DisplayName("汇总：可出院 = 在院 − 受阻；口径与体检一致（一条阻断 SQL）")
+    void summaryCountsBlockedInOneQuery() {
+        when(repo.countActiveAdmissionsByWards(any())).thenReturn(10);
+        when(repo.countDischargeBlockedByWards(any(), any(), any())).thenReturn(3);
+
+        var summary = service.summary(List.of(wardId, UUID.randomUUID()));
+
+        assertThat(summary.wardCount()).isEqualTo(2);
+        assertThat(summary.total()).isEqualTo(10);
+        assertThat(summary.blocked()).isEqualTo(3);
+        assertThat(summary.ready()).isEqualTo(7);
+        verify(repo, times(1)).countDischargeBlockedByWards(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("汇总：没有在院患者时不再查阻断项；没有可见病区直接回 0")
+    void summaryShortCircuits() {
+        when(repo.countActiveAdmissionsByWards(any())).thenReturn(0);
+        var empty = service.summary(List.of(wardId));
+        assertThat(empty.total()).isZero();
+        verify(repo, times(0)).countDischargeBlockedByWards(any(), any(), any());
+
+        var noWard = service.summary(List.of());
+        assertThat(noWard.wardCount()).isZero();
+        verify(repo, times(1)).countActiveAdmissionsByWards(any());
+    }
+
     // ---------------------------------------------------------------- 构造
 
     private WardDischargeReadiness item(WardDischargeReadinessView view, UUID admissionId) {

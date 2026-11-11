@@ -344,6 +344,17 @@ public final class ClinicalDtos {
             List<String> blockers, List<String> warnings) {
     }
 
+    /**
+     * 出院预检汇总（全局待办角标 / 驾驶舱用）。
+     *
+     * @param wardCount 当前账号可见病区数
+     * @param total     在院 + 待入科患者数
+     * @param blocked   出院受阻人数（与单患者体检的四个阻断项同口径）
+     * @param ready     可出院人数（total − blocked）
+     */
+    public record DischargeReadinessSummary(int wardCount, int total, int blocked, int ready) {
+    }
+
     // ---------------------------------------------------------------- 护理执行记录
 
     /** 护理执行记录提交（execDate 缺省为当天）。 */

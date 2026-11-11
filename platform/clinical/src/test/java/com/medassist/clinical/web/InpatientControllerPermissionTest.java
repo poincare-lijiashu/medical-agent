@@ -193,6 +193,22 @@ class InpatientControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("出院预检汇总：缺读权限 403；有权限时按可见病区统计")
+    void readinessSummaryUsesVisibleWards() {
+        assertThatThrownBy(() -> controller.dischargeReadinessSummary(null, scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+
+        when(service.listWards(any(), any())).thenReturn(List.of(
+                new com.medassist.clinical.domain.ClinicalModel.Ward(wardId, "W01", "内科一病区",
+                        UUID.randomUUID(), true)));
+        controller.dischargeReadinessSummary("inpatient:read", scope);
+
+        verify(wardCheckService).summary(List.of(wardId));
+    }
+
+    @Test
     @DisplayName("权限头为空：提示重新登录（403，不误报 401）")
     void emptyPermissionsHeaderIsForbidden() {
         assertThatThrownBy(() -> controller.finance(admissionId, null, "clerk01", scope))

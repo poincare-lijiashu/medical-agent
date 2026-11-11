@@ -5,6 +5,7 @@ import com.medassist.clinical.domain.ClinicalModel.Admission;
 import com.medassist.clinical.domain.ClinicalModel.Bed;
 import com.medassist.clinical.domain.ClinicalModel.Ward;
 import com.medassist.clinical.repo.ClinicalRepository;
+import com.medassist.clinical.web.ClinicalDtos.DischargeReadinessSummary;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadiness;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadinessView;
 import com.medassist.common.api.ErrorCode;
@@ -17,6 +18,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -119,6 +121,27 @@ public class WardDischargeCheckService {
         audit(actor, wardId, items.size(), items.size() - ready, emrChecked);
         return new WardDischargeReadinessView(wardId, ward.name(), Instant.now(),
                 items.size(), ready, items.size() - ready, emrChecked, List.copyOf(items));
+    }
+
+    // ---------------------------------------------------------------- 汇总
+
+    /**
+     * 可见病区范围的出院预检汇总（全局待办角标 / 驾驶舱）。
+     *
+     * <p>只回计数、**不写审计**：角标是周期性刷新，每次都记一条会把审计刷成噪音；
+     * 详情页（{@link #check}）仍保留“谁看了哪个病区”的留痕。
+     */
+    public DischargeReadinessSummary summary(Collection<UUID> wardIds) {
+        if (wardIds == null || wardIds.isEmpty()) {
+            return new DischargeReadinessSummary(0, 0, 0, 0);
+        }
+        int total = repo.countActiveAdmissionsByWards(wardIds);
+        if (total == 0) {
+            return new DischargeReadinessSummary(wardIds.size(), 0, 0, 0);
+        }
+        int blocked = repo.countDischargeBlockedByWards(wardIds, BusinessTime.today(),
+                BusinessTime.zone().getId());
+        return new DischargeReadinessSummary(wardIds.size(), total, blocked, total - blocked);
     }
 
     // ---------------------------------------------------------------- 内部

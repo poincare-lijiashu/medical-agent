@@ -17,6 +17,7 @@ import com.medassist.clinical.web.ClinicalDtos.CreateWardReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositReq;
 import com.medassist.clinical.web.ClinicalDtos.DepositView;
 import com.medassist.clinical.web.ClinicalDtos.DischargeCheckView;
+import com.medassist.clinical.web.ClinicalDtos.DischargeReadinessSummary;
 import com.medassist.clinical.web.ClinicalDtos.InpatientAlert;
 import com.medassist.clinical.web.ClinicalDtos.InpatientFinanceView;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
@@ -201,6 +202,24 @@ public class InpatientController {
         Permissions.require(permissions, BED_ASSIGN);
         guard.requireAdmission(scope, id);
         return ApiResponse.ok(PhiMask.admission(service.assignBed(id, req, actor), scope));
+    }
+
+    /**
+     * 出院预检汇总（全局待办角标 / 驾驶舱）。
+     *
+     * <p>统计范围 = 当前账号可见病区，口径与 {@link #wardDischargeReadiness} 一致；
+     * 只回计数、不写审计（角标会周期性刷新）。
+     */
+    @GetMapping("/inpatient/discharge-readiness/summary")
+    public ApiResponse<DischargeReadinessSummary> dischargeReadinessSummary(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        List<UUID> wardIds = service.listWards(scope.campusFilter(),
+                        scope.allDepartments() ? null : scope.deptCodes()).stream()
+                .map(Ward::id)
+                .toList();
+        return ApiResponse.ok(wardCheckService.summary(wardIds));
     }
 
     /**

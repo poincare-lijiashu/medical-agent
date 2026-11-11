@@ -19,6 +19,7 @@ import type {
   DischargeCheckView,
   DischargeMedication,
   DischargeMedicationView,
+  DischargeReadinessSummary,
   DispenseView,
   EmergencyBed,
   EmergencyBoard,
@@ -385,6 +386,8 @@ export const clinicalApi = {
     get<DischargeCheckView>(`/clinical/inpatient/admissions/${admissionId}/discharge-check`),
   wardDischargeReadiness: (wardId: string) =>
     get<WardDischargeReadinessView>(`/clinical/wards/${wardId}/discharge-readiness`),
+  dischargeReadinessSummary: () =>
+    get<DischargeReadinessSummary>('/clinical/inpatient/discharge-readiness/summary'),
   deposits: (admissionId: string) =>
     get<DepositView>(`/clinical/inpatient/admissions/${admissionId}/deposits`),
   payDeposit: (admissionId: string, amount: number, method: string, remark?: string) =>
