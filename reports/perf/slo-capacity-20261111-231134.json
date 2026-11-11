@@ -1,0 +1,267 @@
+﻿{
+    "generatedAt":  "2026-11-11T23:11:34.7279474+08:00",
+    "commit":  "25942f33a925301f924eba36225ed867da665f49",
+    "scenario":  "mixed",
+    "baseUrl":  "http://127.0.0.1:8080",
+    "stages":  [
+                   {
+                       "concurrency":  2,
+                       "total":  632,
+                       "rps":  63.2,
+                       "p50":  3.9612000000000003,
+                       "p95":  10.3468,
+                       "p99":  20.9482,
+                       "errors":  0,
+                       "errorRate":  0,
+                       "throttled":  0,
+                       "throttleRate":  0,
+                       "pass":  true,
+                       "pathSummary":  [
+                                           {
+                                               "path":  "/api/v2/audit/events?page=1\u0026size=20",
+                                               "total":  12,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  29.3384
+                                           },
+                                           {
+                                               "path":  "/api/v2/tech/applications/summary",
+                                               "total":  90,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  5.4268
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/departments",
+                                               "total":  149,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.1560000000000006
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/nursing/indicator-board?deptId=33333333-3333-3333-3333-333333333333",
+                                               "total":  9,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  13.261600000000001
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/transfusion/board",
+                                               "total":  90,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  3.8734
+                                           },
+                                           {
+                                               "path":  "/api/v2/emr/ca/board",
+                                               "total":  90,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.5462
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/reports/ops-insights",
+                                               "total":  12,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  10.3468
+                                           },
+                                           {
+                                               "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  9.3507
+                                           }
+                                       ]
+                   },
+                   {
+                       "concurrency":  4,
+                       "total":  1253,
+                       "rps":  125.3,
+                       "p50":  3.7785,
+                       "p95":  10.9463,
+                       "p99":  22.2213,
+                       "errors":  0,
+                       "errorRate":  0,
+                       "throttled":  0,
+                       "throttleRate":  0,
+                       "pass":  true,
+                       "pathSummary":  [
+                                           {
+                                               "path":  "/api/v2/audit/events?page=1\u0026size=20",
+                                               "total":  19,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  28.1281
+                                           },
+                                           {
+                                               "path":  "/api/v2/tech/applications/summary",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.9733
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/departments",
+                                               "total":  294,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  3.6878
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/nursing/indicator-board?deptId=33333333-3333-3333-3333-333333333333",
+                                               "total":  16,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  13.412700000000001
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/transfusion/board",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  3.8791
+                                           },
+                                           {
+                                               "path":  "/api/v2/emr/ca/board",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.5368
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/reports/ops-insights",
+                                               "total":  24,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  9.8047
+                                           },
+                                           {
+                                               "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  11.6114
+                                           }
+                                       ]
+                   },
+                   {
+                       "concurrency":  8,
+                       "total":  2526,
+                       "rps":  252.6,
+                       "p50":  3.7025,
+                       "p95":  10.2995,
+                       "p99":  21.8323,
+                       "errors":  0,
+                       "errorRate":  0,
+                       "throttled":  47,
+                       "throttleRate":  0.018606492478226443,
+                       "pass":  false,
+                       "pathSummary":  [
+                                           {
+                                               "path":  "/api/v2/audit/events?page=1\u0026size=20",
+                                               "total":  48,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  24.8334
+                                           },
+                                           {
+                                               "path":  "/api/v2/tech/applications/summary",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  5.564
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/departments",
+                                               "total":  586,
+                                               "errors":  0,
+                                               "throttled":  15,
+                                               "p95":  3.8706
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/nursing/indicator-board?deptId=33333333-3333-3333-3333-333333333333",
+                                               "total":  44,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  13.849200000000002
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/transfusion/board",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  3.9063000000000003
+                                           },
+                                           {
+                                               "path":  "/api/v2/emr/ca/board",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.2071000000000005
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/reports/ops-insights",
+                                               "total":  48,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  10.1143
+                                           },
+                                           {
+                                               "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                                               "total":  720,
+                                               "errors":  0,
+                                               "throttled":  32,
+                                               "p95":  10.4609
+                                           }
+                                       ]
+                   }
+               ],
+    "safeRps":  125.3,
+    "coldStart":  [
+                      {
+                          "path":  "/api/v2/clinical/departments",
+                          "code":  200,
+                          "coldMs":  19.053900000000002
+                      },
+                      {
+                          "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                          "code":  200,
+                          "coldMs":  8.6853
+                      },
+                      {
+                          "path":  "/api/v2/clinical/transfusion/board",
+                          "code":  200,
+                          "coldMs":  3.5564
+                      },
+                      {
+                          "path":  "/api/v2/tech/applications/summary",
+                          "code":  200,
+                          "coldMs":  5.4365000000000006
+                      },
+                      {
+                          "path":  "/api/v2/emr/ca/board",
+                          "code":  200,
+                          "coldMs":  3.0889
+                      },
+                      {
+                          "path":  "/api/v2/clinical/reports/ops-insights",
+                          "code":  200,
+                          "coldMs":  8.9214
+                      },
+                      {
+                          "path":  "/api/v2/audit/events?page=1\u0026size=20",
+                          "code":  200,
+                          "coldMs":  22.974
+                      },
+                      {
+                          "path":  "/api/v2/clinical/nursing/indicator-board?deptId=33333333-3333-3333-3333-333333333333",
+                          "code":  200,
+                          "coldMs":  12.975200000000001
+                      }
+                  ],
+    "peakRps":  150,
+    "requiredHeadroom":  2,
+    "requiredReplicas":  3
+}

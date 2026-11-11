@@ -410,8 +410,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\perf\slo_capacity.ps
   -Scenario mixed -Strict
 ```
 
-2026-11-11 开发基线（mixed，单机、无 TLS）：4 并发 **125.7 RPS**、P95 **10.4ms**、
-0 错误/0 限流；8 并发 249 RPS 时出现 1.2% 429，说明**网关限流先于应用饱和**。
+2026-11-11 开发基线（mixed，单机、无 TLS）：4 并发 **125.3 RPS**、P95 **10.9ms**、
+0 错误/0 限流；8 并发 252.6 RPS 时出现约 1.9% 429，说明**网关限流先于应用饱和**。
 按 150 RPS × 2 倍余量规划，单副本 125 RPS 至少需要 **3 个临床副本**；生产必须在
 准生产环境复测，不能把开发机数字当容量承诺。
 

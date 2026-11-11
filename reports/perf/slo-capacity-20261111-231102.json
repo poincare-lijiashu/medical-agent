@@ -1,0 +1,189 @@
+﻿{
+    "generatedAt":  "2026-11-11T23:11:02.1950746+08:00",
+    "commit":  "25942f33a925301f924eba36225ed867da665f49",
+    "scenario":  "core",
+    "baseUrl":  "http://127.0.0.1:8080",
+    "stages":  [
+                   {
+                       "concurrency":  2,
+                       "total":  640,
+                       "rps":  64,
+                       "p50":  4.0082,
+                       "p95":  8.6336000000000013,
+                       "p99":  10.9855,
+                       "errors":  0,
+                       "errorRate":  0,
+                       "throttled":  0,
+                       "throttleRate":  0,
+                       "pass":  true,
+                       "pathSummary":  [
+                                           {
+                                               "path":  "/api/v2/clinical/departments",
+                                               "total":  190,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.8290000000000006
+                                           },
+                                           {
+                                               "path":  "/api/v2/tech/applications/summary",
+                                               "total":  90,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  5.4213000000000005
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/transfusion/board",
+                                               "total":  90,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.4644
+                                           },
+                                           {
+                                               "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  9.725
+                                           },
+                                           {
+                                               "path":  "/api/v2/emr/ca/board",
+                                               "total":  90,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.9571000000000005
+                                           }
+                                       ]
+                   },
+                   {
+                       "concurrency":  4,
+                       "total":  1273,
+                       "rps":  127.3,
+                       "p50":  3.6727000000000003,
+                       "p95":  9.7591,
+                       "p99":  11.4833,
+                       "errors":  0,
+                       "errorRate":  0,
+                       "throttled":  0,
+                       "throttleRate":  0,
+                       "pass":  true,
+                       "pathSummary":  [
+                                           {
+                                               "path":  "/api/v2/clinical/departments",
+                                               "total":  373,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.3646
+                                           },
+                                           {
+                                               "path":  "/api/v2/tech/applications/summary",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  5.3189
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/transfusion/board",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  3.9227000000000003
+                                           },
+                                           {
+                                               "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  10.9405
+                                           },
+                                           {
+                                               "path":  "/api/v2/emr/ca/board",
+                                               "total":  180,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.2284000000000006
+                                           }
+                                       ]
+                   },
+                   {
+                       "concurrency":  8,
+                       "total":  2565,
+                       "rps":  256.5,
+                       "p50":  3.7630000000000003,
+                       "p95":  9.3816,
+                       "p99":  10.8169,
+                       "errors":  0,
+                       "errorRate":  0,
+                       "throttled":  31,
+                       "throttleRate":  0.012085769980506823,
+                       "pass":  false,
+                       "pathSummary":  [
+                                           {
+                                               "path":  "/api/v2/clinical/departments",
+                                               "total":  759,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.3965000000000005
+                                           },
+                                           {
+                                               "path":  "/api/v2/tech/applications/summary",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  6.6808000000000005
+                                           },
+                                           {
+                                               "path":  "/api/v2/clinical/transfusion/board",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.5905000000000005
+                                           },
+                                           {
+                                               "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                                               "total":  726,
+                                               "errors":  0,
+                                               "throttled":  31,
+                                               "p95":  10.0706
+                                           },
+                                           {
+                                               "path":  "/api/v2/emr/ca/board",
+                                               "total":  360,
+                                               "errors":  0,
+                                               "throttled":  0,
+                                               "p95":  4.2416
+                                           }
+                                       ]
+                   }
+               ],
+    "safeRps":  127.3,
+    "coldStart":  [
+                      {
+                          "path":  "/api/v2/clinical/departments",
+                          "code":  200,
+                          "coldMs":  21.6096
+                      },
+                      {
+                          "path":  "/api/v2/empi/patients?patientNo=P2026\u0026page=1\u0026size=5",
+                          "code":  200,
+                          "coldMs":  10.629100000000001
+                      },
+                      {
+                          "path":  "/api/v2/clinical/transfusion/board",
+                          "code":  200,
+                          "coldMs":  4.5663
+                      },
+                      {
+                          "path":  "/api/v2/tech/applications/summary",
+                          "code":  200,
+                          "coldMs":  8.1979
+                      },
+                      {
+                          "path":  "/api/v2/emr/ca/board",
+                          "code":  200,
+                          "coldMs":  6.1532
+                      }
+                  ],
+    "peakRps":  150,
+    "requiredHeadroom":  2,
+    "requiredReplicas":  3
+}

@@ -11853,12 +11853,12 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 
 ```
 脚本实跑（真实网关 8080 + 真实库）：
-  mixed 2 并发 → 62.7 RPS，P95 10.9ms，0 错误/0 限流 PASS
-  mixed 4 并发 → 125.7 RPS，P95 10.4ms，0 错误/0 限流 PASS
-  mixed 8 并发 → 249.0 RPS，P95 11.1ms，0 错误/30×429（1.2%）FAIL
-  容量点=4 并发/125.7 RPS；150×2/125.7 → 建议至少 3 个临床副本
-冷启动：科室 43ms、患者检索 13ms、输血看板 14ms、运营洞察 29ms、
-        审计 23ms、护理指标 37ms（数据库缓存已热；首次部署需预热）
+  mixed 2 并发 → 63.2 RPS，P95 10.3ms，0 错误/0 限流 PASS
+  mixed 4 并发 → 125.3 RPS，P95 10.9ms，0 错误/0 限流 PASS
+  mixed 8 并发 → 252.6 RPS，P95 10.3ms，0 错误/47×429（1.9%）FAIL
+  容量点=4 并发/125.3 RPS；150×2/125.3 → 建议至少 3 个临床副本
+冷启动：科室 19ms、患者检索 9ms、输血看板 4ms、运营洞察 9ms、
+        审计 23ms、护理指标 13ms（数据库缓存已热；首次部署需预热）
 告警 YAML：Python yaml 解析通过，groups 含 medassist.slo，规则共 27 条
 全量：pytest --ignore=tests/e2e → 1897 passed / 1 skipped（新增 1 条 SLO/容量交付物静态门禁）
 ```
