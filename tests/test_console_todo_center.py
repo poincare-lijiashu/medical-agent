@@ -82,9 +82,20 @@ def test_todo_menu_accessibility_and_copy():
     assert "el.closest('.todo-trigger')" in shell and "el.closest('.todo-menu')" in shell
 
     zh, en = _read(ZH), _read(EN)
-    for key in ("todo.title", "todo.empty", "todo.failed", "todo.review", "todo.consults", "todo.rxRejected"):
+    for key in ("todo.title", "todo.empty", "todo.failed", "todo.review", "todo.consults",
+                "todo.rxRejected", "todo.printAnomaly"):
         assert f"'{key}':" in zh and f"'{key}':" in en, f"文案缺 key：{key}"
     for line in en.splitlines():
         if line.strip().startswith("'todo."):
             value = line.split("':", 1)[-1]
             assert not re.search(r"[\u4e00-\u9fff]", value), f"英文混入中文：{line.strip()}"
+
+
+def test_print_anomaly_todo_is_role_gated_and_deep_linked():
+    """第 239 批：补打异常待核查必须只对能核查的人显示，且直达异常区。"""
+    src = _read(TODOS)
+    assert "clinicalApi.printAnomalySummary(" in src, "补打异常待办必须走服务端 summary，不能拉整表"
+    assert "data.pending" in src, "待办只认 pending（已核查的不再打扰）"
+    assert "'/print-events?anomaly=1'" in src, "待办必须直达留痕页异常区"
+    # 与 shell 的角色门一致：只有 ADMIN/QC 能核查补打异常
+    assert "hasRole(['ADMIN', 'QC'])" in src

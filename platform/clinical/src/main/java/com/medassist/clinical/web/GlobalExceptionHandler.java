@@ -69,6 +69,7 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case VALIDATION_FAILED, CHARGE_RECEIPT_VOID_REASON_REQUIRED,
                  // 补打未登记原因属于“缺必填信息”，422 让前端走原因弹窗而不是报参数错误
                  PRINT_REASON_REQUIRED,
+                 PRINT_ANOMALY_NOTE_REQUIRED,
                  PATHWAY_TEMPLATE_INVALID, PATHWAY_TASK_SKIP_REASON_REQUIRED,
                  PATHWAY_EXIT_REASON_REQUIRED, DISCHARGE_MED_INVALID,
                  DISCHARGE_MED_CANCEL_REASON_REQUIRED,

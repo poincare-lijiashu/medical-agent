@@ -1,5 +1,6 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.domain.PrintModel;
 import com.medassist.clinical.domain.PrintModel.PrintAnomaly;
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
 import com.medassist.clinical.domain.PrintModel.PrintEventPage;
@@ -39,6 +40,13 @@ public class PrintEventService {
     private static final int MAX_TARGET_TYPE = 32;
     private static final int MAX_PATIENT_NO = 32;
     private static final int MAX_REASON = 64;
+    private static final int MAX_VERDICT = 16;
+    private static final int MAX_REVIEW_NOTE = 200;
+    /** 处置结论（写入库，前端只做下拉，不在服务端做 i18n）。 */
+    private static final String VERDICT_REASONABLE = "REASONABLE";
+    private static final String VERDICT_NEEDS_ACTION = "NEEDS_ACTION";
+    /** 待核查角标的默认统计窗口（天）：角标轮询不能每次全表聚合。 */
+    private static final int DEFAULT_ANOMALY_DAYS = 30;
     private static final int DEFAULT_LIMIT = 50;
     /** 单页上限：与前端“最近 200 条”对齐，防止一次拉全表。 */
     private static final int MAX_LIMIT = 200;
@@ -109,6 +117,60 @@ public class PrintEventService {
         int th = threshold == null ? 3 : Math.max(2, Math.min(threshold, 50));
         OffsetDateTime[] win = window(from, to);
         return repo.listAnomalies(campusCsv, win[0], win[1], th, clampLimit(limit));
+    }
+
+    /**
+     * 待核查统计（第 239 批）：全局待办角标只认这个数。
+     *
+     * <p>为什么默认只算最近 30 天：打印流水随业务量线性增长，
+     * 角标每 60 秒轮询一次，若每次都全表聚合，等于给自己造一个慢查询。
+     * 30 天覆盖“当月质控回头看”的常规节奏；历史账仍可在留痕页自定义区间查。
+     */
+    public PrintModel.PrintAnomalySummary anomalySummary(String campusCsv, LocalDate from,
+                                                         LocalDate to, Integer threshold) {
+        LocalDate end = to;
+        LocalDate start = from != null
+                ? from
+                : (end != null ? end.minusDays(DEFAULT_ANOMALY_DAYS)
+                               : LocalDate.now(ZoneId.systemDefault()).minusDays(DEFAULT_ANOMALY_DAYS));
+        if (start.isAfter(end != null ? end : start)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始日期不能晚于结束日期");
+        }
+        int th = threshold == null ? 3 : Math.max(2, Math.min(threshold, 50));
+        OffsetDateTime[] win = window(start, end);
+        return repo.anomalySummary(campusCsv, win[0], win[1], th);
+    }
+
+    /**
+     * 核查处置（第 239 批）：给一条补打异常签字。
+     *
+     * <p>追加式：同一单号再次被处置会新增一行，最新一条为当前结论。
+     * `NEEDS_ACTION` 必须写说明——只勾“需整改”不写要改什么，等于把问题又推回给下一个人；
+     * `REASONABLE` 允许不写（核实为卡纸重打这类无需解释的情形）。
+     */
+    public PrintModel.Review review(String docType, String docNo, String verdict, String note,
+                                    String actor) {
+        String type = requireText(docType, "单据类型", MAX_DOC_TYPE);
+        String no = requireText(docNo, "单据号", MAX_DOC_NO);
+        String v = requireText(verdict, "处置结论", MAX_VERDICT);
+        if (!VERDICT_REASONABLE.equals(v) && !VERDICT_NEEDS_ACTION.equals(v)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "处置结论只能是 " + VERDICT_REASONABLE + " 或 " + VERDICT_NEEDS_ACTION);
+        }
+        String text = optionalText(note, MAX_REVIEW_NOTE);
+        if (VERDICT_NEEDS_ACTION.equals(v) && text == null) {
+            throw new BusinessException(ErrorCode.PRINT_ANOMALY_NOTE_REQUIRED);
+        }
+        // 没有打印记录的单号不允许凭空“核查通过”：那会让台账出现无法追溯的处置
+        if (repo.countByDoc(type, no) == 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "该单据号没有打印记录，无法核查");
+        }
+        String who = optionalText(actor, 64);
+        String by = who == null || who.isBlank() ? "system" : who;
+        OffsetDateTime now = OffsetDateTime.now();
+        repo.insertReview(UUID.randomUUID(), type, no, v, text, by, now);
+        return new PrintModel.Review(v, text, by, now);
     }
 
     /** 业务日期 → `[from 00:00, to 次日 00:00)`；任一为空则该端不限。 */

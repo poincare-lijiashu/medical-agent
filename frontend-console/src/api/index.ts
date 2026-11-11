@@ -105,6 +105,8 @@ import type {
   PrescriptionAuditView,
   PrescriptionView,
   PrintAnomaly,
+  PrintAnomalyReview,
+  PrintAnomalySummary,
   PrintEvent,
   PrintEventPage,
   ProcurementSummary,
@@ -261,6 +263,16 @@ export const clinicalApi = {
     threshold?: number
     limit?: number
   }) => get<PrintAnomaly[]>('/clinical/print-events/anomalies', params),
+  /** 待核查统计（第 239 批）：全局待办角标只取 pending；缺省最近 30 天。 */
+  printAnomalySummary: (params: { from?: string; to?: string; threshold?: number }) =>
+    get<PrintAnomalySummary>('/clinical/print-events/anomalies/summary', params),
+  /** 核查处置（第 239 批）：给一条补打异常签字，追加式；需整改时 note 必填。 */
+  printAnomalyReview: (body: {
+    docType: string
+    docNo: string
+    verdict: 'REASONABLE' | 'NEEDS_ACTION'
+    note?: string
+  }) => post<PrintAnomalyReview>('/clinical/print-events/anomalies/review', body),
   /** 运营日快照（G17）：默认最近 7 天；metric 为空返回全部指标。 */
   reportSnapshots: (from?: string, to?: string, metric?: string) =>
     get<SnapshotList>('/clinical/reports/snapshots', { from, to, metric }),

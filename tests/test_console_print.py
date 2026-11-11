@@ -216,3 +216,68 @@ def test_print_history_shows_reason_and_unexplained():
     assert "reprintSeq: number" in types and "reason: string | null" in types, "留痕类型缺少次序/原因"
     assert "unexplained: number" in types, "异常类型缺少未说明次数"
 
+
+# ---------------------------------------------------------------- 第 239 批：核查处置闭环
+
+
+def test_anomaly_review_schema_and_rules():
+    """异常必须能签字，且“需整改”必须写清楚改什么。"""
+    sql = _read(
+        JAVA_CLINICAL / "resources" / "db" / "migration" / "clinical" / "V62__print_anomaly_review.sql"
+    )
+    assert "print_anomaly_review" in sql, "V62 必须建核查处置表"
+    assert "verdict" in sql and "reviewed_at" in sql, "处置表必须记录结论与时间"
+
+    service = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "service" / "PrintEventService.java"
+    )
+    assert "PRINT_ANOMALY_NOTE_REQUIRED" in service, "判定需整改时说明必填"
+    assert "countByDoc(type, no) == 0" in service, "没有打印记录的单号不允许凭空核查"
+    assert "insertReview(" in service, "处置必须追加落库（不覆盖历史结论）"
+
+    codes = _read(JAVA_COMMON / "java" / "com" / "medassist" / "common" / "api" / "ErrorCode.java")
+    assert "PRINT_ANOMALY_NOTE_REQUIRED(45441" in codes, "处置说明必填需要稳定业务码 45441"
+
+    handler = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "web" / "GlobalExceptionHandler.java"
+    )
+    assert "PRINT_ANOMALY_NOTE_REQUIRED" in handler, "新业务码必须显式落 422"
+
+
+def test_anomaly_list_and_count_share_one_aggregate():
+    """待办计数与列表必须同口径，否则会出现“待办 3 条、点进去 2 条”。"""
+    repo = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "repo" / "PrintEventRepository.java"
+    )
+    assert "AGGREGATE_CTE" in repo, "异常聚合必须抽成共用 CTE"
+    assert repo.count("AGGREGATE_CTE") >= 3, "列表与计数都必须复用同一个 CTE 常量"
+    assert "count(*) FILTER" in repo and "l.reviewed_at < a.last_at" in repo, (
+        "处置后又被补打必须重新计入待核查"
+    )
+
+    controller = _read(
+        JAVA_CLINICAL / "java" / "com" / "medassist" / "clinical" / "web" / "PrintEventController.java"
+    )
+    assert '"/anomalies/summary"' in controller, "缺少待办计数端点"
+    assert '"/anomalies/review"' in controller, "缺少核查处置端点"
+    # 能看异常的人就是负责核查的人，不额外引入权限点
+    assert controller.count("Permissions.require(permissions, READ)") >= 3, "核查端必须复用 print:read"
+
+
+def test_print_history_review_ui_closed_loop():
+    """发现 → 待办提醒 → 处置 → 不再打扰，四段都要在界面上有落点。"""
+    view = _read(SRC / "views" / "PrintHistoryView.vue")
+    assert "pendingCount" in view and "待核查" in view, "异常区必须显示待核查条数"
+    assert "openReview(" in view and "submitReview(" in view, "异常行必须能发起核查"
+    assert "clinicalApi.printAnomalyReview(" in view, "处置必须落 Java 核查端点"
+    assert "verdictLabel(" in view, "结论必须中文化展示"
+    assert "重新核查" in view, "已处置行应允许复查（追加新结论）"
+    assert "scrollIntoView" in view and "anomaly" in view, "待办跳转必须定位到异常区"
+
+    types = _read(SRC / "api" / "types.ts")
+    assert "pending: boolean" in types and "review: PrintAnomalyReview | null" in types, (
+        "异常类型必须带处置状态"
+    )
+    assert "PrintAnomalySummary" in types, "缺少待办计数类型"
+
+

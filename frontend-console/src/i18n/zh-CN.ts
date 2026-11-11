@@ -53,6 +53,7 @@ const messages = {
   'todo.review': 'AI 待核对',
   'todo.consults': '会诊待我填',
   'todo.rxRejected': '处方被驳回',
+  'todo.printAnomaly': '补打异常待核查',
 
   /* ---------- 空闲超时 ---------- */
   'idle.title': '会话即将结束',

@@ -114,9 +114,10 @@
       </div>
 
       <!-- 第 237 批：补打异常（同一单号在期间内多次打印） -->
-      <section class="anomaly">
+      <section ref="anomalySection" class="anomaly">
         <div class="anomaly-head">
           <h3 class="anomaly-title">补打异常</h3>
+          <span v-if="pendingCount > 0" class="badge badge--warn">待核查 {{ pendingCount }}</span>
           <span class="muted small">同一单号在当前日期区间内打印次数达到阈值；换人补打同样计入，「未说明」为其中未登记原因的补打</span>
           <span class="spacer" />
           <label class="field anomaly-threshold">
@@ -155,6 +156,7 @@
                 <th class="is-num">打印人数</th>
                 <th class="is-num">未说明</th>
                 <th>最近一次</th>
+                <th>核查</th>
                 <th></th>
               </tr>
             </thead>
@@ -169,21 +171,87 @@
                   {{ a.unexplained }}
                 </td>
                 <td data-label="最近一次" class="mono">{{ dateTime(a.lastAt) }}</td>
+                <td data-label="核查">
+                  <span v-if="a.pending" class="badge badge--warn">待核查</span>
+                  <template v-else-if="a.review">
+                    <span
+                      class="badge"
+                      :class="a.review.verdict === 'NEEDS_ACTION' ? 'badge--danger' : 'badge--ok'"
+                    >
+                      {{ verdictLabel(a.review.verdict) }}
+                    </span>
+                    <span class="review-meta">{{ a.review.actor }} · {{ dateTime(a.review.reviewedAt) }}</span>
+                  </template>
+                  <span v-if="a.review?.note" class="review-note" :title="a.review.note">{{ a.review.note }}</span>
+                </td>
                 <td class="anomaly-action">
                   <button class="btn btn--sm" type="button" @click="focusDoc(a)">查看流水</button>
+                  <button class="btn btn--sm" type="button" @click="openReview(a)">
+                    {{ a.pending ? '核查' : '重新核查' }}
+                  </button>
                 </td>
               </tr>
             </tbody>
           </table>
         </div>
       </section>
+
+      <!-- 第 239 批：核查处置（追加式，不覆盖历史结论） -->
+      <AppModal
+        v-model="reviewOpen"
+        title="补打异常核查"
+        :subtitle="reviewSubtitle"
+        width="560px"
+        :dismissible="!reviewSaving"
+      >
+        <div class="verdicts" role="radiogroup" aria-label="处置结论">
+          <label class="verdict">
+            <input v-model="reviewVerdict" type="radio" value="REASONABLE" :disabled="reviewSaving" />
+            <span>
+              <strong>核实为合理补打</strong>
+              <span class="muted small">卡纸重打、患者遗失、信息变更等，原因可溯</span>
+            </span>
+          </label>
+          <label class="verdict">
+            <input v-model="reviewVerdict" type="radio" value="NEEDS_ACTION" :disabled="reviewSaving" />
+            <span>
+              <strong>需整改</strong>
+              <span class="muted small">重复出单、冒打、未登记原因等，需要追到人</span>
+            </span>
+          </label>
+        </div>
+
+        <label class="field review-note-field">
+          <span class="label">
+            处置说明{{ reviewVerdict === 'NEEDS_ACTION' ? '（必填）' : '（可选）' }}
+          </span>
+          <textarea
+            v-model.trim="reviewNote"
+            class="input"
+            rows="3"
+            maxlength="200"
+            :disabled="reviewSaving"
+            :placeholder="
+              reviewVerdict === 'NEEDS_ACTION'
+                ? '写清楚要改什么、由谁跟进，例如：3 号窗口重复出单，已通知护士长'
+                : '可补充核实依据，例如：门诊 3 号打印机卡纸后重打'
+            "
+          />
+        </label>
+
+        <p class="hint">
+          结论按追加方式留痕，不改写历史；该单号之后若再被补打，会自动重新进入待核查。
+        </p>
+      </AppModal>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
+import AppModal from '@/components/ui/AppModal.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import LoadError from '@/components/ui/LoadError.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
@@ -224,6 +292,24 @@ const threshold = ref(3)
 const anomalies = ref<PrintAnomaly[]>([])
 const anomalyLoading = ref(false)
 const anomalyErr = ref('')
+
+/* ---- 核查处置（第 239 批） ---- */
+const route = useRoute()
+const anomalySection = ref<HTMLElement | null>(null)
+const reviewOpen = ref(false)
+const reviewTarget = ref<PrintAnomaly | null>(null)
+const reviewVerdict = ref<'REASONABLE' | 'NEEDS_ACTION'>('REASONABLE')
+const reviewNote = ref('')
+const reviewSaving = ref(false)
+
+/** 待核查条数：待办角标点进来后，页面自己也要说清楚还剩几条。 */
+const pendingCount = computed(() => anomalies.value.filter((a) => a.pending).length)
+
+const reviewSubtitle = computed(() => {
+  const t = reviewTarget.value
+  if (!t) return ''
+  return `${docTypeLabel(t.docType)} · ${t.docNo} · 共打印 ${t.prints} 次（未说明 ${t.unexplained} 次）`
+})
 
 const hasNext = computed(() => offset.value + events.value.length < total.value)
 
@@ -327,6 +413,47 @@ function focusDoc(a: PrintAnomaly) {
   void load()
 }
 
+/** 核查结论中文口径（列表徽标与提示共用）。 */
+function verdictLabel(verdict: 'REASONABLE' | 'NEEDS_ACTION'): string {
+  return verdict === 'NEEDS_ACTION' ? '需整改' : '合理补打'
+}
+
+/** 打开核查弹窗；已处置过时预填上次结论，便于“只是补一句说明”。 */
+function openReview(a: PrintAnomaly) {
+  reviewTarget.value = a
+  reviewVerdict.value = a.review?.verdict ?? 'REASONABLE'
+  reviewNote.value = ''
+  reviewOpen.value = true
+}
+
+/**
+ * 保存核查结论：追加一条处置记录，然后刷新异常区。
+ *
+ * <p>不做本地乐观更新——`pending` 由服务端按“处置时间 vs 最后出纸时间”重算，
+ * 前端自己改标记会和待办角标的口径错开。
+ */
+async function submitReview() {
+  const target = reviewTarget.value
+  if (!target || reviewSaving.value) return
+  if (reviewVerdict.value === 'NEEDS_ACTION' && !reviewNote.value) return
+  reviewSaving.value = true
+  try {
+    await clinicalApi.printAnomalyReview({
+      docType: target.docType,
+      docNo: target.docNo,
+      verdict: reviewVerdict.value,
+      note: reviewNote.value || undefined,
+    })
+    toast.ok('已记录核查结论', `${target.docNo} · ${verdictLabel(reviewVerdict.value)}`)
+    reviewOpen.value = false
+    await loadAnomalies()
+  } catch (e) {
+    toast.error('核查失败', errorText(e))
+  } finally {
+    reviewSaving.value = false
+  }
+}
+
 /** 导出上限：防止一次导出把浏览器和服务端拖死；超出时明确告知已截断。 */
 const EXPORT_MAX = 5000
 const EXPORT_PAGE = 200
@@ -385,8 +512,13 @@ async function exportCsvByFilter() {
   }
 }
 
-onMounted(() => {
-  void load()
+onMounted(async () => {
+  await load()
+  // 待办角标跳转（?anomaly=1）：把异常区滚进视野，否则用户点了角标却停在列表顶部
+  if (route.query.anomaly === '1') {
+    await nextTick()
+    anomalySection.value?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
 })
 </script>
 
@@ -453,6 +585,75 @@ onMounted(() => {
 
 .anomaly-action {
   text-align: right;
+  white-space: nowrap;
+}
+
+.anomaly-action .btn + .btn {
+  margin-left: var(--s2);
+}
+
+/* 第 239 批：核查状态列与处置弹窗 */
+.review-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.review-note {
+  display: block;
+  max-width: 220px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+
+.verdicts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-bottom: var(--s4);
+}
+
+.verdict {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  padding: var(--s3);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  font-size: var(--fs-body);
+}
+
+.verdict:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-weak);
+}
+
+.verdict input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.verdict strong {
+  display: block;
+  font-weight: 600;
+}
+
+.review-note-field {
+  margin-top: var(--s2);
+}
+
+.hint {
+  margin-top: var(--s3);
+  font-size: var(--fs-small);
+  color: var(--muted);
+  line-height: 1.5;
 }
 
 /* 未登记原因的补打：不是错误，但需要质控追问，用警示色而非红/绿色 */

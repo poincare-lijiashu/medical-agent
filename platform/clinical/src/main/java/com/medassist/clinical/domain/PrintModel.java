@@ -49,9 +49,22 @@ public final class PrintModel {
      * <p>第 238 批追加 {@code unexplained}：其中没有登记原因的补打次数。
      * 有原因的是“可解释补打”（卡纸/遗失），没有原因的是真正需要追问的部分，
      * 两者混在一个次数里，质控仍要逐条点开才能判断。
+     *
+     * <p>第 239 批追加 {@code review} 与 {@code pending}：异常必须有人签字。
+     * `pending` = 从未处置，或最近一次处置早于最后一次补打（处置后又出纸，
+     * 旧结论不能继续免责）；这类才进全局待办。
      */
     public record PrintAnomaly(String docType, String docNo, String patientNo, long prints,
                                long actors, long unexplained,
-                               OffsetDateTime firstAt, OffsetDateTime lastAt) {
+                               OffsetDateTime firstAt, OffsetDateTime lastAt,
+                               Review review, boolean pending) {
+    }
+
+    /** 最近一次核查处置（第 239 批）；从未处置时整段为 null。 */
+    public record Review(String verdict, String note, String actor, OffsetDateTime reviewedAt) {
+    }
+
+    /** 待核查统计（第 239 批）：全局待办角标只认这一个数。 */
+    public record PrintAnomalySummary(long pending, long total) {
     }
 }

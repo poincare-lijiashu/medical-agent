@@ -628,6 +628,14 @@ export interface PrintEventPage {
   limit: number
 }
 
+/** 补打异常的最近一次核查处置（第 239 批）；从未处置时整段为 null。 */
+export interface PrintAnomalyReview {
+  verdict: 'REASONABLE' | 'NEEDS_ACTION'
+  note: string | null
+  actor: string
+  reviewedAt: string
+}
+
 /** 补打异常：同一单号在核查期间打印次数达到阈值。 */
 export interface PrintAnomaly {
   docType: string
@@ -639,6 +647,15 @@ export interface PrintAnomaly {
   unexplained: number
   firstAt: string
   lastAt: string
+  review: PrintAnomalyReview | null
+  /** 未处置，或处置后又被补打——只有 pending 的才进全局待办。 */
+  pending: boolean
+}
+
+/** 待核查统计（第 239 批）：全局待办角标只认 pending。 */
+export interface PrintAnomalySummary {
+  pending: number
+  total: number
 }
 
 /** 收费票据：金额/支付方式为开票快照；重打累计次数，作废留原因。 */

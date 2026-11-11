@@ -1,5 +1,6 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.domain.PrintModel;
 import com.medassist.clinical.domain.PrintModel.PrintAnomaly;
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
 import com.medassist.clinical.domain.PrintModel.PrintEventPage;
@@ -92,6 +93,40 @@ public class PrintEventController {
                 from, to, threshold, limit));
     }
 
+    /**
+     * 待核查统计（第 239 批）：全局待办角标只消费 `pending`。
+     *
+     * <p>与 `/anomalies` 同一套阈值与院区口径；`from/to` 为空时默认最近 30 天，
+     * 避免 60 秒轮询每次都做全表聚合。
+     */
+    @GetMapping("/anomalies/summary")
+    public ApiResponse<PrintModel.PrintAnomalySummary> anomalySummary(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Integer threshold,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.anomalySummary(CampusFilters.csv(scope.campusFilter()),
+                from, to, threshold));
+    }
+
+    /**
+     * 核查处置（第 239 批）：给一条补打异常签字。
+     *
+     * <p>权限复用 `clinical:print:read`：能看异常的人就是负责核查的人；
+     * 单独再开一个 `print:review` 只会让管理员多配一次权限，却不增加任何约束。
+     */
+    @PostMapping("/anomalies/review")
+    public ApiResponse<PrintModel.Review> review(
+            @Valid @RequestBody ReviewReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.review(req.docType(), req.docNo(), req.verdict(),
+                req.note(), actor));
+    }
+
     /** 院区归属：只有唯一院区的账号才落 campus_id，跨院区角色写空（与列表收敛口径一致）。 */
     private static UUID campusOf(DataScope scope) {
         Set<UUID> campuses = scope.campusFilter();
@@ -112,5 +147,13 @@ public class PrintEventController {
             UUID targetId,
             @Size(max = 32) String patientNo,
             @Size(max = 64) String reason) {
+    }
+
+    /** 核查处置请求（第 239 批）：结论 + 说明；说明是否必填由服务端按结论判定。 */
+    public record ReviewReq(
+            @Size(max = 32) String docType,
+            @Size(max = 64) String docNo,
+            @Size(max = 16) String verdict,
+            @Size(max = 200) String note) {
     }
 }

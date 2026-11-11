@@ -50,6 +50,7 @@ const messages: Record<MessageKey, string> = {
   'todo.review': 'AI awaiting review',
   'todo.consults': 'Consults awaiting my opinion',
   'todo.rxRejected': 'Rejected prescriptions',
+  'todo.printAnomaly': 'Print anomalies to review',
 
   /* ---------- Idle timeout ---------- */
   'idle.title': 'Session ending soon',
