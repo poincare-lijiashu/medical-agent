@@ -104,6 +104,7 @@ import type {
   Prescription,
   PrescriptionAuditView,
   PrescriptionView,
+  PrintAnomaly,
   PrintEvent,
   PrintEventPage,
   ProcurementSummary,
@@ -253,6 +254,13 @@ export const clinicalApi = {
     offset?: number
     limit?: number
   }) => get<PrintEventPage>('/clinical/print-events', params),
+  /** 补打异常（第 237 批）：同一单号在期间内打印次数 ≥ threshold。 */
+  printAnomalies: (params: {
+    from?: string
+    to?: string
+    threshold?: number
+    limit?: number
+  }) => get<PrintAnomaly[]>('/clinical/print-events/anomalies', params),
   /** 运营日快照（G17）：默认最近 7 天；metric 为空返回全部指标。 */
   reportSnapshots: (from?: string, to?: string, metric?: string) =>
     get<SnapshotList>('/clinical/reports/snapshots', { from, to, metric }),

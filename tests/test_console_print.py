@@ -102,6 +102,16 @@ def test_ward_batch_print_uses_single_endpoint():
     assert "page-break-after" in text, "整区打印必须声明按床位分页"
 
 
+def test_print_history_anomaly_panel():
+    """第 237 批：留痕页必须能发现“同一单号被反复打印”，而不只是能查。"""
+    view = (SRC / "views" / "PrintHistoryView.vue").read_text(encoding="utf-8")
+    assert "clinicalApi.printAnomalies(" in view, "留痕页缺少补打异常查询"
+    assert "loadAnomalies(" in view and "threshold" in view, "异常区必须支持阈值"
+    assert "focusDoc(" in view, "异常行应能跳回该单号流水"
+    # 异常区也必须有空/错/加载态，不能静默空白
+    assert "没有补打异常" in view, "异常区缺少空态说明"
+
+
 def test_print_history_export_csv():
     """第 236 批：导出必须按当前筛选拉全量（分页），且 CSV 要防注入、带 BOM。"""
     view = (SRC / "views" / "PrintHistoryView.vue").read_text(encoding="utf-8")

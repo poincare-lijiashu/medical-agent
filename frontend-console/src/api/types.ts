@@ -624,6 +624,17 @@ export interface PrintEventPage {
   limit: number
 }
 
+/** 补打异常：同一单号在核查期间打印次数达到阈值。 */
+export interface PrintAnomaly {
+  docType: string
+  docNo: string
+  patientNo: string | null
+  prints: number
+  actors: number
+  firstAt: string
+  lastAt: string
+}
+
 /** 收费票据：金额/支付方式为开票快照；重打累计次数，作废留原因。 */
 export interface ChargeReceipt {
   id: string

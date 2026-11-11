@@ -106,6 +106,67 @@
           下一页
         </button>
       </div>
+
+      <!-- 第 237 批：补打异常（同一单号在期间内多次打印） -->
+      <section class="anomaly">
+        <div class="anomaly-head">
+          <h3 class="anomaly-title">补打异常</h3>
+          <span class="muted small">同一单号在当前日期区间内打印次数达到阈值；换人补打同样计入</span>
+          <span class="spacer" />
+          <label class="field anomaly-threshold">
+            <span class="label">阈值</span>
+            <select v-model.number="threshold" class="select" @change="loadAnomalies()">
+              <option :value="3">≥ 3 次</option>
+              <option :value="5">≥ 5 次</option>
+              <option :value="10">≥ 10 次</option>
+            </select>
+          </label>
+          <button class="btn btn--sm" type="button" :disabled="anomalyLoading" @click="loadAnomalies()">
+            <AppIcon name="refresh" :size="13" /> 刷新
+          </button>
+        </div>
+
+        <LoadError
+          v-if="anomalyErr"
+          :message="anomalyErr"
+          :retrying="anomalyLoading"
+          @retry="loadAnomalies()"
+        />
+        <TableSkeleton v-else-if="anomalyLoading" :rows="3" />
+        <EmptyState
+          v-else-if="anomalies.length === 0"
+          title="没有补打异常"
+          desc="当前日期区间内没有单号达到阈值；留痕只记录出纸动作，补打前请先核对患者。"
+        />
+        <div v-else class="table-wrap">
+          <table class="table table--compact">
+            <thead>
+              <tr>
+                <th>单据类型</th>
+                <th>单据号</th>
+                <th>患者病案号</th>
+                <th class="is-num">打印次数</th>
+                <th class="is-num">打印人数</th>
+                <th>最近一次</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="a in anomalies" :key="`${a.docType}:${a.docNo}`">
+                <td data-primary>{{ docTypeLabel(a.docType) }}</td>
+                <td data-label="单据号" class="mono">{{ a.docNo }}</td>
+                <td data-label="患者病案号" class="mono">{{ a.patientNo || '—' }}</td>
+                <td data-label="打印次数" class="is-num is-strong">{{ a.prints }}</td>
+                <td data-label="打印人数" class="is-num">{{ a.actors }}</td>
+                <td data-label="最近一次" class="mono">{{ dateTime(a.lastAt) }}</td>
+                <td class="anomaly-action">
+                  <button class="btn btn--sm" type="button" @click="focusDoc(a)">查看流水</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -120,7 +181,7 @@ import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { clinicalApi } from '@/api'
 import { errorText, isForbidden } from '@/api/http'
-import type { PrintEvent } from '@/api/types'
+import type { PrintAnomaly, PrintEvent } from '@/api/types'
 import { toast } from '@/stores/toast'
 import { downloadCsv } from '@/utils/csv'
 import { dateTime } from '@/utils/format'
@@ -147,6 +208,12 @@ const loading = ref(false)
 const exporting = ref(false)
 const loadErr = ref('')
 const forbidden = ref(false)
+
+/* ---- 补打异常（第 237 批） ---- */
+const threshold = ref(3)
+const anomalies = ref<PrintAnomaly[]>([])
+const anomalyLoading = ref(false)
+const anomalyErr = ref('')
 
 const hasNext = computed(() => offset.value + events.value.length < total.value)
 
@@ -183,6 +250,7 @@ async function load(reset = true) {
     total.value = page.total
     offset.value = page.offset
     forbidden.value = false
+    if (reset) void loadAnomalies()
   } catch (e) {
     // 403 与“服务故障”分开：403 只显示受限态，不显示重试
     forbidden.value = isForbidden(e)
@@ -205,6 +273,38 @@ function prevPage() {
 function nextPage() {
   offset.value += limit.value
   void load(false)
+}
+
+/** 补打异常：同一单号在期间内打印次数达到阈值（与列表共用日期区间）。 */
+async function loadAnomalies() {
+  if (forbidden.value) return
+  anomalyLoading.value = true
+  anomalyErr.value = ''
+  try {
+    anomalies.value = await clinicalApi.printAnomalies({
+      from: from.value || undefined,
+      to: to.value || undefined,
+      threshold: threshold.value,
+      limit: 50,
+    })
+  } catch (e) {
+    anomalies.value = []
+    if (isForbidden(e)) {
+      // 列表已显示受限态，异常区不再重复弹错
+      anomalyErr.value = ''
+    } else {
+      anomalyErr.value = errorText(e)
+    }
+  } finally {
+    anomalyLoading.value = false
+  }
+}
+
+/** 从异常行跳回流水：带上类型与单号重新查第一页。 */
+function focusDoc(a: PrintAnomaly) {
+  docType.value = a.docType
+  docNo.value = a.docNo
+  void load()
 }
 
 /** 导出上限：防止一次导出把浏览器和服务端拖死；超出时明确告知已截断。 */
@@ -300,6 +400,37 @@ onMounted(() => {
   justify-content: flex-end;
   gap: var(--s3);
   padding: var(--s3) var(--card-pad) var(--s4);
+}
+
+.anomaly {
+  margin: var(--s4) var(--card-pad) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.anomaly-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-3);
+}
+
+.anomaly-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+}
+
+.anomaly-threshold {
+  flex: 0 0 110px;
+}
+
+.anomaly-action {
+  text-align: right;
 }
 
 .f-query {

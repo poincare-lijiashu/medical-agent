@@ -31,4 +31,14 @@ public final class PrintModel {
     public record PrintEventPage(java.util.List<PrintEvent> items, long total,
                                  int offset, int limit) {
     }
+
+    /**
+     * 补打异常（第 237 批）：同一单号在核查期间被打印多次。
+     *
+     * <p>为什么按单号聚合而不是按人：质控关心的是“这张单到底出了几张纸”，
+     * 换人补打同样算重复出单；`actors` 只作为排查线索，不影响是否计入异常。
+     */
+    public record PrintAnomaly(String docType, String docNo, String patientNo, long prints,
+                               long actors, OffsetDateTime firstAt, OffsetDateTime lastAt) {
+    }
 }

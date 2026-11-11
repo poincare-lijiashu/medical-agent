@@ -1,5 +1,6 @@
 package com.medassist.clinical.repo;
 
+import com.medassist.clinical.domain.PrintModel.PrintAnomaly;
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -125,5 +126,49 @@ public class PrintEventRepository {
 
     private static String nz(String value) {
         return value == null ? "" : value;
+    }
+
+    /**
+     * 补打异常聚合：同一单号在期间内打印次数 ≥ threshold 的记录。
+     *
+     * <p>`patient_no` 取 max（同单号应一致）；`actors` 为去重后的人数，
+     * 用来区分“同一人反复打”与“多人各打一次”——两者都算重复出单，但处置不同。
+     */
+    public List<PrintAnomaly> listAnomalies(String campusCsv, OffsetDateTime fromTs,
+                                            OffsetDateTime toTs, int threshold, int limit) {
+        return jdbc.sql("""
+                        SELECT doc_type,
+                               doc_no,
+                               max(patient_no) AS patient_no,
+                               count(*) AS prints,
+                               count(DISTINCT actor) AS actors,
+                               min(printed_at) AS first_at,
+                               max(printed_at) AS last_at
+                          FROM clinical_svc.print_event
+                         WHERE (CAST(:campusCsv AS text) = ''
+                                OR campus_id = ANY(string_to_array(CAST(:campusCsv AS text), ',')::uuid[]))
+                           AND (CAST(:fromTs AS timestamptz) IS NULL
+                                OR printed_at >= CAST(:fromTs AS timestamptz))
+                           AND (CAST(:toTs AS timestamptz) IS NULL
+                                OR printed_at < CAST(:toTs AS timestamptz))
+                         GROUP BY doc_type, doc_no
+                        HAVING count(*) >= :threshold
+                         ORDER BY count(*) DESC, max(printed_at) DESC
+                         LIMIT :limit
+                        """)
+                .param("campusCsv", nz(campusCsv))
+                .param("fromTs", fromTs)
+                .param("toTs", toTs)
+                .param("threshold", threshold)
+                .param("limit", limit)
+                .query((rs, i) -> new PrintAnomaly(
+                        rs.getString("doc_type"),
+                        rs.getString("doc_no"),
+                        rs.getString("patient_no"),
+                        rs.getLong("prints"),
+                        rs.getLong("actors"),
+                        rs.getObject("first_at", OffsetDateTime.class),
+                        rs.getObject("last_at", OffsetDateTime.class)))
+                .list();
     }
 }

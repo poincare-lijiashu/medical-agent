@@ -1,5 +1,6 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.domain.PrintModel.PrintAnomaly;
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
 import com.medassist.clinical.domain.PrintModel.PrintEventPage;
 import com.medassist.clinical.service.PrintEventService;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -74,6 +76,20 @@ public class PrintEventController {
         Permissions.require(permissions, READ);
         return ApiResponse.ok(service.page(docType, docNo, targetType, targetId,
                 CampusFilters.csv(scope.campusFilter()), from, to, offset, limit));
+    }
+
+    /** 补打异常（第 237 批）：同一单号在期间内打印次数 ≥ threshold，按次数倒序。 */
+    @GetMapping("/anomalies")
+    public ApiResponse<List<PrintAnomaly>> anomalies(
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Integer threshold,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            DataScope scope) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(service.anomalies(CampusFilters.csv(scope.campusFilter()),
+                from, to, threshold, limit));
     }
 
     /** 院区归属：只有唯一院区的账号才落 campus_id，跨院区角色写空（与列表收敛口径一致）。 */

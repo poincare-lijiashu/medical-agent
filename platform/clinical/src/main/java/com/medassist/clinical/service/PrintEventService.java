@@ -1,5 +1,6 @@
 package com.medassist.clinical.service;
 
+import com.medassist.clinical.domain.PrintModel.PrintAnomaly;
 import com.medassist.clinical.domain.PrintModel.PrintEvent;
 import com.medassist.clinical.domain.PrintModel.PrintEventPage;
 import com.medassist.clinical.repo.PrintEventRepository;
@@ -69,19 +70,41 @@ public class PrintEventService {
         if (from != null && to != null && from.isAfter(to)) {
             throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始日期不能晚于结束日期");
         }
-        ZoneId zone = ZoneId.systemDefault();
-        OffsetDateTime fromTs = from == null ? null : from.atStartOfDay(zone).toOffsetDateTime();
-        OffsetDateTime toTs = to == null ? null : to.plusDays(1).atStartOfDay(zone).toOffsetDateTime();
+        OffsetDateTime[] win = window(from, to);
         int size = clampLimit(limit);
         int start = offset == null ? 0 : Math.max(0, offset);
         String type = optionalText(docType, MAX_DOC_TYPE);
         String no = optionalText(docNo, MAX_DOC_NO);
         String target = optionalText(targetType, MAX_TARGET_TYPE);
-        long total = repo.count(type, no, target, targetId, campusCsv, fromTs, toTs);
+        long total = repo.count(type, no, target, targetId, campusCsv, win[0], win[1]);
         List<PrintEvent> items = total <= start
                 ? List.of()
-                : repo.list(type, no, target, targetId, campusCsv, fromTs, toTs, start, size);
+                : repo.list(type, no, target, targetId, campusCsv, win[0], win[1], start, size);
         return new PrintEventPage(items, total, start, size);
+    }
+
+    /**
+     * 补打异常：同一单号在期间内打印次数 ≥ threshold（默认 3 次）。
+     *
+     * <p>不按“人”去重——换人补打同样是重复出单；阈值上限 50，
+     * 避免有人把阈值调到 1 万后“查询成功但没有异常”的假安全感。
+     */
+    public List<PrintAnomaly> anomalies(String campusCsv, LocalDate from, LocalDate to,
+                                        Integer threshold, Integer limit) {
+        if (from != null && to != null && from.isAfter(to)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "开始日期不能晚于结束日期");
+        }
+        int th = threshold == null ? 3 : Math.max(2, Math.min(threshold, 50));
+        OffsetDateTime[] win = window(from, to);
+        return repo.listAnomalies(campusCsv, win[0], win[1], th, clampLimit(limit));
+    }
+
+    /** 业务日期 → `[from 00:00, to 次日 00:00)`；任一为空则该端不限。 */
+    private static OffsetDateTime[] window(LocalDate from, LocalDate to) {
+        ZoneId zone = ZoneId.systemDefault();
+        return new OffsetDateTime[]{
+                from == null ? null : from.atStartOfDay(zone).toOffsetDateTime(),
+                to == null ? null : to.plusDays(1).atStartOfDay(zone).toOffsetDateTime()};
     }
 
     private static int clampLimit(Integer limit) {
