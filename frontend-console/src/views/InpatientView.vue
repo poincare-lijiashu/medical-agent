@@ -47,6 +47,15 @@
         </select>
       </label>
       <span class="hint">{{ deptName(currentWard?.deptId) }}</span>
+      <span
+        v-if="selectedWardId"
+        class="hint plan-summary"
+        :class="{ 'is-danger': overdueCount > 0 }"
+        :title="`预计出院日来自出院计划，只做床位协调与超期提醒，不阻断出院`"
+      >
+        今日预出院 <strong>{{ plannedTodayCount }}</strong> 人 · 超期未出院
+        <strong>{{ overdueCount }}</strong> 人
+      </span>
       <span class="spacer" />
       <button
         v-if="selectedWardId"
@@ -150,6 +159,7 @@
                   <th>床位</th>
                   <th>主治</th>
                   <th>入科时间</th>
+                  <th>预计出院</th>
                   <th>状态</th>
                   <th style="width: 236px">操作</th>
                 </tr>
@@ -164,6 +174,23 @@
                   </td>
                   <td data-label="主治">{{ a.attendingDoctor }}</td>
                   <td data-label="入科时间">{{ dateTime(a.admittedAt) }}</td>
+                  <td data-label="预计出院">
+                    <div class="plan-cell">
+                      <span v-if="a.plannedDischargeDate" :class="planTone(a)">
+                        {{ planLabel(a) }}
+                      </span>
+                      <span v-else class="muted">未设置</span>
+                      <button
+                        v-if="canDischarge && (a.status === 'IN_HOSPITAL' || a.status === 'ADMITTED')"
+                        class="link-btn"
+                        type="button"
+                        :disabled="busy"
+                        @click="openPlan(a)"
+                      >
+                        {{ a.plannedDischargeDate ? '调整' : '设置' }}
+                      </button>
+                    </div>
+                  </td>
                   <td data-label="状态"><StatusPill :value="a.status" /></td>
                   <td data-label="操作">
                     <div class="row-actions">
@@ -464,6 +491,14 @@
           <span v-if="!readiness.emrChecked" class="hint">
             病历归档未核查（电子病历未接入或暂不可达），点开患者可看逐项结论。
           </span>
+          <span class="hint">
+            今日预出院 <strong>{{ readiness.plannedTodayCount }}</strong> 人 ·
+            超期未出院
+            <strong :class="{ 'is-danger': readiness.overdueCount > 0 }">
+              {{ readiness.overdueCount }}
+            </strong>
+            人
+          </span>
         </div>
         <div v-if="readiness.items.length === 0" class="hint">该病区暂无在院患者。</div>
         <template v-else>
@@ -496,15 +531,35 @@
                   <span class="mono">{{ it.bedNo || '未分床' }}</span> ·
                   <span class="mono">{{ it.patientNo }}</span>
                   <span class="muted"> {{ it.admissionNo }}</span>
+                  <span v-if="it.overdueDays > 0" class="badge badge--danger">
+                    超期 {{ it.overdueDays }} 天
+                  </span>
+                  <span
+                    v-else-if="it.plannedDischargeDate === todayIso()"
+                    class="badge badge--warn"
+                  >
+                    今日预出院
+                  </span>
+                  <span
+                    v-else-if="it.plannedDischargeDate"
+                    class="badge badge--neutral"
+                  >
+                    计划 {{ it.plannedDischargeDate.slice(5) }}
+                  </span>
                 </div>
                 <div class="readiness-flags">
                   <span v-for="c in it.blockers" :key="c" class="badge badge--danger">
                     {{ checkCodeLabel(c) }}
                   </span>
-                  <span v-for="c in it.warnings" :key="c" class="badge badge--warn">
+                  <span v-for="c in visibleWarnings(it)" :key="c" class="badge badge--warn">
                     {{ checkCodeLabel(c) }}
                   </span>
-                  <span v-if="!it.blockers.length && !it.warnings.length" class="hint">无待处理项</span>
+                  <span
+                    v-if="!it.blockers.length && !visibleWarnings(it).length && !it.overdueDays"
+                    class="hint"
+                  >
+                    无待处理项
+                  </span>
                 </div>
               </div>
               <button class="btn btn--sm" type="button" @click="openDischargeFromReadiness(it)">处理</button>
@@ -532,6 +587,47 @@
           {{ printingReadiness ? '准备中…' : '打印交接单' }}
         </button>
         <button class="btn" type="button" @click="readinessOpen = false">关闭</button>
+      </template>
+    </AppModal>
+
+    <!-- 预计出院日（出院计划） -->
+    <AppModal
+      v-model="planOpen"
+      title="预计出院日"
+      :subtitle="planTarget ? `${planTarget.admissionNo} · ${planTarget.patientNo}` : ''"
+      width="460px"
+    >
+      <div class="stack">
+        <label class="field">
+          <span class="label">计划出院日期</span>
+          <input v-model="planDate" type="date" class="input" :disabled="planSaving" />
+          <span class="hint">
+            只用于床位协调与超期提醒，<strong>不阻断出院</strong>；病区看板按业务日期计算“今日预出院 / 超期”。
+          </span>
+        </label>
+        <p v-if="planTarget?.plannedDischargeDate" class="hint">
+          当前计划：{{ planTarget.plannedDischargeDate }}
+        </p>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" :disabled="planSaving" @click="planOpen = false">取消</button>
+        <button
+          v-if="planTarget?.plannedDischargeDate"
+          class="btn btn--danger"
+          type="button"
+          :disabled="planSaving"
+          @click="savePlan(null)"
+        >
+          清除计划
+        </button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          :disabled="planSaving || !planDate"
+          @click="savePlan(planDate)"
+        >
+          {{ planSaving ? '保存中…' : '保存' }}
+        </button>
       </template>
     </AppModal>
 
@@ -679,6 +775,47 @@ const freeBeds = computed(() => beds.value.filter((b) => b.status === 'FREE'))
 const activeCount = computed(() => admissions.value.length)
 const pendingAdmitCount = computed(() => admissions.value.filter((a) => a.status === 'ADMITTED').length)
 const unassignedCount = computed(() => admissions.value.filter((a) => !a.bedId).length)
+/** 今日计划出院 / 超期未出院：口径与服务端一致（只算 IN_HOSPITAL，按业务日期比较）。 */
+const plannedTodayCount = computed(
+  () =>
+    admissions.value.filter(
+      (a) => a.status === 'IN_HOSPITAL' && a.plannedDischargeDate === todayIso(),
+    ).length,
+)
+const overdueCount = computed(
+  () =>
+    admissions.value.filter(
+      (a) =>
+        a.status === 'IN_HOSPITAL' &&
+        !!a.plannedDischargeDate &&
+        a.plannedDischargeDate < todayIso(),
+    ).length,
+)
+
+/** 预计出院日展示：超期显示“超 N 天”，今日显示“今日”。 */
+function planLabel(a: AdmissionView): string {
+  const planned = a.plannedDischargeDate
+  if (!planned) return ''
+  if (a.status !== 'IN_HOSPITAL') return planned
+  const today = todayIso()
+  if (planned === today) return `${planned.slice(5)} 今日`
+  if (planned < today) {
+    const days = Math.max(
+      1,
+      Math.round((new Date(today).getTime() - new Date(planned).getTime()) / 86_400_000),
+    )
+    return `${planned.slice(5)} · 超 ${days} 天`
+  }
+  return planned
+}
+
+function planTone(a: AdmissionView): string {
+  const planned = a.plannedDischargeDate
+  if (!planned || a.status !== 'IN_HOSPITAL') return 'muted'
+  if (planned < todayIso()) return 'is-danger'
+  if (planned === todayIso()) return 'is-strong'
+  return ''
+}
 
 function deptName(id?: string) {
   if (!id) return ''
@@ -1183,6 +1320,14 @@ const CHECK_CODE_LABELS: Record<string, string> = {
   UNSTOPPED_LONG_ORDER: '长嘱未停',
   DISCHARGE_MED_PENDING: '带药未完成',
   EMR_ARCHIVE: '病历未归档',
+  OVERDUE_DISCHARGE: '超期未出院',
+}
+
+/** 超期在行内已有“超期 N 天”徽章，列表里不再重复一枚“超期未出院”。 */
+const OVERDUE_CODE = 'OVERDUE_DISCHARGE'
+
+function visibleWarnings(it: WardDischargeReadiness): string[] {
+  return it.warnings.filter((c) => c !== OVERDUE_CODE)
 }
 
 function checkCodeLabel(code: string): string {
@@ -1225,18 +1370,58 @@ function exportReadinessCsv() {
   const data = readiness.value
   const ward = currentWard.value
   if (!data || !ward || readinessRows.value.length === 0) return
-  const rows: string[][] = [['床位', '住院号', '病案号', '结论', '阻断项', '建议项']]
+  const rows: string[][] = [['床位', '住院号', '病案号', '预计出院', '结论', '阻断项', '建议项']]
   for (const it of readinessRows.value) {
     rows.push([
       it.bedNo || '未分床',
       it.admissionNo,
       it.patientNo,
+      it.plannedDischargeDate
+        ? `${it.plannedDischargeDate}${it.overdueDays > 0 ? `（超期 ${it.overdueDays} 天）` : ''}`
+        : '未设置',
       it.ready ? '可出院' : `${it.blockerCount} 项阻断`,
       it.blockers.map((c) => checkCodeLabel(c)).join('、') || '—',
-      it.warnings.map((c) => checkCodeLabel(c)).join('、') || '—',
+      visibleWarnings(it).map((c) => checkCodeLabel(c)).join('、') || '—',
     ])
   }
   downloadCsv(`出院预检-${ward.code}-${todayIso()}.csv`, rows)
+}
+
+/* ---------- 预计出院日（出院计划） ---------- */
+const planOpen = ref(false)
+const planTarget = ref<AdmissionView | null>(null)
+const planDate = ref('')
+const planSaving = ref(false)
+
+function openPlan(a: AdmissionView) {
+  planTarget.value = a
+  planDate.value = a.plannedDischargeDate ?? todayIso()
+  planOpen.value = true
+}
+
+/**
+ * 保存或清除计划日。
+ *
+ * <p>这里不做“不能早于入院日”的前端硬校验：入院时间可能因补录而调整，
+ * 最终以服务端业务日期为准；服务端 422 会把原因原样回显。
+ */
+async function savePlan(date: string | null) {
+  const target = planTarget.value
+  if (!target || planSaving.value) return
+  planSaving.value = true
+  try {
+    const updated = await clinicalApi.planAdmissionDischarge(target.id, date)
+    planOpen.value = false
+    toast.ok(
+      date ? '出院计划已更新' : '出院计划已清除',
+      `${updated.admissionNo} · ${date ? `计划 ${date} 出院` : '不再设置预计出院日'}`,
+    )
+    await reloadWard()
+  } catch (e) {
+    toast.error('出院计划保存失败', errorText(e))
+  } finally {
+    planSaving.value = false
+  }
 }
 
 /* ---------- 交接单打印（第 250 批） ---------- */
@@ -1267,22 +1452,31 @@ async function printReadiness() {
           <td class="mono">${esc(it.bedNo || '未分床')}</td>
           <td class="mono">${esc(it.patientNo)}</td>
           <td class="mono">${esc(it.admissionNo)}</td>
+          <td>${
+            it.plannedDischargeDate
+              ? esc(it.plannedDischargeDate) + (it.overdueDays > 0 ? `（超期 ${it.overdueDays} 天）` : '')
+              : '未设置'
+          }</td>
           <td>${it.ready ? '可出院' : `${it.blockerCount} 项阻断`}</td>
           <td>${it.blockers.length ? it.blockers.map((c) => esc(checkCodeLabel(c))).join('、') : '—'}</td>
-          <td>${it.warnings.length ? it.warnings.map((c) => esc(checkCodeLabel(c))).join('、') : '—'}</td>
+          <td>${visibleWarnings(it).length
+              ? visibleWarnings(it).map((c) => esc(checkCodeLabel(c))).join('、')
+              : '—'}</td>
         </tr>`,
       )
       .join('')
     const body = `
       <h1>病区出院预检交接单</h1>
       <div class="muted meta">${esc(ward.name)}（${esc(ward.code)}） · ${esc(dateTime(data.checkedAt))}
-        · 在院 ${data.total} 人 / 可出院 ${data.readyCount} 人 / 受阻 ${data.blockedCount} 人</div>
+        · 在院 ${data.total} 人 / 可出院 ${data.readyCount} 人 / 受阻 ${data.blockedCount} 人
+        · 今日预出院 ${data.plannedTodayCount} 人 / 超期 ${data.overdueCount} 人</div>
       <table class="items">
-        <thead><tr><th>床位</th><th>病案号</th><th>住院号</th><th>结论</th><th>阻断项</th><th>建议项</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="6" class="muted">该病区暂无在院患者</td></tr>'}</tbody>
+        <thead><tr><th>床位</th><th>病案号</th><th>住院号</th><th>预计出院</th><th>结论</th><th>阻断项</th><th>建议项</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" class="muted">该病区暂无在院患者</td></tr>'}</tbody>
       </table>
       <div class="foot">
         阻断项与出院门禁同口径，必须处理完才能出院；建议项不阻断出院。
+        预计出院日仅作床位协调，超期不阻断出院。
         ${data.emrChecked ? '' : '<br/>病历归档未核查：电子病历未接入或暂不可达。'}
         <br/>交班护士：__________　接班护士：__________
       </div>`
@@ -1667,6 +1861,37 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* 预计出院日：单元格内是“日期 + 调整”的紧凑组合，避免操作列继续变长 */
+.plan-summary strong {
+  font-weight: 600;
+}
+
+.plan-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent, #2563eb);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+.link-btn:disabled {
+  color: var(--muted, #98a2b3);
+  cursor: not-allowed;
 }
 
 .readiness-list {

@@ -24,6 +24,7 @@ import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingCorrectionView;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionReq;
 import com.medassist.clinical.web.ClinicalDtos.NursingExecutionView;
+import com.medassist.clinical.web.ClinicalDtos.PlannedDischargeReq;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadinessView;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.ErrorCode;
@@ -202,6 +203,25 @@ public class InpatientController {
         Permissions.require(permissions, BED_ASSIGN);
         guard.requireAdmission(scope, id);
         return ApiResponse.ok(PhiMask.admission(service.assignBed(id, req, actor), scope));
+    }
+
+    /**
+     * 设置/清除预计出院日（出院计划）。
+     *
+     * <p>与出院办理同权限：它是出院协调的一部分，能改“计划哪天走”的人
+     * 本就应当能看到出院结论；只做计划，不参与出院门禁。
+     */
+    @PostMapping("/inpatient/admissions/{id}/planned-discharge")
+    public ApiResponse<AdmissionView> planDischarge(
+            @PathVariable UUID id,
+            @RequestBody PlannedDischargeReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor,
+            DataScope scope) {
+        Permissions.require(permissions, DISCHARGE);
+        guard.requireAdmission(scope, id);
+        return ApiResponse.ok(PhiMask.admission(
+                service.planDischarge(id, req == null ? null : req.date(), actor), scope));
     }
 
     /**

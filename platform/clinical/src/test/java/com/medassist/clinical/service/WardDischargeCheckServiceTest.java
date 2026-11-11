@@ -9,12 +9,14 @@ import com.medassist.clinical.repo.ClinicalRepository;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeCount;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadiness;
 import com.medassist.clinical.web.ClinicalDtos.WardDischargeReadinessView;
+import com.medassist.common.time.BusinessTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -167,8 +169,8 @@ class WardDischargeCheckServiceTest {
     void summaryCountsBlockedInOneQuery() {
         UUID otherWard = UUID.randomUUID();
         when(repo.countDischargeByWards(any(), any(), any())).thenReturn(Map.of(
-                wardId, new ClinicalRepository.WardDischargeCounts(wardId, 10, 3),
-                otherWard, new ClinicalRepository.WardDischargeCounts(otherWard, 2, 0)));
+                wardId, new ClinicalRepository.WardDischargeCounts(wardId, 10, 3, 2, 1),
+                otherWard, new ClinicalRepository.WardDischargeCounts(otherWard, 2, 0, 0, 1)));
 
         var summary = service.summary(List.of(ward, ward(otherWard, "W02", "外科一病区")));
 
@@ -176,6 +178,8 @@ class WardDischargeCheckServiceTest {
         assertThat(summary.total()).isEqualTo(12);
         assertThat(summary.blocked()).isEqualTo(3);
         assertThat(summary.ready()).isEqualTo(9);
+        assertThat(summary.overdue()).isEqualTo(2);
+        assertThat(summary.plannedToday()).isEqualTo(2);
         assertThat(summary.wards()).extracting(WardDischargeCount::wardId)
                 .containsExactly(wardId, otherWard);
         assertThat(summary.wards().get(0).ready()).isEqualTo(7);
@@ -189,10 +193,10 @@ class WardDischargeCheckServiceTest {
         UUID w3 = UUID.randomUUID();
         UUID emptyWard = UUID.randomUUID();
         when(repo.countDischargeByWards(any(), any(), any())).thenReturn(Map.of(
-                wardId, new ClinicalRepository.WardDischargeCounts(wardId, 10, 3),
-                w2, new ClinicalRepository.WardDischargeCounts(w2, 6, 3),
-                w3, new ClinicalRepository.WardDischargeCounts(w3, 5, 5),
-                emptyWard, new ClinicalRepository.WardDischargeCounts(emptyWard, 0, 0)));
+                wardId, new ClinicalRepository.WardDischargeCounts(wardId, 10, 3, 2, 1),
+                w2, new ClinicalRepository.WardDischargeCounts(w2, 6, 3, 1, 2),
+                w3, new ClinicalRepository.WardDischargeCounts(w3, 5, 5, 3, 0),
+                emptyWard, new ClinicalRepository.WardDischargeCounts(emptyWard, 0, 0, 0, 0)));
 
         var summary = service.summary(List.of(
                 ward, ward(w2, "W02", "外科一病区"), ward(w3, "W03", "儿科病区"),
@@ -202,6 +206,8 @@ class WardDischargeCheckServiceTest {
         assertThat(summary.total()).isEqualTo(21);
         assertThat(summary.blocked()).isEqualTo(11);
         assertThat(summary.ready()).isEqualTo(10);
+        assertThat(summary.overdue()).isEqualTo(6);
+        assertThat(summary.plannedToday()).isEqualTo(3);
         assertThat(summary.wards()).extracting(WardDischargeCount::wardId)
                 .containsExactly(w3, wardId, w2);
         assertThat(summary.wards()).extracting(WardDischargeCount::ready)
@@ -218,6 +224,32 @@ class WardDischargeCheckServiceTest {
         verify(repo, times(0)).countDischargeByWards(any(), any(), any());
     }
 
+    @Test
+    @DisplayName("超期：计划日已过只作提醒项（不阻断），超期久的排在前面；今日预出院单独计数")
+    void overdueIsWarningAndSortsFirst() {
+        LocalDate today = BusinessTime.today();
+        Admission dueToday = admissionWithPlan(Admission.IN_HOSPITAL, bedReady, today);
+        Admission overdue = admissionWithPlan(Admission.IN_HOSPITAL, bedWarned, today.minusDays(3));
+        when(repo.listActiveAdmissions(wardId)).thenReturn(List.of(dueToday, overdue));
+
+        WardDischargeReadinessView view = service.check(wardId, "nurse01");
+
+        assertThat(view.overdueCount()).isEqualTo(1);
+        assertThat(view.plannedTodayCount()).isEqualTo(1);
+        assertThat(view.items()).extracting(WardDischargeReadiness::admissionId)
+                .containsExactly(overdue.id(), dueToday.id());
+
+        WardDischargeReadiness od = item(view, overdue.id());
+        assertThat(od.overdueDays()).isEqualTo(3);
+        assertThat(od.ready()).isTrue();
+        assertThat(od.blockers()).isEmpty();
+        assertThat(od.warnings()).containsExactly(WardDischargeCheckService.CODE_OVERDUE_DISCHARGE);
+
+        WardDischargeReadiness dt = item(view, dueToday.id());
+        assertThat(dt.overdueDays()).isZero();
+        assertThat(dt.warnings()).isEmpty();
+    }
+
     // ---------------------------------------------------------------- 构造
 
     private WardDischargeReadiness item(WardDischargeReadinessView view, UUID admissionId) {
@@ -230,8 +262,12 @@ class WardDischargeCheckServiceTest {
     }
 
     private Admission admission(String status, UUID bedId) {
+        return admissionWithPlan(status, bedId, null);
+    }
+
+    private Admission admissionWithPlan(String status, UUID bedId, LocalDate planned) {
         return new Admission(UUID.randomUUID(), "A-" + UUID.randomUUID().toString().substring(0, 4),
                 UUID.randomUUID(), UUID.randomUUID(), "P1", wardId, bedId, "doctor01",
-                status, Instant.now().minusSeconds(7200), null, 0L);
+                status, Instant.now().minusSeconds(7200), null, planned, 0L);
     }
 }

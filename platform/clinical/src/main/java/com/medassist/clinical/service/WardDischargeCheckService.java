@@ -18,6 +18,7 @@ import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -48,6 +49,9 @@ public class WardDischargeCheckService {
     private final EmrArchiveClient emrClient;
     private final ObjectMapper objectMapper;
 
+    /** 超期未出院：预计出院日已过且仍在院。只是提醒项，**不阻断**出院。 */
+    public static final String CODE_OVERDUE_DISCHARGE = "OVERDUE_DISCHARGE";
+
     public WardDischargeCheckService(ClinicalRepository repo, EmrArchiveClient emrClient,
                                      ObjectMapper objectMapper) {
         this.repo = repo;
@@ -62,7 +66,7 @@ public class WardDischargeCheckService {
         if (admissions.isEmpty()) {
             audit(actor, wardId, 0, 0, false);
             return new WardDischargeReadinessView(wardId, ward.name(), Instant.now(),
-                    0, 0, 0, false, List.of());
+                    0, 0, 0, false, 0, 0, List.of());
         }
 
         List<UUID> visitIds = admissions.stream().map(Admission::visitId).distinct().toList();
@@ -83,6 +87,8 @@ public class WardDischargeCheckService {
         boolean emrChecked = !emr.isEmpty();
 
         List<WardDischargeReadiness> items = new ArrayList<>(admissions.size());
+        int plannedToday = 0;
+        int overdue = 0;
         for (Admission a : admissions) {
             List<String> blockers = new ArrayList<>(3);
             List<String> warnings = new ArrayList<>(3);
@@ -108,19 +114,34 @@ public class WardDischargeCheckService {
             if (summary != null && (summary.total() == 0 || summary.unarchived() > 0)) {
                 warnings.add(DischargeCheckService.CODE_EMR_ARCHIVE);
             }
+            // 计划日只对在院患者有意义：登记未入科的人还没有临床路径，不该被“超期”追着跑
+            boolean inHospital = Admission.IN_HOSPITAL.equals(a.status());
+            LocalDate planned = a.plannedDischargeDate();
+            int overdueDays = 0;
+            if (planned != null && inHospital) {
+                if (planned.isBefore(today)) {
+                    overdueDays = (int) ChronoUnit.DAYS.between(planned, today);
+                    overdue++;
+                    warnings.add(CODE_OVERDUE_DISCHARGE);
+                } else if (planned.isEqual(today)) {
+                    plannedToday++;
+                }
+            }
             items.add(new WardDischargeReadiness(a.id(), a.admissionNo(), a.patientNo(),
                     a.bedId(), a.bedId() == null ? null : bedNos.get(a.bedId()), a.status(),
                     blockers.isEmpty(), blockers.size(), warnings.size(),
-                    List.copyOf(blockers), List.copyOf(warnings)));
+                    List.copyOf(blockers), List.copyOf(warnings), planned, overdueDays));
         }
-        // 走不了的排前面；同组按床号，未分床排最后
+        // 走不了的排前面；同样走不了时超期久的先处理；再按床号，未分床排最后
         items.sort(Comparator.comparing(WardDischargeReadiness::ready)
+                .thenComparing(Comparator.comparingInt(WardDischargeReadiness::overdueDays).reversed())
                 .thenComparing(i -> i.bedNo() == null ? "\uffff" : i.bedNo()));
 
         int ready = (int) items.stream().filter(WardDischargeReadiness::ready).count();
         audit(actor, wardId, items.size(), items.size() - ready, emrChecked);
         return new WardDischargeReadinessView(wardId, ward.name(), Instant.now(),
-                items.size(), ready, items.size() - ready, emrChecked, List.copyOf(items));
+                items.size(), ready, items.size() - ready, emrChecked, plannedToday, overdue,
+                List.copyOf(items));
     }
 
     // ---------------------------------------------------------------- 汇总
@@ -137,30 +158,36 @@ public class WardDischargeCheckService {
      */
     public DischargeReadinessSummary summary(List<Ward> wards) {
         if (wards == null || wards.isEmpty()) {
-            return new DischargeReadinessSummary(0, 0, 0, 0, List.of());
+            return new DischargeReadinessSummary(0, 0, 0, 0, 0, 0, List.of());
         }
         List<UUID> wardIds = wards.stream().map(Ward::id).toList();
         Map<UUID, ClinicalRepository.WardDischargeCounts> counts = repo.countDischargeByWards(
                 wardIds, BusinessTime.today(), BusinessTime.zone().getId());
         int total = 0;
         int blocked = 0;
+        int overdue = 0;
+        int plannedToday = 0;
         List<WardDischargeCount> rows = new ArrayList<>(wards.size());
         for (Ward ward : wards) {
             ClinicalRepository.WardDischargeCounts c = counts.get(ward.id());
             int wardTotal = c == null ? 0 : c.total();
             int wardBlocked = c == null ? 0 : c.blocked();
+            int wardOverdue = c == null ? 0 : c.overdue();
+            int wardPlannedToday = c == null ? 0 : c.plannedToday();
             total += wardTotal;
             blocked += wardBlocked;
+            overdue += wardOverdue;
+            plannedToday += wardPlannedToday;
             if (wardTotal > 0) {
                 rows.add(new WardDischargeCount(ward.id(), ward.name(),
-                        wardTotal, wardBlocked, wardTotal - wardBlocked));
+                        wardTotal, wardBlocked, wardTotal - wardBlocked, wardOverdue, wardPlannedToday));
             }
         }
         rows.sort(Comparator.comparing(WardDischargeCount::blocked).reversed()
                 .thenComparing(WardDischargeCount::total, Comparator.reverseOrder())
                 .thenComparing(WardDischargeCount::name));
         return new DischargeReadinessSummary(wards.size(), total, blocked, total - blocked,
-                List.copyOf(rows));
+                overdue, plannedToday, List.copyOf(rows));
     }
 
     // ---------------------------------------------------------------- 内部

@@ -54,6 +54,8 @@ const messages: Record<MessageKey, string> = {
   'todo.printAnomalyOverdue': '{n} overdue (7+ days)',
   'todo.dischargeBlocked': 'Discharges blocked',
   'todo.dischargeBlockedNote': '{ready} ready to discharge',
+  'todo.overdueDischarge': 'Overdue discharges',
+  'todo.overdueDischargeNote': '{planned} planned for discharge today',
 
   /* ---------- Idle timeout ---------- */
   'idle.title': 'Session ending soon',

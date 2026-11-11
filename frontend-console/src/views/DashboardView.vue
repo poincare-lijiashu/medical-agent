@@ -379,6 +379,12 @@
           <span v-if="blockedWardCount > 0" class="badge badge--warn">
             涉及 {{ blockedWardCount }} 个病区
           </span>
+          <span v-if="dischargeReadiness.overdue > 0" class="badge badge--danger">
+            超期未出院 {{ dischargeReadiness.overdue }} 人
+          </span>
+          <span v-if="dischargeReadiness.plannedToday > 0" class="badge badge--ok">
+            今日预出院 {{ dischargeReadiness.plannedToday }} 人
+          </span>
         </template>
         <span class="spacer" />
         <RouterLink
@@ -404,6 +410,7 @@
               <th>病区</th>
               <th class="is-num">在院</th>
               <th class="is-num">出院受阻</th>
+              <th class="is-num">超期未出院</th>
               <th class="is-num">待入科</th>
               <th class="is-num">床位占用</th>
             </tr>
@@ -420,6 +427,18 @@
                   :title="`${w.name}有 ${blockedByWard.get(w.id)} 人出院受阻，点击打开病区预检`"
                 >
                   {{ blockedByWard.get(w.id) }} 人
+                </RouterLink>
+                <span v-else-if="dischargeReadiness" class="muted">—</span>
+                <span v-else class="muted">未核查</span>
+              </td>
+              <td class="is-num" data-label="超期未出院">
+                <RouterLink
+                  v-if="(overdueByWard.get(w.id) ?? 0) > 0"
+                  class="badge badge--danger"
+                  :to="{ path: '/inpatient', query: { readiness: '1', ward: w.id } }"
+                  :title="`${w.name}有 ${overdueByWard.get(w.id)} 人预计出院日已过，点击打开病区预检`"
+                >
+                  {{ overdueByWard.get(w.id) }} 人
                 </RouterLink>
                 <span v-else-if="dischargeReadiness" class="muted">—</span>
                 <span v-else class="muted">未核查</span>
@@ -579,6 +598,12 @@ const blockedByWard = computed(() => {
 const blockedWardCount = computed(
   () => (dischargeReadiness.value?.wards ?? []).filter((w) => w.blocked > 0).length,
 )
+/** 病区 → 超期未出院人数（预计出院日已过且仍在院）。 */
+const overdueByWard = computed(() => {
+  const map = new Map<string, number>()
+  for (const w of dischargeReadiness.value?.wards ?? []) map.set(w.wardId, w.overdue)
+  return map
+})
 
 const pendingPrescriptions = computed(
   () => prescriptionSummary.value.PENDING_REVIEW ?? prescriptionSummary.value.REVIEWED ?? 0,

@@ -239,6 +239,41 @@ public class InpatientService {
         return toView(repo.findAdmission(a.id()).orElseThrow());
     }
 
+    // ---------------------------------------------------------------- 预计出院日
+
+    /**
+     * 设置或清除预计出院日（出院计划）。
+     *
+     * <p>为什么单独一个动作而不是塞进入院/分床：预计出院日会随病情反复调整，
+     * 每次调整都要留痕；它也不参与出院门禁，改错一天不该影响能否出院。
+     *
+     * <p>校验只拦“明显不可能”：早于入院日。允许设成过去日期——补录历史计划后
+     * 立刻显示“超期 N 天”正是护士站需要的提醒，而不是错误。
+     */
+    @Transactional
+    public AdmissionView planDischarge(UUID admissionId, LocalDate date, String actor) {
+        Admission a = repo.lockAdmission(admissionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "住院登记不存在"));
+        if (!a.active()) {
+            throw new BusinessException(ErrorCode.CONFLICT, "该住院登记已出院或已取消，不能调整出院计划");
+        }
+        LocalDate admittedDay = a.admittedAt() == null ? null
+                : a.admittedAt().atZone(BusinessTime.zone()).toLocalDate();
+        if (date != null && admittedDay != null && date.isBefore(admittedDay)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "预计出院日不能早于入院日（" + admittedDay + "）");
+        }
+        if (!repo.updatePlannedDischargeDate(a.id(), date, a.version())) {
+            throw new BusinessException(ErrorCode.CONFLICT, "住院登记已被他人修改，请刷新后重试");
+        }
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("admissionNo", a.admissionNo());
+        detail.put("from", a.plannedDischargeDate() == null ? "" : a.plannedDischargeDate().toString());
+        detail.put("to", date == null ? "" : date.toString());
+        audit(actor, "PLAN_DISCHARGE", "ADMISSION", a.id().toString(), detail);
+        return toView(repo.findAdmission(a.id()).orElseThrow());
+    }
+
     // ---------------------------------------------------------------- 出院
 
     /**
@@ -449,7 +484,8 @@ public class InpatientService {
                 visit == null ? "" : visit.visitNo(), a.patientId(), a.patientNo(),
                 a.wardId(), ward == null ? "" : ward.name(),
                 a.bedId(), bed == null ? "" : bed.bedNo(),
-                a.attendingDoctor(), a.status(), a.admittedAt(), a.dischargedAt());
+                a.attendingDoctor(), a.status(), a.admittedAt(), a.dischargedAt(),
+                a.plannedDischargeDate());
     }
 
     private void audit(String actor, String action, String targetType, String targetId,

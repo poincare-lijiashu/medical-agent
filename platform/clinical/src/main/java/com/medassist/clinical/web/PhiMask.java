@@ -56,7 +56,7 @@ final class PhiMask {
         return new AdmissionView(a.id(), a.admissionNo(), a.visitId(), a.visitNo(),
                 a.patientId(), scope.maskPatientNo(a.patientNo()), a.wardId(), a.wardName(),
                 a.bedId(), a.bedNo(), a.attendingDoctor(), a.status(),
-                a.admittedAt(), a.dischargedAt());
+                a.admittedAt(), a.dischargedAt(), a.plannedDischargeDate());
     }
 
     static InpatientAlert alert(InpatientAlert a, DataScope scope) {

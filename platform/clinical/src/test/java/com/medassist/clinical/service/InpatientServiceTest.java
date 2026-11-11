@@ -13,6 +13,7 @@ import com.medassist.clinical.web.ClinicalDtos.AdmitReq;
 import com.medassist.clinical.web.ClinicalDtos.AssignBedReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.common.time.BusinessTime;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -318,5 +319,76 @@ class InpatientServiceTest {
                 .isEqualTo(ErrorCode.CHARGE_STATUS_INVALID);
 
         verify(repo, never()).stopUnstoppedLongOrders(any(), any(), anyString(), anyString());
+    }
+
+    // ---------------------------------------------------------------- 预计出院日
+
+    @Test
+    @DisplayName("预计出院日：写入成功并留痕（旧值→新值），视图回带计划日")
+    void planDischargeUpdatesAndAudits() {
+        UUID admissionId = UUID.randomUUID();
+        UUID visitId = UUID.randomUUID();
+        LocalDate admittedDay = BusinessTime.today().minusDays(2);
+        Admission a = new Admission(admissionId, "A1", visitId, patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL,
+                admittedDay.atStartOfDay(BusinessTime.zone()).toInstant(), null, 4L);
+        LocalDate target = BusinessTime.today().plusDays(2);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+        when(repo.updatePlannedDischargeDate(admissionId, target, 4L)).thenReturn(true);
+        when(repo.findAdmission(admissionId)).thenReturn(Optional.of(new Admission(
+                admissionId, "A1", visitId, patientId, "P1", wardId, null, "doctor01",
+                Admission.IN_HOSPITAL, a.admittedAt(), null, target, 5L)));
+        when(repo.findVisit(visitId)).thenReturn(Optional.of(visit(Visit.IN_TREATMENT)));
+
+        AdmissionView v = service.planDischarge(admissionId, target, "doctor01");
+
+        assertThat(v.plannedDischargeDate()).isEqualTo(target);
+        verify(repo).updatePlannedDischargeDate(admissionId, target, 4L);
+        verify(repo).logChange(eq("doctor01"), eq("PLAN_DISCHARGE"), eq("ADMISSION"),
+                eq(admissionId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("预计出院日：早于入院日 422，且不落库")
+    void planDischargeRejectsBeforeAdmission() {
+        UUID admissionId = UUID.randomUUID();
+        LocalDate admittedDay = BusinessTime.today().minusDays(1);
+        Admission a = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1", wardId,
+                null, "doctor01", Admission.IN_HOSPITAL,
+                admittedDay.atStartOfDay(BusinessTime.zone()).toInstant(), null, 1L);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(a));
+
+        assertThatThrownBy(() -> service.planDischarge(admissionId, admittedDay.minusDays(1), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不能早于入院日")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.VALIDATION_FAILED);
+        verify(repo, never()).updatePlannedDischargeDate(any(), any(), anyLong());
+    }
+
+    @Test
+    @DisplayName("预计出院日：已出院不可改；并发版本冲突转 409")
+    void planDischargeRejectsInactiveAndStale() {
+        UUID admissionId = UUID.randomUUID();
+        Admission discharged = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1",
+                wardId, null, "doctor01", Admission.DISCHARGED, Instant.now(), Instant.now(), 2L);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(discharged));
+
+        assertThatThrownBy(() -> service.planDischarge(admissionId, BusinessTime.today(), "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        verify(repo, never()).updatePlannedDischargeDate(any(), any(), anyLong());
+
+        Admission active = new Admission(admissionId, "A1", UUID.randomUUID(), patientId, "P1",
+                wardId, null, "doctor01", Admission.IN_HOSPITAL, Instant.now(), null, 3L);
+        when(repo.lockAdmission(admissionId)).thenReturn(Optional.of(active));
+        when(repo.updatePlannedDischargeDate(admissionId, null, 3L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.planDischarge(admissionId, null, "doctor01"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已被他人修改")
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.CONFLICT);
     }
 }

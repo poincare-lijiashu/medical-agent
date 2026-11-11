@@ -77,14 +77,28 @@ export async function loadTodoItems(): Promise<TodoItem[]> {
   if (hasPermission('inpatient:read')) {
     // 第 248 批：出院受阻人数（口径与出院门禁一致）；入口是住院工作台，
     // 点进去后按病区看“出院预检”，不会出现“有角标没入口”。
+    // 第 252 批：超期未出院与受阻共用同一次汇总请求，避免角标刷新时打两遍重查询。
+    let readiness: ReturnType<typeof clinicalApi.dischargeReadinessSummary> | null = null
+    const loadReadiness = () =>
+      (readiness ??= clinicalApi.dischargeReadinessSummary())
     jobs.push(
       tally('dischargeBlocked', t('todo.dischargeBlocked'), '/inpatient?readiness=1', async () => {
-        const data = await clinicalApi.dischargeReadinessSummary()
+        const data = await loadReadiness()
         return {
           count: data.blocked ?? 0,
           note:
             data.blocked > 0
               ? t('todo.dischargeBlockedNote', { ready: String(data.ready ?? 0) })
+              : undefined,
+        }
+      }),
+      tally('overdueDischarge', t('todo.overdueDischarge'), '/inpatient?readiness=1', async () => {
+        const data = await loadReadiness()
+        return {
+          count: data.overdue ?? 0,
+          note:
+            data.overdue > 0
+              ? t('todo.overdueDischargeNote', { planned: String(data.plannedToday ?? 0) })
               : undefined,
         }
       }),

@@ -209,6 +209,25 @@ class InpatientControllerPermissionTest {
     }
 
     @Test
+    @DisplayName("预计出院日：缺出院权限 403；有权限时先校验病区范围再写")
+    void plannedDischargeRequiresDischargePermission() {
+        var req = new com.medassist.clinical.web.ClinicalDtos.PlannedDischargeReq(
+                java.time.LocalDate.now());
+
+        assertThatThrownBy(() -> controller.planDischarge(admissionId, req,
+                "inpatient:read", "doctor01", scope))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.FORBIDDEN);
+        verify(service, never()).planDischarge(any(), any(), anyString());
+
+        controller.planDischarge(admissionId, req, "inpatient:admission:discharge", "doctor01", scope);
+
+        verify(guard).requireAdmission(scope, admissionId);
+        verify(service).planDischarge(admissionId, req.date(), "doctor01");
+    }
+
+    @Test
     @DisplayName("权限头为空：提示重新登录（403，不误报 401）")
     void emptyPermissionsHeaderIsForbidden() {
         assertThatThrownBy(() -> controller.finance(admissionId, null, "clerk01", scope))

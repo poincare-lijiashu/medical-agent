@@ -355,6 +355,8 @@ export interface AdmissionView {
   status: string
   admittedAt: string | null
   dischargedAt: string | null
+  /** 预计出院日（业务日期，仅用于床位计划与超期预警，不参与出院门禁）。 */
+  plannedDischargeDate: string | null
   version: number
 }
 
@@ -457,6 +459,10 @@ export interface WardDischargeReadiness {
   warningCount: number
   blockers: string[]
   warnings: string[]
+  /** 预计出院日；未设置时为 null。 */
+  plannedDischargeDate: string | null
+  /** 超期天数（计划日早于今天且仍在院时为正，否则 0）。 */
+  overdueDays: number
 }
 
 /** 病区出院预检（只读批量）；emrChecked=false 表示病历归档未核查。 */
@@ -468,6 +474,8 @@ export interface WardDischargeReadinessView {
   readyCount: number
   blockedCount: number
   emrChecked: boolean
+  plannedTodayCount: number
+  overdueCount: number
   items: WardDischargeReadiness[]
 }
 
@@ -477,6 +485,10 @@ export interface DischargeReadinessSummary {
   total: number
   blocked: number
   ready: number
+  /** 超期未出院人数（预计出院日已过且仍在院）。 */
+  overdue: number
+  /** 今日计划出院人数。 */
+  plannedToday: number
   /** 病区下钻：只含有在院患者的病区，受阻多的在前。 */
   wards: WardDischargeCount[]
 }
@@ -488,6 +500,8 @@ export interface WardDischargeCount {
   total: number
   blocked: number
   ready: number
+  overdue: number
+  plannedToday: number
 }
 
 /** 护理执行记录（长嘱逐日执行，追加式）。 */

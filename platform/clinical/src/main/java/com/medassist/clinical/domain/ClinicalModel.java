@@ -669,15 +669,33 @@ public final class ClinicalModel {
         }
     }
 
-    /** 住院登记。 */
+    /**
+     * 住院登记。
+     *
+     * @param plannedDischargeDate 预计出院日（业务日期，仅用于床位计划与超期预警，不阻断出院）
+     */
     public record Admission(UUID id, String admissionNo, UUID visitId, UUID patientId,
                             String patientNo, UUID wardId, UUID bedId, String attendingDoctor,
-                            String status, Instant admittedAt, Instant dischargedAt, long version) {
+                            String status, Instant admittedAt, Instant dischargedAt,
+                            LocalDate plannedDischargeDate, long version) {
 
         public static final String ADMITTED = "ADMITTED";
         public static final String IN_HOSPITAL = "IN_HOSPITAL";
         public static final String DISCHARGED = "DISCHARGED";
         public static final String CANCELLED = "CANCELLED";
+
+        /**
+         * 兼容构造：计划出院日是第 252 批新增的可选字段。
+         *
+         * <p>保留旧签名，避免历史调用点（含大量单测）为了一个可空列全部改写；
+         * 新代码需要计划日时直接用全参构造。
+         */
+        public Admission(UUID id, String admissionNo, UUID visitId, UUID patientId,
+                         String patientNo, UUID wardId, UUID bedId, String attendingDoctor,
+                         String status, Instant admittedAt, Instant dischargedAt, long version) {
+            this(id, admissionNo, visitId, patientId, patientNo, wardId, bedId, attendingDoctor,
+                    status, admittedAt, dischargedAt, null, version);
+        }
 
         public boolean active() {
             return ADMITTED.equals(status) || IN_HOSPITAL.equals(status);

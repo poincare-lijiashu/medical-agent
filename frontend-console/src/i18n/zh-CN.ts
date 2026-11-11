@@ -57,6 +57,8 @@ const messages = {
   'todo.printAnomalyOverdue': '其中 {n} 条超 7 天未核查',
   'todo.dischargeBlocked': '出院受阻患者',
   'todo.dischargeBlockedNote': '另有 {ready} 人可出院',
+  'todo.overdueDischarge': '超期未出院',
+  'todo.overdueDischargeNote': '今日计划出院 {planned} 人',
 
   /* ---------- 空闲超时 ---------- */
   'idle.title': '会话即将结束',

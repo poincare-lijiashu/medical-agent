@@ -1009,8 +1009,16 @@ public class ClinicalRepository {
         return out;
     }
 
-    /** 病区维度的在院 / 出院受阻计数（一次 SQL 取回，供预检汇总与驾驶舱共用）。 */
-    public record WardDischargeCounts(UUID wardId, int total, int blocked) {
+    /**
+     * 病区维度的在院 / 出院受阻 / 超期 / 今日预出院计数（一次 SQL 取回）。
+     *
+     * @param total        在院患者数
+     * @param blocked      出院受阻人数（账单/医嘱三类阻断）
+     * @param overdue      预计出院日已过仍未办理的人数
+     * @param plannedToday 预计出院日为今天的人数
+     */
+    public record WardDischargeCounts(UUID wardId, int total, int blocked, int overdue,
+                                      int plannedToday) {
     }
 
     /**
@@ -1038,10 +1046,19 @@ public class ClinicalRepository {
         List<WardDischargeCounts> rows = jdbc.sql("""
                         SELECT w.ward_id,
                                coalesce(t.total, 0)::int AS total,
-                               coalesce(b.blocked, 0)::int AS blocked
+                               coalesce(b.blocked, 0)::int AS blocked,
+                               coalesce(t.overdue, 0)::int AS overdue,
+                               coalesce(t.planned_today, 0)::int AS planned_today
                           FROM (SELECT unnest(CAST(:wardIds AS uuid[])) AS ward_id) w
                           LEFT JOIN (
-                                SELECT a.ward_id, count(*) AS total
+                                SELECT a.ward_id, count(*) AS total,
+                                       count(*) FILTER (
+                                           WHERE a.planned_discharge_date IS NOT NULL
+                                             AND a.planned_discharge_date < CAST(:today AS date)
+                                       ) AS overdue,
+                                       count(*) FILTER (
+                                           WHERE a.planned_discharge_date = CAST(:today AS date)
+                                       ) AS planned_today
                                   FROM clinical_svc.admission a
                                  WHERE a.ward_id = ANY(CAST(:wardIds AS uuid[]))
                                    AND a.status = 'IN_HOSPITAL'
@@ -1104,7 +1121,9 @@ public class ClinicalRepository {
                 .query((rs, i) -> new WardDischargeCounts(
                         rs.getObject("ward_id", UUID.class),
                         rs.getInt("total"),
-                        rs.getInt("blocked")))
+                        rs.getInt("blocked"),
+                        rs.getInt("overdue"),
+                        rs.getInt("planned_today")))
                 .list();
         Map<UUID, WardDischargeCounts> out = new LinkedHashMap<>();
         for (WardDischargeCounts row : rows) {
@@ -2354,6 +2373,7 @@ public class ClinicalRepository {
             rs.getObject("bed_id", UUID.class), rs.getString("attending_doctor"),
             rs.getString("status"), rs.getTimestamp("admitted_at").toInstant(),
             rs.getTimestamp("discharged_at") == null ? null : rs.getTimestamp("discharged_at").toInstant(),
+            rs.getObject("planned_discharge_date", LocalDate.class),
             rs.getLong("version"));
 
     public Optional<Ward> findWard(UUID id) {
@@ -2520,7 +2540,7 @@ public class ClinicalRepository {
     public Optional<Admission> findAdmissionByNo(String admissionNo) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission WHERE admission_no = ?
                         """).param(admissionNo).query(ADMISSION_MAPPER).optional();
     }
@@ -2528,7 +2548,7 @@ public class ClinicalRepository {
     public Optional<Admission> findAdmission(UUID id) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission WHERE id = ?
                         """).param(id).query(ADMISSION_MAPPER).optional();
     }
@@ -2537,7 +2557,7 @@ public class ClinicalRepository {
     public Optional<Admission> lockAdmission(UUID id) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission WHERE id = ? FOR UPDATE
                         """).param(id).query(ADMISSION_MAPPER).optional();
     }
@@ -2552,7 +2572,7 @@ public class ClinicalRepository {
     public Optional<Admission> lockActiveAdmissionByVisit(UUID visitId) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission
                          WHERE visit_id = :visitId AND status IN ('ADMITTED', 'IN_HOSPITAL')
                            FOR UPDATE
@@ -2562,7 +2582,7 @@ public class ClinicalRepository {
     public Optional<Admission> findActiveAdmissionByVisit(UUID visitId) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission
                          WHERE visit_id = :visitId AND status IN ('ADMITTED', 'IN_HOSPITAL')
                         """).param("visitId", visitId).query(ADMISSION_MAPPER).optional();
@@ -2576,7 +2596,7 @@ public class ClinicalRepository {
     public Optional<Admission> findLatestAdmissionByVisit(UUID visitId) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission
                          WHERE visit_id = :visitId
                          ORDER BY admitted_at DESC
@@ -2587,13 +2607,15 @@ public class ClinicalRepository {
     public Optional<Admission> findActiveAdmissionByPatient(UUID patientId) {
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission
                          WHERE patient_id = :patientId AND status IN ('ADMITTED', 'IN_HOSPITAL')
                         """).param("patientId", patientId).query(ADMISSION_MAPPER).optional();
     }
 
-    /** 更新床位（CAS）；用于分床/转床。首次分床同时把 ADMITTED 提升为 IN_HOSPITAL。 */
+    /**
+     * 更新床位（CAS）；用于分床/转床。首次分床同时把 ADMITTED 提升为 IN_HOSPITAL。
+     */
     public boolean updateAdmissionBed(UUID id, UUID bedId, long expectedVersion) {
         return jdbc.sql("""
                         UPDATE clinical_svc.admission
@@ -2603,6 +2625,23 @@ public class ClinicalRepository {
                          WHERE id = :id AND version = :version AND status IN ('ADMITTED', 'IN_HOSPITAL')
                         """)
                 .param("bedId", bedId).param("id", id).param("version", expectedVersion).update() > 0;
+    }
+
+    /**
+     * 更新预计出院日（CAS）；{@code date} 为 null 表示清除计划。
+     *
+     * <p>只允许改在院登记：已出院/已取消的病历是历史事实，回头改“当时计划哪天走”
+     * 会让超期统计失去意义。
+     */
+    public boolean updatePlannedDischargeDate(UUID id, LocalDate date, long expectedVersion) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.admission
+                           SET planned_discharge_date = :date,
+                               version = version + 1, updated_at = now()
+                         WHERE id = :id AND version = :version
+                           AND status IN ('ADMITTED', 'IN_HOSPITAL')
+                        """)
+                .param("date", date).param("id", id).param("version", expectedVersion).update() > 0;
     }
 
     /**
@@ -2653,7 +2692,7 @@ public class ClinicalRepository {
         if (wardId == null) {
             return jdbc.sql("""
                             SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                                   attending_doctor, status, admitted_at, discharged_at, version
+                                   attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                               FROM clinical_svc.admission
                              WHERE status IN ('ADMITTED', 'IN_HOSPITAL')
                              ORDER BY admitted_at DESC
@@ -2661,7 +2700,7 @@ public class ClinicalRepository {
         }
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission
                          WHERE ward_id = :wardId AND status IN ('ADMITTED', 'IN_HOSPITAL')
                          ORDER BY admitted_at DESC
@@ -2672,14 +2711,14 @@ public class ClinicalRepository {
         if (wardId == null) {
             return jdbc.sql("""
                             SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                                   attending_doctor, status, admitted_at, discharged_at, version
+                                   attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                               FROM clinical_svc.admission WHERE status = :status
                              ORDER BY admitted_at DESC
                             """).param("status", status).query(ADMISSION_MAPPER).list();
         }
         return jdbc.sql("""
                         SELECT id, admission_no, visit_id, patient_id, patient_no, ward_id, bed_id,
-                               attending_doctor, status, admitted_at, discharged_at, version
+                               attending_doctor, status, admitted_at, discharged_at, planned_discharge_date, version
                           FROM clinical_svc.admission
                          WHERE ward_id = :wardId AND status = :status
                          ORDER BY admitted_at DESC

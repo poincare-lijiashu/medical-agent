@@ -208,7 +208,16 @@ public final class ClinicalDtos {
     public record AdmissionView(UUID id, String admissionNo, UUID visitId, String visitNo,
                                 UUID patientId, String patientNo, UUID wardId, String wardName,
                                 UUID bedId, String bedNo, String attendingDoctor, String status,
-                                java.time.Instant admittedAt, java.time.Instant dischargedAt) {
+                                java.time.Instant admittedAt, java.time.Instant dischargedAt,
+                                LocalDate plannedDischargeDate) {
+    }
+
+    /**
+     * 设置/清除预计出院日。
+     *
+     * <p>{@code date} 为 null 表示清除计划；病区排班、超期统计都以业务日期为准。
+     */
+    public record PlannedDischargeReq(LocalDate date) {
     }
 
     /** 按日计费结果（当日新计金额 + 收费单累计 + 因未执行而跳过的医嘱）。 */
@@ -328,6 +337,7 @@ public final class ClinicalDtos {
     public record WardDischargeReadinessView(
             UUID wardId, String wardName, Instant checkedAt,
             int total, int readyCount, int blockedCount, boolean emrChecked,
+            int plannedTodayCount, int overdueCount,
             List<WardDischargeReadiness> items) {
     }
 
@@ -336,12 +346,15 @@ public final class ClinicalDtos {
      *
      * @param blockers 阻断项机器码（与单患者体检同码，前端按码翻译）
      * @param warnings 建议项机器码
+     * @param plannedDischargeDate 预计出院日（未设置时为 null）
+     * @param overdueDays 超期天数（计划日早于今天且仍在院时为正；否则 0）
      */
     public record WardDischargeReadiness(
             UUID admissionId, String admissionNo, String patientNo,
             UUID bedId, String bedNo, String status, boolean ready,
             int blockerCount, int warningCount,
-            List<String> blockers, List<String> warnings) {
+            List<String> blockers, List<String> warnings,
+            LocalDate plannedDischargeDate, int overdueDays) {
     }
 
     /**
@@ -351,9 +364,12 @@ public final class ClinicalDtos {
      * @param total     在院患者数（只算 IN_HOSPITAL，不含登记未入科）
      * @param blocked   出院受阻人数（账单/医嘱三类阻断；不含“状态异常”）
      * @param ready     可出院人数（total − blocked）
+     * @param overdue   超期未出院人数（预计出院日已过且仍在院）
+     * @param plannedToday 今日计划出院人数
      * @param wards     按病区下钻（只含有在院患者的病区，受阻多的在前）
      */
     public record DischargeReadinessSummary(int wardCount, int total, int blocked, int ready,
+                                            int overdue, int plannedToday,
                                             List<WardDischargeCount> wards) {
     }
 
@@ -363,8 +379,11 @@ public final class ClinicalDtos {
      * @param total   该病区在院患者数
      * @param blocked 该病区出院受阻人数
      * @param ready   该病区可出院人数（total − blocked）
+     * @param overdue 该病区超期未出院人数
+     * @param plannedToday 该病区今日计划出院人数
      */
-    public record WardDischargeCount(UUID wardId, String name, int total, int blocked, int ready) {
+    public record WardDischargeCount(UUID wardId, String name, int total, int blocked, int ready,
+                                     int overdue, int plannedToday) {
     }
 
     // ---------------------------------------------------------------- 护理执行记录

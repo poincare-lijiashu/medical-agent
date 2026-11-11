@@ -33,7 +33,7 @@ class PhiMaskTest {
     private AdmissionView admission() {
         return new AdmissionView(UUID.randomUUID(), "A001", UUID.randomUUID(), "V001",
                 UUID.randomUUID(), "P20260101000001", UUID.randomUUID(), "一病区",
-                UUID.randomUUID(), "01", "doctor01", "IN_HOSPITAL", null, null);
+                UUID.randomUUID(), "01", "doctor01", "IN_HOSPITAL", null, null, null);
     }
 
     @Test

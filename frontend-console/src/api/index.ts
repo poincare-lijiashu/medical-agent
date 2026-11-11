@@ -382,6 +382,8 @@ export const clinicalApi = {
     post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/bed`, { bedId, reason }),
   dischargeAdmission: (admissionId: string) =>
     post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/discharge`),
+  planAdmissionDischarge: (admissionId: string, date: string | null) =>
+    post<AdmissionView>(`/clinical/inpatient/admissions/${admissionId}/planned-discharge`, { date }),
   dischargeCheck: (admissionId: string) =>
     get<DischargeCheckView>(`/clinical/inpatient/admissions/${admissionId}/discharge-check`),
   wardDischargeReadiness: (wardId: string) =>
