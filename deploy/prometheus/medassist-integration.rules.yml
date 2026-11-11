@@ -1,0 +1,84 @@
+# ============================================================================
+# MedAssist · 集成通道告警（第 258 批）
+#
+# 指标来源：clinical 服务 /actuator/prometheus
+#   medassist_integration_queue{status="PENDING|FAILED|DEAD"}         出站队列深度
+#   medassist_integration_inbound_queue{status="RECEIVED|FAILED"}     入站待处理/失败
+#   medassist_integration_outbound_total{result="acked|failed|dead"}  出站结果计数
+#   medassist_integration_inbound_total{result="accepted|duplicate|conflict|failed"}
+#
+# 设计原则：DEAD 必须人工处理；FAILED/PENDING 积压先提示而不是自动重投，
+# 避免对端故障期间把压力放大。所有阈值都可用 PromQL 按医院规模调整。
+# ============================================================================
+groups:
+  - name: medassist-integration
+    rules:
+      - alert: MedAssistIntegrationDeadLetter
+        expr: medassist_integration_queue{status="DEAD"} > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "集成消息进入 DEAD（需人工处理）"
+          description: "当前 {{ $value }} 条消息已超过最大重试次数；请到集成台账按 last_error 定位对端/配置问题，处理后人工重投。"
+
+      - alert: MedAssistIntegrationFailedBacklog
+        expr: medassist_integration_queue{status="FAILED"} > 20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "集成失败队列积压"
+          description: "当前 {{ $value }} 条失败待重试；请检查对端可达性、HL7 接入地址与最近错误，不要盲目批量重投。"
+
+      - alert: MedAssistIntegrationPendingBacklog
+        expr: medassist_integration_queue{status="PENDING"} > 200
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "集成待发队列积压（worker 可能停摆）"
+          description: "当前 {{ $value }} 条待发；请检查 IntegrationDispatchWorker 是否运行、数据库连接与对端吞吐。"
+
+      - alert: MedAssistIntegrationOutboundFailureRateHigh
+        expr: |
+          (
+            sum(rate(medassist_integration_outbound_total{result=~"failed|dead"}[15m]))
+            /
+            clamp_min(sum(rate(medassist_integration_outbound_total[15m])), 0.001)
+          ) > 0.2
+          and
+          sum(increase(medassist_integration_outbound_total{result=~"failed|dead"}[15m])) >= 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "集成出站失败率超过 20%"
+          description: "近 15 分钟失败率 {{ $value }}；请按 system 与 last_error 区分网络、对端拒绝与配置缺失。"
+
+      - alert: MedAssistIntegrationInboundBacklog
+        expr: medassist_integration_inbound_queue{status="RECEIVED"} > 100
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "入站消息长期未处理"
+          description: "当前 {{ $value }} 条入站消息停在 RECEIVED；请检查对应业务的 InboundMessageProcessor 是否注册、是否持续失败。"
+
+      - alert: MedAssistIntegrationInboundFailed
+        expr: medassist_integration_inbound_queue{status="FAILED"} > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "存在处理失败的入站消息"
+          description: "当前 {{ $value }} 条失败；原始报文已保留，请修复处理器后重放，不要要求对端改消息控制号。"
+
+      - alert: MedAssistIntegrationMetricsAbsent
+        expr: absent(medassist_integration_queue{status="PENDING"})
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "集成指标缺失（抓取失败或服务未启动）"
+          description: "连续 15 分钟没有集成队列指标；请检查 clinical 服务 /actuator/prometheus 是否可抓取、服务是否在运行。"

@@ -231,6 +231,8 @@ const messages: Record<MessageKey, string> = {
   'nav.report-subscriptions.hint': 'Scheduled operations reports, log and webhook channels, delivery log and manual resend',
   'nav.his-workbench.title': 'HIS Integration',
   'nav.his-workbench.hint': 'Integration self-check: adapter status, patient index and order reads, inline read-only AI review',
+  'nav.integration.title': 'Integration Operations',
+  'nav.integration.hint': 'Outbound ledger, inbound idempotency, backoff and DEAD letters, retry and reconciliation',
   'nav.system.title': 'System Administration',
   'nav.system.hint': 'Accounts and roles, organization and department binding, cross-domain audit log',
   'nav.print-history.title': 'Print Audit Trail',

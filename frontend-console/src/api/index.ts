@@ -25,6 +25,10 @@ import type {
   HandoverSaveBody,
   HandoverStatusSummary,
   HandoverView,
+  InboundMessageView,
+  InboundSummary,
+  IntegrationMessageView,
+  IntegrationSummary,
   DispenseView,
   EmergencyBed,
   EmergencyBoard,
@@ -405,6 +409,14 @@ export const clinicalApi = {
     post<HandoverView>(`/clinical/wards/${wardId}/handover/sign`, body),
   closeHandoverTask: (wardId: string, taskId: string, note?: string) =>
     post<void>(`/clinical/wards/${wardId}/handover/tasks/${taskId}/close`, { note }),
+  integrationMessages: (params?: { status?: string; system?: string; limit?: number }) =>
+    get<IntegrationMessageView[]>('/clinical/integration/messages', params),
+  integrationSummary: () => get<IntegrationSummary>('/clinical/integration/messages/summary'),
+  retryIntegrationMessage: (id: string) =>
+    post<IntegrationMessageView>(`/clinical/integration/messages/${id}/retry`),
+  inboundMessages: (params?: { status?: string; system?: string; limit?: number }) =>
+    get<InboundMessageView[]>('/clinical/integration/inbound', params),
+  inboundSummary: () => get<InboundSummary>('/clinical/integration/inbound/summary'),
   admissions: (wardId: string, status?: string) =>
     get<AdmissionView[]>(`/clinical/wards/${wardId}/admissions`, { status }),
   admit: (body: { patientId: string; wardId: string; bedId?: string; attendingDoctor: string }) =>

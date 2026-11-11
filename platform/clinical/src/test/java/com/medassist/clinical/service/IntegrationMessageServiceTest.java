@@ -53,6 +53,7 @@ class IntegrationMessageServiceTest {
         IntegrationProperties properties = new IntegrationProperties(
                 Map.of(), 8, 30, 1800, 5000);
         service = new IntegrationMessageService(repo, clinicalRepo, sender, properties,
+                mock(com.medassist.clinical.integration.IntegrationMetrics.class),
                 JsonMapper.builder().build(), mock(PlatformTransactionManager.class));
     }
 

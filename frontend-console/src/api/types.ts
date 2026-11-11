@@ -433,6 +433,60 @@ export interface HandoverStatusSummary {
   details: WardHandoverStatus[]
 }
 
+/** 集成出站消息（台账）。 */
+export interface IntegrationMessageView {
+  id: string
+  systemCode: string
+  messageType: string
+  businessKey: string | null
+  status: 'PENDING' | 'SENDING' | 'ACKED' | 'FAILED' | 'DEAD'
+  attempts: number
+  nextRetryAt: string | null
+  lastError: string | null
+  externalId: string | null
+  createdBy: string
+  createdAt: string
+  retryable: boolean
+  payloadPreview: string
+}
+
+/** 集成出站状态汇总。 */
+export interface IntegrationSummary {
+  pending: number
+  failed: number
+  dead: number
+  acked: number
+  bySystem: {
+    systemCode: string
+    pending: number
+    failed: number
+    dead: number
+  }[]
+}
+
+/** 入站集成消息。 */
+export interface InboundMessageView {
+  id: string
+  systemCode: string
+  messageType: string
+  externalId: string
+  businessKey: string | null
+  status: 'RECEIVED' | 'PROCESSED' | 'FAILED'
+  error: string | null
+  receivedBy: string
+  processedAt: string | null
+  createdAt: string
+  payloadPreview: string
+}
+
+/** 入站状态汇总。 */
+export interface InboundSummary {
+  received: number
+  processed: number
+  failed: number
+  total: number
+}
+
 /** 转科记录（append-only）：一次主诊科室变更。 */
 export interface VisitTransfer {
   id: string

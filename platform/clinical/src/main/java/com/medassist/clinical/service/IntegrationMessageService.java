@@ -2,6 +2,7 @@ package com.medassist.clinical.service;
 
 import com.medassist.clinical.domain.IntegrationMessage;
 import com.medassist.clinical.integration.IntegrationConfig.IntegrationSender;
+import com.medassist.clinical.integration.IntegrationMetrics;
 import com.medassist.clinical.integration.IntegrationProperties;
 import com.medassist.clinical.integration.IntegrationSendException;
 import com.medassist.clinical.repo.ClinicalRepository;
@@ -51,17 +52,19 @@ public class IntegrationMessageService {
     private final ClinicalRepository clinicalRepo;
     private final IntegrationSender sender;
     private final IntegrationProperties properties;
+    private final IntegrationMetrics metrics;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate tx;
 
     public IntegrationMessageService(IntegrationRepository repo, ClinicalRepository clinicalRepo,
                                      IntegrationSender sender, IntegrationProperties properties,
-                                     ObjectMapper objectMapper,
+                                     IntegrationMetrics metrics, ObjectMapper objectMapper,
                                      PlatformTransactionManager transactionManager) {
         this.repo = repo;
         this.clinicalRepo = clinicalRepo;
         this.sender = sender;
         this.properties = properties;
+        this.metrics = metrics;
         this.objectMapper = objectMapper;
         this.tx = new TransactionTemplate(transactionManager);
     }
@@ -159,6 +162,7 @@ public class IntegrationMessageService {
                 String externalId = sender.send(message);
                 if (repo.markAcked(message.id(), externalId, message.version())) {
                     acked++;
+                    metrics.outbound("acked");
                 }
             } catch (RuntimeException e) {
                 handleFailure(message, e);
@@ -192,6 +196,7 @@ public class IntegrationMessageService {
         String truncated = reason == null ? "unknown" : (reason.length() > ERROR_MAX
                 ? reason.substring(0, ERROR_MAX) : reason);
         repo.markFailed(message.id(), attempts, nextRetryAt, truncated, dead, message.version());
+        metrics.outbound(dead ? "dead" : "failed");
         if (dead) {
             audit(message.createdBy(), "INTEGRATION_DEAD", message.id(),
                     "system=" + message.systemCode() + ",attempts=" + attempts

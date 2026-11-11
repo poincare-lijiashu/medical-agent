@@ -1,6 +1,11 @@
 package com.medassist.clinical.web;
 
+import com.medassist.clinical.service.IntegrationInboundService;
 import com.medassist.clinical.service.IntegrationMessageService;
+import com.medassist.clinical.web.IntegrationDtos.InboundAcceptReq;
+import com.medassist.clinical.web.IntegrationDtos.InboundAcceptResult;
+import com.medassist.clinical.web.IntegrationDtos.InboundMessageView;
+import com.medassist.clinical.web.IntegrationDtos.InboundSummary;
 import com.medassist.clinical.web.IntegrationDtos.IntegrationEnqueueReq;
 import com.medassist.clinical.web.IntegrationDtos.IntegrationMessageView;
 import com.medassist.clinical.web.IntegrationDtos.IntegrationSummary;
@@ -35,11 +40,16 @@ public class IntegrationController {
 
     private static final String READ = "integration:message:read";
     private static final String RETRY = "integration:message:retry";
+    /** 入站接收是"系统对系统"的写入权限，与人工重投分开授予。 */
+    private static final String INBOUND = "integration:message:inbound";
 
     private final IntegrationMessageService service;
+    private final IntegrationInboundService inboundService;
 
-    public IntegrationController(IntegrationMessageService service) {
+    public IntegrationController(IntegrationMessageService service,
+                                 IntegrationInboundService inboundService) {
         this.service = service;
+        this.inboundService = inboundService;
     }
 
     /** 台账列表（按创建时间倒序）。 */
@@ -84,5 +94,40 @@ public class IntegrationController {
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, RETRY);
         return ApiResponse.ok(service.retry(id, actor));
+    }
+
+    /**
+     * 接收一条入站消息（HIS/LIS/PACS 推送）。
+     *
+     * <p>幂等：同系统同消息控制号只处理一次；同号同文返回 duplicate=true + AA，
+     * 同号不同文返回 409（拒绝静默覆盖）。处理器失败返回 status=FAILED + AE，
+     * 原始报文保留可重放。
+     */
+    @PostMapping("/inbound")
+    public ApiResponse<InboundAcceptResult> acceptInbound(
+            @Valid @RequestBody InboundAcceptReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, INBOUND);
+        return ApiResponse.ok(inboundService.accept(req, actor));
+    }
+
+    /** 入站消息列表。 */
+    @GetMapping("/inbound")
+    public ApiResponse<List<InboundMessageView>> listInbound(
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String system,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(inboundService.list(status, system, limit));
+    }
+
+    /** 入站状态汇总。 */
+    @GetMapping("/inbound/summary")
+    public ApiResponse<InboundSummary> inboundSummary(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(inboundService.summary());
     }
 }

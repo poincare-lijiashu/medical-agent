@@ -234,6 +234,8 @@ const messages = {
   'nav.report-subscriptions.hint': '运营日报定时投递 · LOG/WEBHOOK 渠道 · 投递记录与手动补发',
   'nav.his-workbench.title': 'HIS 集成工作台',
   'nav.his-workbench.hint': '对接自检：适配器状态 · 患者主索引/医嘱读取 · 就地 AI 审方（只读）',
+  'nav.integration.title': '集成运维',
+  'nav.integration.hint': '出站台账 · 入站幂等 · 指数退避与 DEAD · 人工重投与对账',
   'nav.system.title': '系统管理',
   'nav.system.hint': '账号与角色 · 机构与科室绑定 · 跨域审计日志',
   'nav.print-history.title': '打印留痕',

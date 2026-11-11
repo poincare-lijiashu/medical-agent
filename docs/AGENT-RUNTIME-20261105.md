@@ -11113,6 +11113,70 @@ Java：mvn -pl clinical -am -DskipTests compile → 通过
 - MLLP 未上 TLS、对端证书/白名单与连接池；
 - 未把集成失败接入 Prometheus 指标与告警规则（可复用现有 observability 栈）。
 
+## 258. 2026-11-11 入站幂等与集成可观测（第 258 批）
+
+**问题**
+
+- 第 257 批只解决"发出去"，没有解决"收得回"：HIS/LIS/PACS 超时后重推同一条消息，
+  平台既可能重复处理（重复计费/重复执行），也可能直接丢弃且无法向对端证明"收过"；
+- 集成失败仍只体现在页面台账，值班人员不会主动看；Prometheus 没有队列深度、
+  没有入站积压，告警体系对集成通道是盲区；
+- 缺少运维页面，信息科排查只能直接查库或看日志。
+
+**本批做了什么**
+
+1. **V68 入站台账**：`integration_inbound`，唯一键 `(system_code, external_id)`，
+   另存 `payload_hash` 区分"同号同文"与"同号异文"；状态 RECEIVED/PROCESSED/FAILED。
+2. **幂等语义**：先落库再处理；同号同文回 `duplicate=true + AA`（对端停止重推），
+   同号不同文 409（拒绝静默覆盖）；处理器失败标记 FAILED 并回 `AE`，原文保留可重放。
+3. **处理器 SPI**：`InboundMessageProcessor`，接入层不解析业务；没有处理器时保持
+   RECEIVED，不伪造成功。
+4. **API**：`POST /clinical/integration/inbound`、`GET /inbound`、`GET /inbound/summary`；
+   auth V81 新增 `integration:message:inbound`，与人工重投权限分离。
+5. **指标**：Micrometer 导出 `medassist_integration_queue{status}`、
+   `medassist_integration_inbound_queue{status}`、出站/入站结果计数；
+   队列深度每 30 秒一次聚合查询刷新，抓取不查库。
+6. **告警**：新增 `deploy/prometheus/medassist-integration.rules.yml`（DEAD>0、
+   失败/待发积压、出站失败率、入站积压/失败、指标缺失共 7 条）。
+7. **前端 `/integration`**：出站/入站双页签、汇总卡片、按系统分组、状态筛选、
+   30s 自动刷新、重投确认弹窗；权限不足只读不可重投；导航挂到「系统管理」。
+
+**验证**
+
+```
+真实库：事务内执行 V68 DDL，验证唯一索引拦截重复（ON CONFLICT 0 行）、
+        同号读回与摘要一致、PROCESSED 的 CAS 只允许一次；全部 ROLLBACK
+后端：mvn -pl clinical -am compile → 通过
+      IntegrationInboundServiceTest（5 条：首次接收 / 同号同文幂等 / 同号异文 409 /
+           处理器失败 AE / 空报文 422）
+      IntegrationControllerPermissionTest（新增入站权限分离）
+      IntegrationMessageServiceTest / Hl7MllpSenderTest 回归通过
+      mvn -pl clinical -am test（整模块）→ 通过
+前端：npm run typecheck → 通过；npm run build → 通过（入口 96.55 KB gzip / 预算 110）
+迁移安全检查：scanned=249 new=0，PASS
+全量：pytest --ignore=tests/e2e → 1896 passed / 1 skipped
+```
+
+**取舍**
+
+- **幂等靠数据库唯一索引，不靠"先查再插"**：并发重推时检查与写入之间的竞态
+  会让两条都通过；唯一索引是唯一可靠的口径。
+- **重复也回 AA**：对端重推通常是因为没收到 ACK；回错误码会让它无限重试，
+  回 AA 并标记 duplicate 才能让链路收敛。
+- **同号异文直接 409**：控制号相同但内容不同通常意味着对端复用了流水号或发生篡改，
+  静默覆盖会毁掉证据链。
+- **队列深度定时刷新**：Prometheus 抓取频率远高于业务变化，按抓取查库会把监控
+  变成数据库压力源。
+- **没有处理器不伪造成功**：接入层先保证"收下来、可追溯"，业务处理器按域逐步接入。
+
+**遗留**
+
+- 尚未实现 HL7 MLLP 入站监听（当前入站为 HTTP JSON），需要 MLLP Server 与 ACK 回写；
+- 入站处理器尚未接入具体业务（患者主索引、医嘱、检验结果、PACS 状态）；
+- 缺少按业务号自动对账与差异补发任务；
+- 集成运维页面暂无导出与批量重投（避免误操作，先保持单条确认）；
+- 告警规则需在部署环境重载 Prometheus 后生效（已提供规则文件）。
+
 
 
 

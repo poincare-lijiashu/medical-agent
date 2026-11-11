@@ -491,6 +491,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:visit:read', 'auth:user:read'],
   },
   {
+    // 第 258 批：集成运维（出站台账 / 入站幂等 / 重投与对账）
+    name: 'integration',
+    path: '/integration',
+    title: '集成运维',
+    hint: '出站台账 · 入站幂等 · 指数退避与 DEAD · 人工重投与对账',
+    icon: 'activity',
+    group: '系统管理',
+    permissions: ['integration:message:read'],
+  },
+  {
     name: 'system',
     path: '/system',
     title: '系统管理',

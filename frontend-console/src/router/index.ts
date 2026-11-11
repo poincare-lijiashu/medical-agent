@@ -216,6 +216,12 @@ const router = createRouter({
           name: 'his-workbench',
           component: () => import('@/views/HisWorkbenchView.vue'),
         },
+        {
+          // 第 258 批：集成运维（出站台账 / 入站幂等 / 重投）
+          path: 'integration',
+          name: 'integration',
+          component: () => import('@/views/IntegrationView.vue'),
+        },
         { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
         {
           // 第 231 批：打印留痕（质控 / 管理员按单号核查补打次数）

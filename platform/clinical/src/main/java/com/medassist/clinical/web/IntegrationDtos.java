@@ -57,4 +57,39 @@ public final class IntegrationDtos {
     /** 按对端系统分组的待处理量。 */
     public record SystemCount(String systemCode, int pending, int failed, int dead) {
     }
+
+    /**
+     * 接收一条入站消息。
+     *
+     * @param externalId 对端消息控制号（HL7 MSH-10 / 业务流水号），平台内按
+     *                   (systemCode, externalId) 做幂等
+     */
+    public record InboundAcceptReq(
+            @NotBlank @Size(max = 32) String systemCode,
+            @NotBlank @Size(max = 64) String messageType,
+            @NotBlank @Size(max = 128) String externalId,
+            @Size(max = 128) String businessKey,
+            @NotBlank @Size(max = 200_000) String payload) {
+    }
+
+    /**
+     * 入站接收结果。
+     *
+     * @param duplicate 重复推送（同号同文），未重复处理
+     * @param ackCode   返回给对端的 ACK 码（AA 成功；重复也回 AA，避免对端无限重推）
+     */
+    public record InboundAcceptResult(UUID id, String status, boolean duplicate, String ackCode,
+                                      String messageControlId) {
+    }
+
+    /** 入站消息视图（payloadPreview 截断展示，避免把大报文推给列表）。 */
+    public record InboundMessageView(UUID id, String systemCode, String messageType,
+                                     String externalId, String businessKey, String status,
+                                     String error, String receivedBy, Instant processedAt,
+                                     Instant createdAt, String payloadPreview) {
+    }
+
+    /** 入站状态汇总。 */
+    public record InboundSummary(int received, int processed, int failed, int total) {
+    }
 }
