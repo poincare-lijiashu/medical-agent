@@ -333,7 +333,7 @@ python scripts/license/verify_license.py artifacts/license/LIC-2026-0001.json \
 - 抓取：Prometheus `medassist-license` job（8095 `/actuator/prometheus`）；
 - 配额超限只告警不阻断（临床连续性优先），由运营扩容或修正用量上报。
 
-## 12. AI 用量自动上报与配额对账（§289）
+## 12. AI 用量自动上报与配额对账（§289 / §290）
 
 ### 12.1 链路
 
@@ -351,8 +351,11 @@ AI 中台（8001） --POST /internal/license/usage/ai--> 授权服务（8095）
 
 ### 12.2 计费口径（写进合同的唯一口径）
 
-- 一次**成功**统一问答（同步或流式）= 1 次 AI 调用；
-- 前置闲聊（prefilter）不调用模型、不计费；失败/中止不计费；
+- **每一次成功的模型 HTTP 调用 = 1 次 AI 调用**（§290 起，计量点在 provider 传输层）：
+  问答、影像描述、结构化抽取、审方、摘要压缩、意图识别等**全部模型路径统一计数**；
+- 失败/被拒（非 2xx）不计；前置闲聊（prefilter）不调用模型，天然不计；
+- 重试与 thinking 降级各产生一次真实请求，因此各计 1 次（与供应商账单口径一致）；
+- 本地嵌入模型（BGE）不产生 HTTP、不占 AI 配额；
 - 同一天重启或多 worker：AI 中台按 `日期#进程实例` 分行记账，合计=所有行之和，
   **不丢也不重**（`agent_usage_daily`，PG 真源 + JSON 镜像）；
 - 床位/账号**不由 AI 中台上报**：AI 上报只更新 `ai_calls`，避免把院方台账的床位/账号覆盖成 0。
@@ -362,7 +365,7 @@ AI 中台（8001） --POST /internal/license/usage/ai--> 授权服务（8095）
 ```bash
 # AI 中台视角（需要 METRICS_TOKEN 或 admin 登录态）
 curl -H "Authorization: Bearer <METRICS_TOKEN>" http://127.0.0.1:8001/metrics \
-  | findstr medassist_agent_ai_calls_today
+  | findstr medassist_agent_model_calls_today
 # 授权服务视角
 curl -H "X-Permissions: license:read" http://127.0.0.1:8095/license/status
 ```

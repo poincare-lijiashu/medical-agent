@@ -226,24 +226,6 @@ def test_run_without_usage_does_not_estimate(monkeypatch):
     assert snap["tokens"] == {"input": 0, "output": 0, "requests": 0}
 
 
-def test_run_counts_billable_ai_usage_but_prefilter_does_not(monkeypatch):
-    """§289：计费口径跟着"真的调用了模型"走，前置闲聊不计入授权配额。"""
-    _provider(monkeypatch)
-    _publish()
-    recorded: list[str] = []
-    monkeypatch.setattr(consult.ai_usage, "record", lambda agent: recorded.append(agent))
-
-    async def runner(provider, messages):
-        return "建议监测 INR。"
-
-    asyncio.run(consult.run("华法林和阿司匹林有相互作用吗", "doctor", runner=runner))
-    assert recorded == ["drug"]
-
-    recorded.clear()
-    asyncio.run(consult.run("你好", "doctor"))
-    assert recorded == [], "prefilter 不消耗模型，不计费"
-
-
 def test_stream_records_tokens_from_usage_chunk(monkeypatch):
     _provider(monkeypatch)
     _publish()

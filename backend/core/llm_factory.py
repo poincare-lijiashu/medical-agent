@@ -22,10 +22,47 @@ logger = get_logger(__name__)                         # 本模块的日志器，
 # 背景：Windows 系统代理或 HTTPS_PROXY 环境变量会被 httpx 默认探测到，
 #       导致 DeepSeek 请求经代理后 TLS 握手失败。DeepSeek 国内可直连，无需代理。
 # trust_env=False 表示：完全忽略系统代理和相关环境变量。
+#
+# §290 计量点：共享客户端只服务模型调用（chat / vision / 结构化），
+# 在**响应钩子**里计一次"成功的模型调用"，覆盖问答之外的影像、审方、摘要等路径。
+# 放在传输层而不是问答层：与供应商账单口径一致（重试/降级各算一次）。
+#
+# 注意 httpx 0.28 的 AsyncClient **无条件 await 每个 response hook**；
+# 给异步客户端挂同步函数会抛 TypeError 并让模型调用全部失败。
+# 因此同步/异步各一个入口，共用同一个计数实现（并有单测锁死分发路径）。
+#
+# 计数落在 core 的进程内账本（ai_metering）：core 不能反向依赖 agents，
+# 台账落盘与授权上报由 agents.ai_usage 读取快照完成。
+def _count_model_call(response: httpx.Response) -> None:
+    try:
+        if response.request.method != "POST" or not response.is_success:
+            return
+        from backend.core import ai_metering
+
+        ai_metering.record(ai_metering.utc_today())
+    except Exception:  # noqa: BLE001 —— 计量失败不能影响模型调用本身
+        pass
+
+
+def _on_model_response(response: httpx.Response) -> None:
+    """同步客户端钩子：每个模型 HTTP 响应回调一次，只计成功（2xx）的 POST。"""
+    _count_model_call(response)
+
+
+async def _on_model_response_async(response: httpx.Response) -> None:
+    """异步客户端钩子（httpx AsyncClient 要求可 await）。"""
+    _count_model_call(response)
+
+
+_MODEL_EVENT_HOOKS_SYNC = {"response": [_on_model_response]}
+_MODEL_EVENT_HOOKS_ASYNC = {"response": [_on_model_response_async]}
+
+
 def _make_async_client() -> httpx.AsyncClient:
     return httpx.AsyncClient(
         trust_env=False,
         timeout=httpx.Timeout(120.0, connect=15.0),   # 总超时 120 秒，建立连接超时 15 秒
+        event_hooks=_MODEL_EVENT_HOOKS_ASYNC,
     )
 
 
@@ -33,6 +70,7 @@ def _make_sync_client() -> httpx.Client:
     return httpx.Client(
         trust_env=False,
         timeout=httpx.Timeout(120.0, connect=15.0),
+        event_hooks=_MODEL_EVENT_HOOKS_SYNC,
     )
 
 

@@ -39,6 +39,7 @@ RUNBOOK = REPO / "docs/PROVISIONING-RUNBOOK.md"
 
 # §289：AI 用量上报与院方构建守卫
 AI_USAGE = REPO / "backend/agents/ai_usage.py"
+LLM_FACTORY = REPO / "backend/core/llm_factory.py"
 INTERNAL_CONTROLLER = LICENSE_MAIN / "java/com/medassist/license/web/InternalLicenseController.java"
 DEPLOY_GUARD = LICENSE_MAIN / "java/com/medassist/license/config/LicenseDeploymentGuard.java"
 CONSOLE_API = REPO / "frontend-console/src/api/license.ts"
@@ -194,3 +195,20 @@ def test_hospital_deployment_mode_is_fail_closed():
     # 状态视图要能把交付形态透出给控制台（运营可见"院方/厂商"）
     assert "deploymentMode" in _read(SUMMARY_DTO)
     assert "deploymentMode" in _read(CONSOLE_API)
+
+
+def test_billing_caliber_is_provider_level():
+    """§290：计费点必须在 provider 传输层，覆盖问答之外的影像/审方/摘要。"""
+    factory = _read(LLM_FACTORY)
+    assert "event_hooks=" in factory
+    assert "_on_model_response" in factory and "_on_model_response_async" in factory
+    # core 不能反向依赖 agents：计数走 core.ai_metering，台账落盘在 agents.ai_usage
+    assert "ai_metering.record(" in factory
+    assert "from backend.agents" not in factory
+    # httpx 0.28 的 AsyncClient 会 await 每个钩子：异步入口必须是协程，否则模型调用全挂
+    assert "async def _on_model_response_async" in factory
+
+    usage = _read(AI_USAGE)
+    assert "def record_model_call" in usage and "ai_metering" in usage
+    # 床位/账号仍由院方台账负责，AI 侧只上报 ai_calls
+    assert "只更新" in _read(LICENSE_MAIN / "java/com/medassist/license/repo/LicenseRepository.java")

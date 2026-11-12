@@ -1,4 +1,4 @@
-"""AI 日调用量台账与授权对账上报（§289）。
+"""AI 模型调用台账与授权对账上报（§289 / §290）。
 
 为什么需要本模块
 ----------------
@@ -6,10 +6,13 @@
 此前用量快照只能人工 `POST /license/usage`：合同签了 6000 次/日，实际用了多少没人知道，
 超限告警也永远不会触发。
 
-本模块把"成功 AI 问答次数"做成可核对的日台账，并由 AI 中台定时推给授权服务：
+本模块把**模型调用次数**做成可核对的日台账，并由 AI 中台定时推给授权服务：
 
-- **计费口径**：一次成功统一问答（同步/流式）= 1 次 AI 调用；
-  前置闲聊（``prefilter``，不消耗模型）不计；失败/中止不计。
+- **计费口径（§290 起）**：每一次**成功的模型 HTTP 调用** = 1 次 AI 调用，
+  计量点在 `llm_factory` 的共享 httpx 客户端响应钩子——问答、影像、结构化、审方、
+  摘要压缩、意图识别等所有走模型的路径都被覆盖；
+  失败/被拒（非 2xx）不计；本地嵌入模型（BGE）不产生 HTTP、不占 AI 配额。
+  前置闲聊（prefilter）不调用模型，因此天然不计。
 - **耐久**：进程内按日累计 + 每次落盘写一行 ``agent_usage_daily``
   （id = ``<UTC 日期>#<进程实例>``，PG 真源 + JSON 镜像）。
   **重启不丢**：新进程用新的实例 id，旧行仍在，合计=所有行之和；
@@ -21,7 +24,7 @@
 边界
 ----
 - 未配置 ``PLATFORM_LICENSE_BASE_URL`` / ``INTERNAL_API_TOKEN`` → 不同步，行为与历史一致；
-- 授权服务不可达**不阻断问答**：计数留在本地台账，下一轮继续推送；
+- 授权服务不可达**不阻断业务**：计数留在本地台账，下一轮继续推送；
 - 多 worker 时各进程各自累计、合计上报；``workerCount`` 只用于排障提示，
   进程重启型计数不能当作严格计费凭证（以授权服务侧日快照为准）；
 - 台账只保留最近 ``MAX_KEEP_DAYS`` 天的进程行（幂等清理，不影响授权侧已落库数据）。
@@ -33,14 +36,13 @@ import os
 import threading
 import time
 import uuid
-from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 import httpx
 
 from backend.config import settings
-from backend.core import pg_store
+from backend.core import ai_metering, pg_store
 from backend.core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -57,7 +59,6 @@ _REPORT_PATH = "/internal/license/usage/ai"
 WORKER_ID = uuid.uuid4().hex[:12]
 
 _lock = threading.Lock()
-_own: dict[str, int] = defaultdict(int)      # 日期 → 本进程当日累计
 _persisted: dict[str, int] = {}              # 日期 → 已落盘值（相同则不重复写库）
 _last_push: dict = {"at": 0.0, "ok": False, "date": "", "calls": 0, "error": ""}
 _push_failures = 0
@@ -84,25 +85,18 @@ def _interval() -> float:
 
 # --------------------------------------------------------------------------- 计数
 
-def record(agent_id: str) -> None:
-    """记录一次成功 AI 问答（调用方只在 status=ok 时调用）。
+def record_model_call() -> None:
+    """记录一次**成功**的模型 HTTP 调用（由 ``llm_factory`` 响应钩子调用）。
 
-    ``prefilter`` 是规则前置应答（闲聊/越界提示），不调用模型，不占 AI 配额。
+    为什么放在 provider 调用层而不是问答层：问答只是模型调用的一种消费方，
+    影像/结构化/审方/摘要压缩同样消耗模型额度；按"答案次数"计费会低估，
+    按"HTTP 调用次数"计费与供应商账单口径一致（重试/降级各算一次，
+    因为它们各自产生了一次真实的模型请求）。
+
+    计数本体在 ``backend.core.ai_metering``（core 不得依赖 agents），
+    本函数是编排层对外入口，便于测试固定业务日。
     """
-    key = (agent_id or "").strip()
-    if not key or key == "prefilter":
-        return
-    day = _today()
-    with _lock:
-        _own[day] += 1
-        _prune_own_locked(day)
-
-
-def _prune_own_locked(today: str) -> None:
-    """只保留最近两天的内存键：更早的增量已落盘，留着只会让 flush 反复重写。"""
-    for day in list(_own.keys()):
-        if day < _today_offset(today, -1):
-            _own.pop(day, None)
+    ai_metering.record(_today())
 
 
 def _today() -> str:
@@ -149,15 +143,13 @@ def totals(day: str) -> int:
             total += max(0, int(row.get("aiCalls") or 0))
         except (TypeError, ValueError):
             continue
-    with _lock:
-        return max(total, _own.get(day, 0))
+    return max(total, ai_metering.count(day))
 
 
 def _persist_own() -> None:
     """把本进程累计按日写入台账（幂等：同 id 同值重写）。"""
     today = _today()
-    with _lock:
-        snapshot = dict(_own)
+    snapshot = ai_metering.counts()
     for day, calls in snapshot.items():
         if calls <= 0 or _persisted.get(day) == calls:
             continue
@@ -328,9 +320,9 @@ def snapshot() -> dict:
 def prometheus_text() -> str:
     today_calls = totals(_today())
     return "\n".join([
-        "# HELP medassist_agent_ai_calls_today 今日成功 AI 问答次数（授权计费口径，UTC 日切）",
-        "# TYPE medassist_agent_ai_calls_today gauge",
-        f"medassist_agent_ai_calls_today {today_calls}",
+        "# HELP medassist_agent_model_calls_today 今日成功的模型调用次数（授权计费口径，UTC 日切）",
+        "# TYPE medassist_agent_model_calls_today gauge",
+        f"medassist_agent_model_calls_today {today_calls}",
         "# HELP medassist_agent_ai_usage_push_timestamp_seconds 最近一次用量上报时刻（Unix 秒）",
         "# TYPE medassist_agent_ai_usage_push_timestamp_seconds gauge",
         f"medassist_agent_ai_usage_push_timestamp_seconds {float(_last_push.get('at') or 0):.0f}",
@@ -343,8 +335,7 @@ def prometheus_text() -> str:
 def _reset_for_tests() -> None:
     """测试专用：清空内存累计与上报状态（不停止线程）。"""
     global _push_failures, _last_prune
-    with _lock:
-        _own.clear()
+    ai_metering.reset_for_tests()
     _persisted.clear()
     _last_prune = ""
     _last_push.update({"at": 0.0, "ok": False, "date": "", "calls": 0, "error": ""})

@@ -54,7 +54,7 @@ public final class LicenseDtos {
      * 由 AI 中台求和后上报，这里保留来源便于核对）。
      *
      * @param date        统计日（UTC，yyyy-MM-dd）；只接受当日或前一日，防止误回填历史
-     * @param aiCalls     当日成功 AI 问答次数（计费口径，非 HTTP 请求数）
+     * @param aiCalls     当日成功的模型调用次数（计费口径，§290 起在 provider 传输层计量）
      * @param source      上报来源标识，默认 AI_CORE
      * @param workerId    AI 中台进程实例标识（排障用）
      * @param workerCount AI 中台部署的 worker 数（>1 时计数口径需人工复核）

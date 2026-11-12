@@ -23,7 +23,7 @@ import time
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from backend.agents import ai_usage, catalog, consult_metrics, guardrails, model_policy, skills
+from backend.agents import catalog, consult_metrics, guardrails, model_policy, skills
 from backend.agents import router as rule_router
 from backend.agents.limits import (MAX_ANSWER_CHARS, MAX_HISTORY_CHARS,
                                    MAX_HISTORY_ITEM, MAX_HISTORY_TURNS,
@@ -454,7 +454,6 @@ async def run(question: str, role: str, agent_id: str | None = None,
     consult_metrics.record(agent_key, "sync", "ok",
                            (time.perf_counter() - started) * 1000, codes, usage)
     consult_metrics.record_quality(agent_key, quality_signals(text))
-    ai_usage.record(agent_key)   # §289：授权计费口径（成功问答次数，前置闲聊不计）
     return _done_payload(ctx, text, started)
 
 
@@ -539,7 +538,6 @@ async def stream(question: str, role: str, agent_id: str | None = None,
         consult_metrics.record(agent_key, "stream", "ok",
                                (time.perf_counter() - started) * 1000, codes, last_usage)
         consult_metrics.record_quality(agent_key, quality_signals(answer))
-        ai_usage.record(agent_key)   # §289：授权计费口径（成功问答次数，前置闲聊不计）
         finished = True
         yield {"type": "done", **_done_payload(ctx, answer, started)}
     except ConsultError as exc:

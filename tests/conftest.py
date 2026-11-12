@@ -236,11 +236,17 @@ def _isolate_consult_metrics():
     """评审 05-S11：``consult_metrics`` 是模块级可变计数，此前由两个测试文件各自
     定义 ``_reset_metrics`` 规避，其余文件只写不读——顺序一变，精确计数断言就会翻车。
     这里上提到 conftest，让"进程内计量"与运行时开关一样由基础设施统一兜底。
+    §290：模型调用计数（``core.ai_metering``）同理，任何真实/模拟 HTTP 模型调用
+    都会累加，必须逐用例清零。
     """
     from backend.agents import consult_metrics
+    from backend.core import ai_metering
+
     consult_metrics.reset()
+    ai_metering.reset_for_tests()
     yield
     consult_metrics.reset()
+    ai_metering.reset_for_tests()
 
 
 @pytest.fixture(autouse=True)
