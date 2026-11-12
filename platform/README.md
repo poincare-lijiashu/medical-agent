@@ -1156,3 +1156,50 @@ Argo Rollouts 灰度（可选）、日志采集（Loki/Promtail）与告警规�
   `LICENSE_INSTANCE_CODE=<院区实例码>`；私钥不应出现在院内任何节点；
 - 开发/演示：未配置密钥时自动在 `data/license/` 生成密钥对（仅本地），
   便于走通"签发 → 导入 → 生效 → 吊销"全链路。
+
+## 开放平台（§280 / 计划书 W9.3）
+
+第三方系统（集成商、科研平台、集团 BI）不应该拿某个人的账号密码调接口。
+本批在 auth 服务上提供标准 OAuth2 `client_credentials`，并把"能做什么"收敛到**只读范围目录**。
+
+### 为什么令牌走现有 JWT 链路
+
+客户端令牌是普通 HS256 JWT，只是声明不同：
+
+```json
+{
+  "sub": "<client uuid>", "username": "cli_512939f1e788bb52", "name": "科研数据平台",
+  "roles": ["INTEGRATION_CLIENT"],
+  "permissions": ["license:read", "clinical:visit:read"],
+  "client_id": "cli_512939f1e788bb52", "token_type": "client_credentials",
+  "iss": "medassist-auth", "exp": 1762900000
+}
+```
+
+网关照常验签、注入 `X-Actor/X-Roles/X-Permissions`；下游只按权限点判断。
+好处是没有第二套鉴权栈：限流、审计、链路追踪、权限点校验全部复用。
+
+### 三条硬约束
+
+| 约束 | 实现 | 后果 |
+| --- | --- | --- |
+| 只读 | `SCOPE_CATALOG` 只含 `:read/:read_phi/:search/:answer`；申请写权限 422 | 第三方永远拿不到写能力 |
+| 密钥只存哈希 | SHA-256 + 前缀提示；明文只在创建/轮换响应出现一次 | 泄露可感知、可轮换 |
+| 不能扩权 | 换令牌时 `scope` 只能在本客户端授权内收窄 | 不会"少授权多使用" |
+
+令牌默认 900 秒，且不超过客户端到期时间；客户端停用或到期后换令牌直接 401。
+
+### 接口
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/api/v2/auth/oauth/token` | 客户端密钥（网关白名单） | form 表单；返回 RFC 6749 `access_token/token_type/expires_in/scope` |
+| GET | `/api/v2/auth/oauth-clients` | `integration:client:read` | 客户端列表（含最后使用时间） |
+| GET | `/api/v2/auth/oauth-clients/scopes` | `integration:client:read` | 可授予范围目录 |
+| POST | `/api/v2/auth/oauth-clients` | `integration:client:manage` | 创建，返回一次性密钥 |
+| POST | `/api/v2/auth/oauth-clients/{id}/rotate` | manage | 轮换密钥（旧密钥立即失效） |
+| POST | `/api/v2/auth/oauth-clients/{id}/status` | manage | 停用/启用 |
+| PUT | `/api/v2/auth/oauth-clients/{id}/scopes` | manage | 调整只读范围 |
+
+错误答案按 RFC：`invalid_client`(401) / `invalid_scope`(400) / `unsupported_grant_type`(400)，
+并额外带 `trace_code` 便于对上院内审计。

@@ -300,6 +300,12 @@ const router = createRouter({
           component: () => import('@/views/AiLlmView.vue'),
         },
         {
+          // 第 280 批：开放平台（OAuth2 客户端与只读范围）
+          path: 'open-platform',
+          name: 'open-platform',
+          component: () => import('@/views/OpenPlatformView.vue'),
+        },
+        {
           // 第 279 批：授权与许可（仅 license:read；管理动作需 license:manage）
           path: 'license',
           name: 'license',

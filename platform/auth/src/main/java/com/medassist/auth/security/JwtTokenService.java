@@ -160,6 +160,37 @@ public class JwtTokenService {
     }
 
     /**
+     * 为开放平台客户端签发令牌（client_credentials）。
+     *
+     * <p>与用户令牌的区别：没有科室/院区范围，{@code roles} 固定 {@code INTEGRATION_CLIENT}，
+     * {@code permissions} 直接等于授予的 scopes（目录本身只含只读权限点）。
+     * 网关与下游仍按同一套验签与权限点逻辑处理，不需要为第三方开特殊通道。
+     */
+    public IssuedToken issueClient(UUID clientUuid, String clientId, String clientName,
+                                   List<String> scopes, java.time.Duration ttl) {
+        Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
+        Instant expiresAt = now.plus(ttl);
+        String tokenId = UUID.randomUUID().toString();
+        JwtClaimsSet claims = JwtClaimsSet.builder()
+                .issuer(props.issuer())
+                .subject(clientUuid.toString())
+                .id(tokenId)
+                .issuedAt(now)
+                .expiresAt(expiresAt)
+                .claim("username", clientId)
+                .claim("name", clientName)
+                .claim("roles", List.of("INTEGRATION_CLIENT"))
+                .claim("permissions", scopes)
+                .claim("token_type", "client_credentials")
+                .claim("client_id", clientId)
+                .build();
+        Jwt jwt = encoder.encode(JwtEncoderParameters.from(
+                JwsHeader.with(MacAlgorithm.HS256).build(), claims));
+        long expiresIn = Math.max(1, ChronoUnit.SECONDS.between(now, expiresAt));
+        return new IssuedToken(jwt.getTokenValue(), now, expiresAt, expiresIn, tokenId);
+    }
+
+    /**
      * 校验令牌并提取声明。
      *
      * @return 校验通过返回声明；签名错误、结构非法、已过期或 iss 不匹配返回 {@link Optional#empty()}

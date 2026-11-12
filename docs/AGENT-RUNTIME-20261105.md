@@ -12545,3 +12545,63 @@ Java：mvn -pl license -am test → LicenseServiceTest 11 passed
 - 用量快照靠上报（`POST /license/usage`），没有从各服务自动汇总；
 - 没有在线激活/心跳：授权完全离线自证（这是刻意选择，医院内网常无外网）；
 - 没有多租户（一实例一授权），集团多院区需要按实例分别签发。
+
+## 280. 2026-11-12 开放平台（第 280 批 / W9.3）
+
+**背景**
+
+集成商、科研平台、集团 BI 要取数，现实做法往往是"给一个人的账号密码"——
+这等于把一个人的全部权限（含开医嘱、改病历）连同离职风险一起交出去。
+本批提供标准 OAuth2 `client_credentials`，并把第三方能力收敛到**只读范围目录**。
+
+**本批做了什么**
+
+1. **客户端与密钥**（auth V94）：`oauth_client` 存 SHA-256 + 前缀提示，
+   明文只在创建/轮换响应出现一次；`token_ttl_seconds` 默认 900 秒（60-86400 可配）。
+2. **只读范围目录**（17 项）：`fhir:read/read_phi`、`empi:patient:read`、`clinical:visit:read`、
+   `clinical:diagnosis:read`、`clinical:report:read`、`pharmacy:read`、`tech:read`、
+   `insurance:settlement:read`、`mdm:read`、`kb:search/answer`、`integration:message:read`、
+   `ops:read`、`release:read`、`license:read`、`audit:log:read`。
+   目录之外的写权限点直接 422（`OAUTH_SCOPE_NOT_ALLOWED`）——**"只读"是代码约束，不是文档约定**。
+3. **令牌复用现有链路**：`JwtTokenService.issueClient` 签发普通 HS256 JWT，
+   `roles=["INTEGRATION_CLIENT"]`、`permissions=scopes`，无科室/院区声明；
+   网关与下游的验签、限流、审计、权限点判断全部复用，不建第二套鉴权栈。
+   换令牌时 `scope` 只能在本客户端授权内收窄；令牌有效期不超过客户端到期时间。
+4. **网关**：白名单只放行 `/api/v2/auth/oauth/token`；限流桶
+   `/api/v2/auth/oauth`（30 QPS）排在通用 auth 桶之前；`ActorGuardFilter` 只豁免
+   `/oauth/token`（客户端管理接口仍需 X-Actor）。
+5. **RFC 6749 外形**：令牌端点返回 `access_token/token_type/expires_in/scope`，
+   错误返回 `{error,error_description,trace_code}`（invalid_client 401 / invalid_scope 400 /
+   unsupported_grant_type 400），第三方 SDK 可直接接入。
+6. **前端**：系统管理 → 开放平台：客户端列表（范围、TTL、最后使用、有效期、状态）、
+   创建（范围多选 + 一次性密钥弹窗）、轮换、停用/启用、改范围、接入示例（curl）。
+7. **契约锁**：`tests/test_console_open_platform.py`（8 项）+ `OAuthClientServiceTest`（8 项）。
+
+**验证**
+
+```
+Java：OAuthClientServiceTest → 8 passed（哈希/常量时间/写范围拒绝/缩权/停用/TTL）
+      mvn -pl auth,gateway -am -DskipTests package → 通过
+契约：tests/test_console_open_platform.py → 8 passed
+真实库 E2E（经网关 8080）：
+  范围目录          200  17 项
+  创建客户端        200  cli_512939f1e788bb52 · hint=CEErBQ…muDU · secret 43 位
+  申请写范围        422  55403
+  换令牌            200  Bearer · expires_in=900 · scope="license:read clinical:visit:read"
+  客户端令牌读授权  200  phase=ACTIVE
+  客户端令牌写授权  403（只有只读权限点）
+  错误密钥          401  invalid_client
+  收窄 scope        200  仅 license:read
+  越权 scope        400  invalid_scope
+  非 client_credentials 400  unsupported_grant_type
+  轮换密钥          200  旧密钥 401、新密钥 200
+  停用后换令牌      401  invalid_client
+浏览器 /open-platform：1 个客户端 · 2 项范围 · 接入示例完整 · 零 console 错误
+```
+
+**遗留**
+
+- 没有 `authorization_code` / PKCE（面向"第三方替用户取数"的场景；当前只有机器对机器）；
+- 没有按客户端的调用配额（限流仍是网关统一桶，未做 per-client 计量）；
+- 没有开发者自助门户（创建客户端仍需管理员，这是有意的：开放不等于自助扩权）；
+- 客户端令牌无法单独撤销：只能停用客户端或等 TTL（15 分钟）自然过期。

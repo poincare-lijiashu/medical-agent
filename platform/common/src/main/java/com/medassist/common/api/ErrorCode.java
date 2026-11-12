@@ -576,7 +576,15 @@ public enum ErrorCode {
     LICENSE_ISSUANCE_DISABLED(54406, "本部署未开启签发能力，请由厂商签发后在目标院区导入"),
     LICENSE_ACTOR_REQUIRED(54410, "授权变更必须带真实操作人，禁止匿名写入"),
     LICENSE_KEY_UNAVAILABLE(54408, "授权验签密钥不可用，请检查 LICENSE_VERIFY_KEY 配置"),
-    LICENSE_USAGE_INVALID(54411, "用量快照不合法（日期/计数不能为负）");
+    LICENSE_USAGE_INVALID(54411, "用量快照不合法（日期/计数不能为负）"),
+
+    // ---- 开放平台客户端（55xxx，§280）----
+    OAUTH_CLIENT_NOT_FOUND(55401, "未找到该开放平台客户端"),
+    OAUTH_CLIENT_INVALID(55402, "客户端参数不合法（名称/范围/有效期有误）"),
+    OAUTH_SCOPE_NOT_ALLOWED(55403, "申请的范围不在开放平台可授予目录内（第三方只允许只读范围）"),
+    OAUTH_CLIENT_STATUS_INVALID(55404, "当前客户端状态不允许该操作"),
+    OAUTH_SECRET_INVALID(40132, "客户端密钥不正确"),
+    OAUTH_CLIENT_DISABLED(40133, "客户端已停用或已过期，请联系平台管理员");
 
     private final int code;
     private final String defaultMessage;

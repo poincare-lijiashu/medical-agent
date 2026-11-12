@@ -107,6 +107,8 @@ const messages = {
   'nav.release-console.hint': '组件与不可变版本 · 发布列车 · 兼容矩阵 · 补丁审批 · 冻结窗口 · 部署回滚',
   'nav.license.title': '授权与许可',
   'nav.license.hint': '版本与模块权益 · 配额使用 · 授权书导入验签 · 续期与吊销',
+  'nav.open-platform.title': '开放平台',
+  'nav.open-platform.hint': '第三方 client_credentials · 只读范围目录 · 密钥轮换与停用 · 接入示例',
   'nav.group.系统管理': '系统管理',
 
   /* ---------- 导航条目 ---------- */

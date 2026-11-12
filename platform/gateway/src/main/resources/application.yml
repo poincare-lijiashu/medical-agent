@@ -266,6 +266,9 @@ medassist:
         - /api/v2/auth/sso/config
         - /api/v2/auth/sso/oidc/authorize
         - /api/v2/auth/sso/oidc/callback
+        # 开放平台客户端换令牌（OAuth2 client_credentials）：第三方没有用户令牌，
+        # 安全由 client_id + 一次性密钥（只存哈希）+ 只读 scope 目录保证。
+        - /api/v2/auth/oauth/token
         # 外部系统入站（告警平台/CI）：网关不验用户令牌，服务端按接入源令牌校验并固定 actor。
         # 仅这两个前缀放行，管理接入源的 /api/v2/ops/integrations/** 仍需 JWT。
         - /api/v2/ops/hooks/**
@@ -309,6 +312,10 @@ medassist:
       flow-rules:
         - path: /api/v1
           qps: ${SENTINEL_QPS_AI_CORE:500}
+        # 令牌端点单独限流：第三方换令牌是机器行为，不能与登录/刷新共用 200 QPS 的桶。
+        # 列表按顺序前缀匹配，必须排在通用 /api/v2/auth 之前。
+        - path: /api/v2/auth/oauth
+          qps: ${SENTINEL_QPS_OAUTH:30}
         - path: /api/v2/auth
           qps: ${SENTINEL_QPS_AUTH:200}
         - path: /api/v2/empi

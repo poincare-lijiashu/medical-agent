@@ -530,6 +530,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['auth:user:read', 'audit:log:read'],
   },
   {
+    // 第 280 批：开放平台（OAuth2 客户端 / 只读范围 / 一次性密钥）
+    name: 'open-platform',
+    path: '/open-platform',
+    title: '开放平台',
+    hint: '第三方 client_credentials · 只读范围目录 · 密钥轮换与停用 · 接入示例',
+    icon: 'link',
+    group: '系统管理',
+    permissions: ['integration:client:read'],
+  },
+  {
     // 第 279 批：授权与许可（版本矩阵 / 模块权益 / 配额 / 授权书验签与吊销）
     name: 'license',
     path: '/license',

@@ -102,6 +102,8 @@ const messages: Record<MessageKey, string> = {
   'nav.ops-console.hint': 'SLA tickets · response/resolve countdown · on-call rotation · incidents & postmortems',
   'nav.license.title': 'License & Entitlements',
   'nav.license.hint': 'Editions and module entitlements · quota usage · signed license import · renewal and revocation',
+  'nav.open-platform.title': 'Open Platform',
+  'nav.open-platform.hint': 'Third-party client_credentials · read-only scope catalog · secret rotation and disable · integration examples',
   'nav.release-console.title': 'Release Management',
   'nav.release-console.hint': 'Components & immutable versions · release trains · compatibility matrix · patch approval · freeze windows · deploy & rollback',
   'nav.group.系统管理': 'Administration',

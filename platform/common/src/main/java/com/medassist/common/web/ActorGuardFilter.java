@@ -44,7 +44,10 @@ public class ActorGuardFilter extends OncePerRequestFilter {
             // 外部系统入站（告警平台/CI）：没有登录用户，身份由接入源令牌校验，
             // 服务端把 actor 固定为 integration:<sourceCode>，不信任请求体自报。
             // 注意只豁免 /hooks/，管理接入源仍必须带 X-Actor。
-            "/ops/hooks/", "/release/hooks/"
+            "/ops/hooks/", "/release/hooks/",
+            // 开放平台换令牌（§280）：第三方没有登录用户，身份由 client_id + 一次性密钥校验，
+            // 令牌里的 username 固定为 cli_xxx。只豁免令牌端点，客户端管理接口仍需 X-Actor。
+            "/oauth/token"
     };
 
     /** 历史兜底值：出现即视为"没有真实操作者"。 */
