@@ -1,6 +1,16 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { canSeeNav, findNav } from '@/navigation'
 import { session } from '@/stores/session'
+import { currentCanvasTop, restoreCanvasTop } from '@/utils/scroll'
+
+/* ------------------------------------------------------------------ *
+ * 滚动位置（第 278 批）
+ *
+ * 正文滚动容器是 AppShell 的 `.canvas`，文档不再滚动，Vue Router 的
+ * savedPosition 因此始终是 (0,0)。这里自己按 fullPath 记录离开位置：
+ * 前进置顶、后退/前进恢复原位置，符合"列表下钻再返回"的使用预期。
+ * ------------------------------------------------------------------ */
+const canvasScroll = new Map<string, number>()
 
 const router = createRouter({
   // 第 211 批起控制台是唯一前端，由 AI 中台在根路径托管（vite base='/'）：
@@ -294,6 +304,23 @@ const router = createRouter({
     },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
+  /*
+   * 第 278 批：正文滚动容器是 AppShell 的 `.canvas`，文档本身不滚动，
+   * 所以由这里接管定位：
+   *   - `savedPosition` 非空 = 浏览器前进/后退（Vue Router 只在 popstate 时给），恢复原位置；
+   *   - 其余（点导航、深链进入）= 回顶部。
+   * 返回 false 表示"不要用 Vue Router 默认的窗口滚动"。
+   */
+  scrollBehavior(to, _from, savedPosition) {
+    const top = savedPosition ? canvasScroll.get(to.fullPath) ?? 0 : 0
+    return new Promise<false>((resolve) => {
+      // 等新视图渲染完成再定位：列表异步加载会把高度撑开，过早设置会被夹回 0
+      requestAnimationFrame(() => {
+        restoreCanvasTop(top)
+        resolve(false)
+      })
+    })
+  },
 })
 
 router.beforeEach((to) => {
@@ -312,6 +339,15 @@ router.beforeEach((to) => {
     return { name: 'forbidden', query: { from: item?.title } }
   }
   return true
+})
+
+/* ------------------------------------------------------------------ *
+ * 离开前记录正文位置；真正的恢复到 scrollBehavior 里做（那里能区分前进/后退）。
+ * ------------------------------------------------------------------ */
+router.beforeEach((to, from) => {
+  if (from.fullPath !== to.fullPath && from.name) {
+    canvasScroll.set(from.fullPath, currentCanvasTop())
+  }
 })
 
 router.afterEach((to) => {

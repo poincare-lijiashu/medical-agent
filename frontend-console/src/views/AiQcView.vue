@@ -344,6 +344,7 @@ import { errorText } from '@/api/http'
 import { t } from '@/i18n'
 import { canSeeNav, findNav } from '@/navigation'
 import { session } from '@/stores/session'
+import { scrollCanvasTop } from '@/utils/scroll'
 import { toast } from '@/stores/toast'
 import { confidenceText, confidenceTone } from '@/utils/aiChat'
 import { dateTime } from '@/utils/format'
@@ -630,7 +631,7 @@ function startResubmit(item: AiQcRejection) {
   result.value = null
   runErr.value = ''
   dirty.value = true
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  scrollCanvasTop()
 }
 
 function cancelResubmit() {

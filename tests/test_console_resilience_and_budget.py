@@ -83,3 +83,34 @@ def test_error_boundary_is_recoverable_and_safe():
     assert "error.stack" not in src, "不得把堆栈渲染到界面"
     for key in ("boundary.title", "boundary.desc", "boundary.retry", "boundary.home"):
         assert f"t('{key}')" in src, f"缺少文案 {key}"
+
+
+def test_canvas_is_the_only_page_scroller():
+    """第 278 批：正文滚动权收归 `.canvas`，不依赖文档滚动。
+
+    历史问题（真实报障口径）：侧栏 `.nav` 自己是滚动容器，正文却靠文档滚动。
+    两套滚动并存时，只要 body 被临时锁住（弹窗/抽屉）或内容刚好吃满首屏，
+    指针停在正文区滚轮就没有滚动目标，表现为"只有鼠标移到侧栏才能滚"。
+    """
+    shell = _read(SHELL)
+    app_css = re.search(r"\.app\s*\{([^}]*)\}", shell)
+    assert app_css, "AppShell 缺少 .app 样式"
+    app_body = app_css.group(1)
+    assert "height: 100svh" in app_body, "shell 必须固定视口高度（100svh）"
+    assert "overflow: hidden" in app_body, "shell 自身不滚动，滚动交给 .canvas"
+
+    canvas_css = re.search(r"\.canvas\s*\{([^}]*)\}", shell)
+    assert canvas_css, "AppShell 缺少 .canvas 样式"
+    canvas_body = canvas_css.group(1)
+    assert "overflow-y: auto" in canvas_body, ".canvas 必须是正文纵向滚动容器"
+    assert "overscroll-behavior-y: contain" in canvas_body, "滚到底不能把滚动链甩给文档"
+
+    router = _read(ROUTER)
+    assert "restoreCanvasTop(" in router, "文档已不滚动：路由切换必须自行复位/恢复画布位置"
+
+    offenders = sorted(
+        p.relative_to(REPO).as_posix()
+        for p in (CONSOLE / "src/views").rglob("*.vue")
+        if "window.scrollTo(" in _read(p)
+    )
+    assert not offenders, f"正文不再是 document 滚动，请改用 scrollCanvasTop()：{offenders}"

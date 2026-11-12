@@ -12439,3 +12439,51 @@ iframe 会递归加载控制台自身，URL 里的 token 也没有任何人消�
 - 技能卡与 Bot 的四眼审核目前只覆盖"创建→送审→审核"主链路，没有批量送审/到期复审提醒；
 - 演示数据中的提示模板与证据引用为院内常见指南口径，正式上线前需由医务处/药学部逐条确认；
 - 8001 单端口模式缺少前置反代，生产必须按 `docs/DEPLOY.md` 的 nginx 口径部署。
+
+## 278. 2026-11-12 滚动权收归画布（第 278 批）
+
+**问题（真实报障）**
+
+"鼠标指针放到侧栏才能滚动，放到正文中间无法滚动"。根因是**两套滚动并存**：
+侧栏 `.nav` 自己是滚动容器（`overflow: auto`），正文却靠**文档**滚动
+（shell 只有 `min-height: 100svh`）。一旦正文不可滚，只剩侧栏能滚——
+这不是"哪块能滚"的偏好问题，而是正文滚动目标缺失：
+
+- 旧 `/ai` 是 iframe 指向同一份控制台，指针落在 iframe 中央时滚的是内层文档（§277 已修）；
+- 弹窗/抽屉把 `body` 临时设成 `overflow: hidden` 时，正文随之失去滚动目标；
+- 内容恰好铺满首屏时，指针在正文区没有任何可滚动祖先。
+
+**本批做了什么**
+
+1. **shell 固定视口**：`.app { height: 100svh; overflow: hidden }`，
+   正文由 `.main` 撑满、`.canvas` 独占纵向滚动
+   （`overflow-y: auto` + `overscroll-behavior-y: contain` + `scrollbar-gutter: stable`）。
+   滚轮在正文任意位置的目标恒为 `.canvas`；侧栏与正文互不干扰。
+2. **滚动定位收口** `utils/scroll.ts`：`scrollCanvasTop()` / `currentCanvasTop()` /
+   `setCanvasTop()` / `restoreCanvasTop()`；`AiQcView`、`AiRxView` 的
+   `window.scrollTo` 改为 `scrollCanvasTop()`（文档已不滚动，原调用是空操作）。
+3. **路由接管滚动**：文档不滚动后 Vue Router 的 `savedPosition` 恒为 (0,0)，
+   因此 `scrollBehavior` 自行处理——`savedPosition` 非空（前进/后退）时按 fullPath
+   恢复离开位置，其余导航回顶部；恢复在 500ms 内重试几次（新视图列表异步撑高会把
+   `scrollTop` 夹回 0），用户一旦自己滚一下就立刻停手。
+4. **回归锁**：`test_canvas_is_the_only_page_scroller` 锁住 shell 固定视口、
+   `.canvas` 唯一滚动、路由必须复位、以及**视图内不得再出现 `window.scrollTo`**。
+
+**验证**
+
+```
+前端：npm run typecheck → 通过；npm run build → 通过（入口 97.69 KB gzip，低于 110 KB 预算）
+契约：console + ops/ci → 225 passed
+浏览器（127.0.0.1:5174，867px 视口）：
+  文档 scrollHeight == clientHeight（不可滚），.canvas 2712 / 867（可滚）
+  焦点在正文按 PageDown → canvas.scrollTop 758.4（文档 scrollY 恒 0）
+  /ai/review 滚到 600 → 点导航 → 新页 0 → 后退 → 恢复 600
+  7 个代表路由（/dashboard /ai /ai/chat /ai/agent /ops /release /orders）
+  横向无溢出、正文无空白、侧栏 .nav 独立可滚（2576 / 583）
+```
+
+**遗留**
+
+- 滚动条仍是浏览器原生细条（`::-webkit-scrollbar` 全局样式），没有做主题化悬浮滚动条；
+- 打印走独立窗口（`utils/print.ts`），不受本次滚动模型变更影响；
+- 页面内嵌套表格滚动（如医嘱工作台 `max-height`）仍保留，滚到底会继续滚画布。

@@ -386,6 +386,7 @@ import { errorText } from '@/api/http'
 import { t } from '@/i18n'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
+import { scrollCanvasTop } from '@/utils/scroll'
 
 defineOptions({ name: 'AiRxView' })
 
@@ -776,7 +777,7 @@ function startRewrite(item: AiPrescription) {
   suggestErr.value = ''
   tab.value = 'compose'
   dirty.value = true
-  window.scrollTo({ top: 0, behavior: 'smooth' })
+  scrollCanvasTop()
   toast.ok(t('aiRx.toast.rewriteFilled'))
 }
 

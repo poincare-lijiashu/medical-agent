@@ -485,10 +485,22 @@ function onViewportChange(e: MediaQueryListEvent) {
 </script>
 
 <style scoped>
+/*
+ * 第 278 批：滚动权收归「画布」一个容器。
+ *
+ * 之前 shell 只有 `min-height: 100svh`，正文靠文档滚动，侧栏 `.nav` 自己是滚动容器；
+ * 两套滚动并存时，只要 body 被临时锁住（弹窗/抽屉/旧 iframe 页面）
+ * 或内容刚好铺满首屏，指针在正文区滚轮就没有可滚动目标，只剩侧栏能滚。
+ * 现在改为 shell 固定视口、`.canvas` 独占纵向滚动：
+ *   1) 指针在正文任意位置，滚轮目标恒为 `.canvas`；
+ *   2) 弹窗锁 body 不再影响正文滚动；
+ *   3) 侧栏导航与正文互不干扰，各自滚动。
+ */
 .app {
   display: grid;
   grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
-  min-height: 100svh;
+  height: 100svh;
+  overflow: hidden;
   background: var(--ground);
 }
 
@@ -934,13 +946,24 @@ a.user-menu-item {
 .main {
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }
 
+/*
+ * 正文唯一滚动容器：`.canvas` 撑满剩余高度并纵向滚动。
+ * `overscroll-behavior: contain` 防止滚到底后把滚动链甩给文档（出现"橡皮筋"或误触刷新）；
+ * `scrollbar-gutter: stable` 让有无滚动条时内容宽度不跳。
+ */
 .canvas {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
   outline: none;
 }
 
