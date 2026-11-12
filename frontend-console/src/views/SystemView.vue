@@ -142,7 +142,12 @@
                       {{ roleName(r) }}
                     </span>
                   </td>
-                  <td data-label="状态"><StatusPill :value="u.status" /></td>
+                  <td data-label="状态">
+                    <StatusPill :value="u.status" />
+                    <div v-if="u.mustChangePassword" class="pwd-pending" title="口令由管理员代设，本人尚未修改">
+                      待首次改密
+                    </div>
+                  </td>
                   <td data-label="最后登录">{{ u.lastLoginAt ? dateTime(u.lastLoginAt) : '从未登录' }}</td>
                   <td data-label="操作">
                     <div class="row-actions">
@@ -422,7 +427,7 @@
                 maxlength="64"
                 autocomplete="new-password"
               />
-              <span class="hint">至少 8 位，同时含字母与数字。</span>
+              <span class="hint">至少 8 位，同时含字母与数字；本人首次登录时需自行修改。</span>
             </label>
           </template>
           <label class="field">
@@ -512,30 +517,61 @@
         :subtitle="resetTarget ? `${resetTarget.displayName} · ${resetTarget.username}` : ''"
         width="520px"
       >
-        <div class="stack">
-          <div class="notice notice--danger">
-            重置后旧密码立即失效；请通过安全渠道把新密码交给本人，并在首次登录后修改。
+        <!-- §285：重置成功后显示一次性临时口令（只在本次响应出现，关闭即无法找回） -->
+        <div v-if="resetResult" class="stack">
+          <div class="notice notice--warn">
+            临时口令只显示这一次。请通过安全渠道转交本人；本人首次登录后必须自行修改。
           </div>
           <label class="field">
-            <span class="label">新密码 <span class="req">*</span></span>
-            <input v-model="resetForm.password" class="input" type="password" maxlength="64" autocomplete="new-password" />
-            <span class="hint">至少 8 位，同时含字母与数字，且不能与用户名相同。</span>
-          </label>
-          <label class="field">
-            <span class="label">确认新密码 <span class="req">*</span></span>
-            <input v-model="resetForm.confirm" class="input" type="password" maxlength="64" autocomplete="new-password" />
+            <span class="label">一次性临时口令</span>
+            <div class="pwd-temp">
+              <input class="input mono" :value="resetResult.temporaryPassword ?? ''" readonly />
+              <button class="btn" type="button" @click="copyTempPassword">复制</button>
+            </div>
           </label>
         </div>
+
+        <div v-else class="stack">
+          <div class="notice notice--danger">
+            重置后旧密码立即失效，该账号的其他会话全部下线；本人首次登录必须修改口令。
+          </div>
+          <div class="mode-row" role="radiogroup" aria-label="口令来源">
+            <label class="radio">
+              <input v-model="resetForm.mode" type="radio" value="generated" />
+              <span>由系统生成临时口令（推荐）</span>
+            </label>
+            <label class="radio">
+              <input v-model="resetForm.mode" type="radio" value="manual" />
+              <span>手动指定口令</span>
+            </label>
+          </div>
+          <template v-if="resetForm.mode === 'manual'">
+            <label class="field">
+              <span class="label">新密码 <span class="req">*</span></span>
+              <input v-model="resetForm.password" class="input" type="password" maxlength="64" autocomplete="new-password" />
+              <span class="hint">至少 8 位，同时含字母与数字，且不能包含用户名。</span>
+            </label>
+            <label class="field">
+              <span class="label">确认新密码 <span class="req">*</span></span>
+              <input v-model="resetForm.confirm" class="input" type="password" maxlength="64" autocomplete="new-password" />
+            </label>
+          </template>
+        </div>
         <template #footer>
-          <button class="btn" type="button" @click="resetModalOpen = false">取消</button>
-          <button
-            class="btn btn--danger"
-            type="button"
-            :disabled="busy || !resetValid"
-            @click="submitReset"
-          >
-            确认重置
+          <button v-if="resetResult" class="btn btn--primary" type="button" @click="resetModalOpen = false">
+            我已保存，关闭
           </button>
+          <template v-else>
+            <button class="btn" type="button" @click="resetModalOpen = false">取消</button>
+            <button
+              class="btn btn--danger"
+              type="button"
+              :disabled="busy || !resetValid"
+              @click="submitReset"
+            >
+              确认重置
+            </button>
+          </template>
         </template>
       </AppModal>
 
@@ -653,7 +689,16 @@ import StatusPill from '@/components/ui/StatusPill.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { clinicalApi, systemApi } from '@/api'
 import { errorText, isForbidden } from '@/api/http'
-import type { AuditActionOption, AuditEvent, Campus, Dept, OrgRef, RoleRef, UserAccount } from '@/api/types'
+import type {
+  AuditActionOption,
+  AuditEvent,
+  Campus,
+  Dept,
+  OrgRef,
+  ResetPasswordResult,
+  RoleRef,
+  UserAccount,
+} from '@/api/types'
 import { hasPermission, session } from '@/stores/session'
 import { toast } from '@/stores/toast'
 import { dateTime } from '@/utils/format'
@@ -908,20 +953,30 @@ async function submitRoles() {
 
 const resetModalOpen = ref(false)
 const resetTarget = ref<UserAccount | null>(null)
-const resetForm = reactive({ password: '', confirm: '' })
+/** §285：默认由系统生成一次性临时口令；管理员不必替别人想口令（也不会出现全院同款弱口令）。 */
+const resetForm = reactive<{ mode: 'generated' | 'manual'; password: string; confirm: string }>({
+  mode: 'generated',
+  password: '',
+  confirm: '',
+})
+/** 非空时弹窗进入"一次性口令展示"状态；关闭后不可再取回。 */
+const resetResult = ref<ResetPasswordResult | null>(null)
 
 const resetValid = computed(() => {
+  if (resetForm.mode === 'generated') return true
   const p = resetForm.password
   if (p.length < 8) return false
   if (!/[A-Za-z]/.test(p) || !/\d/.test(p)) return false
-  if (resetTarget.value && p.toLowerCase() === resetTarget.value.username.toLowerCase()) return false
+  if (resetTarget.value && p.toLowerCase().includes(resetTarget.value.username.toLowerCase())) return false
   return p === resetForm.confirm
 })
 
 function openReset(u: UserAccount) {
   resetTarget.value = u
+  resetForm.mode = 'generated'
   resetForm.password = ''
   resetForm.confirm = ''
+  resetResult.value = null
   resetModalOpen.value = true
 }
 
@@ -929,13 +984,33 @@ async function submitReset() {
   if (!resetTarget.value || !resetValid.value) return
   busy.value = true
   try {
-    await systemApi.resetPassword(resetTarget.value.id, resetForm.password)
-    resetModalOpen.value = false
-    toast.ok('密码已重置', `${resetTarget.value.displayName} 需使用新密码登录`)
+    const result = await systemApi.resetPassword(
+      resetTarget.value.id,
+      resetForm.mode === 'manual' ? resetForm.password : undefined,
+    )
+    if (result.generated) {
+      // 临时口令只在本次响应出现：留在弹窗里让管理员复制，不做 toast（避免一闪而过）
+      resetResult.value = result
+    } else {
+      resetModalOpen.value = false
+      toast.ok('密码已重置', `${resetTarget.value.displayName} 首次登录需自行修改口令`)
+    }
+    await loadUsers()
   } catch (e) {
     toast.error('重置密码失败', errorText(e))
   } finally {
     busy.value = false
+  }
+}
+
+async function copyTempPassword() {
+  const value = resetResult.value?.temporaryPassword
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+    toast.ok('已复制临时口令', '请通过安全渠道转交本人，不要留在聊天记录里')
+  } catch {
+    toast.error('复制失败', '请手动选择文本后复制')
   }
 }
 
@@ -1275,6 +1350,36 @@ onMounted(() => {
 
 .role-badge {
   margin-right: 4px;
+}
+
+/* §285：管理员可见"待首次改密"，避免把临时口令当成长期口令交付 */
+.pwd-pending {
+  margin-top: 4px;
+  font-size: var(--fs-small);
+  color: var(--warning-ink);
+}
+
+.pwd-temp {
+  display: flex;
+  gap: 8px;
+}
+
+.pwd-temp .input {
+  flex: 1;
+  letter-spacing: 0.04em;
+}
+
+.mode-row {
+  display: grid;
+  gap: 8px;
+}
+
+.mode-row .radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-body);
+  cursor: pointer;
 }
 
 .row-actions {

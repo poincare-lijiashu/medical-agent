@@ -23,7 +23,7 @@ public class UserRepository {
 
     private static final String COLS = """
             id, username, password_hash, display_name, employee_no, org_code,
-            status, version, last_login_at, created_at, updated_at, tenant_code
+            status, must_change_password, version, last_login_at, created_at, updated_at, tenant_code
             """;
 
     private static final RowMapper<UserAccount> MAPPER = (ResultSet rs, int rowNum) -> new UserAccount(
@@ -34,6 +34,7 @@ public class UserRepository {
             rs.getString("employee_no"),
             rs.getString("org_code"),
             rs.getString("status"),
+            rs.getBoolean("must_change_password"),
             rs.getLong("version"),
             rs.getTimestamp("last_login_at") == null ? null : rs.getTimestamp("last_login_at").toInstant(),
             rs.getTimestamp("created_at").toInstant(),
@@ -119,9 +120,9 @@ public class UserRepository {
         jdbc.sql("""
                         INSERT INTO auth_svc.app_user
                             (id, username, password_hash, display_name, employee_no, org_code, status,
-                             version, tenant_code)
+                             must_change_password, version, tenant_code)
                         VALUES (:id, :username, :passwordHash, :displayName, :employeeNo, :orgCode,
-                                :status, 0, :tenantCode)
+                                :status, :mustChangePassword, 0, :tenantCode)
                         """)
                 .param("id", u.id())
                 .param("username", u.username())
@@ -130,6 +131,7 @@ public class UserRepository {
                 .param("employeeNo", u.employeeNo())
                 .param("orgCode", u.orgCode())
                 .param("status", u.status())
+                .param("mustChangePassword", u.mustChangePassword())
                 .param("tenantCode", u.tenantCode())
                 .update();
     }
@@ -167,14 +169,23 @@ public class UserRepository {
                 .update() > 0;
     }
 
-    /** 密码重置（不需要 CAS：由管理员显式操作，版本自增）。 */
-    public boolean updatePassword(UUID id, String passwordHash) {
+    /**
+     * 写入新口令并设置"是否仍需改密"（§285）。
+     *
+     * <p>{@code mustChangePassword} 必须由调用方显式给出，不提供默认值：
+     * 管理员重置（临时凭据）与本人改密（最终凭据）语义相反，让默认值替人决定迟早出事。
+     */
+    public boolean updatePassword(UUID id, String passwordHash, boolean mustChangePassword) {
         return jdbc.sql("""
                         UPDATE auth_svc.app_user
-                           SET password_hash = :hash, version = version + 1, updated_at = now()
+                           SET password_hash = :hash,
+                               must_change_password = :mustChange,
+                               version = version + 1,
+                               updated_at = now()
                          WHERE id = :id
                         """)
                 .param("hash", passwordHash)
+                .param("mustChange", mustChangePassword)
                 .param("id", id)
                 .update() > 0;
     }

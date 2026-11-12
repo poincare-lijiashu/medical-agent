@@ -1,6 +1,7 @@
 package com.medassist.auth.web;
 
 import com.medassist.auth.service.AuthService;
+import com.medassist.auth.web.dto.ChangePasswordReq;
 import com.medassist.auth.web.dto.LoginReq;
 import com.medassist.auth.web.dto.LoginResp;
 import com.medassist.auth.web.dto.MeResp;
@@ -100,6 +101,23 @@ public class AuthController {
         return ApiResponse.ok(service.me(parseUserId(userId)));
     }
 
+    /**
+     * 自助改密（§285）。
+     *
+     * <p>与管理员重置的分工：本接口要求<b>当前口令</b>，改完立即清首登标记并全端下线；
+     * 返回新的令牌对，当前浏览器无感续用。这里是唯一能把"他人代设口令"变成"本人凭据"的入口。
+     */
+    @PostMapping("/me/password")
+    public ApiResponse<LoginResp> changePassword(
+            @Valid @RequestBody ChangePasswordReq req,
+            @RequestHeader(value = AuthHeaders.USER_ID, required = false) String userId,
+            @RequestHeader(value = AuthHeaders.TOKEN_ID, required = false) String tokenId,
+            HttpServletRequest request) {
+        return ApiResponse.ok(service.changeOwnPassword(parseUserId(userId),
+                parseOptionalUuid(tokenId), req.currentPassword(), req.newPassword(),
+                clientIp(request), userAgent(request)));
+    }
+
     /** 我的活跃会话（设备）列表：仅本人可见，用于"发现异常登录并踢出"。 */
     @GetMapping("/sessions")
     public ApiResponse<List<SessionResp>> sessions(
@@ -182,6 +200,18 @@ public class AuthController {
             return UUID.fromString(userId.trim());
         } catch (IllegalArgumentException e) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED);
+        }
+    }
+
+    /** 可选的令牌 ID：缺失/格式错都视为"没有当前 jti"，不影响改密主流程（只影响旧令牌作废粒度）。 */
+    private static UUID parseOptionalUuid(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return UUID.fromString(value.trim());
+        } catch (IllegalArgumentException e) {
+            return null;
         }
     }
 

@@ -23,6 +23,27 @@ const messages: Record<MessageKey, string> = {
   'shell.logout': 'Sign out',
   'shell.language': '中文',
   'shell.console': 'Console',
+  'shell.changePassword': 'Change password',
+
+  /* ---------- Password change (§285) ---------- */
+  'pwd.forcedTitle': 'Change your password to continue',
+  'pwd.title': 'Change sign-in password',
+  'pwd.forcedDesc': 'Your current password was set by an administrator and is a temporary credential. Set a new password only you know before continuing.',
+  'pwd.desc': 'Other devices will be signed out immediately; this session stays signed in.',
+  'pwd.current': 'Current password',
+  'pwd.new': 'New password',
+  'pwd.confirm': 'Confirm new password',
+  'pwd.hint': 'At least 8 characters with both letters and digits; must not contain your username or be a common password.',
+  'pwd.submit': 'Change password',
+  'pwd.submitting': 'Changing…',
+  'pwd.cancel': 'Cancel',
+  'pwd.signout': 'Sign out',
+  'pwd.err.empty': 'Enter your current and new password',
+  'pwd.err.short': 'New password must be at least 8 characters',
+  'pwd.err.mixed': 'New password must contain both letters and digits',
+  'pwd.err.same': 'New password must differ from the current one',
+  'pwd.err.mismatch': 'The two new passwords do not match',
+  'pwd.changed': 'Password changed; other devices signed out',
 
   /* ---------- Global error boundary ---------- */
   'boundary.title': 'This page failed to render',

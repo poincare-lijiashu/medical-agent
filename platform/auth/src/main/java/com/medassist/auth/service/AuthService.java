@@ -6,7 +6,9 @@ import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
 import com.medassist.auth.repo.UserRepository;
 import com.medassist.auth.security.JwtTokenService;
+import com.medassist.auth.security.LoginThrottleProperties;
 import com.medassist.auth.security.PasswordHasher;
+import com.medassist.auth.security.PasswordPolicy;
 import com.medassist.auth.web.dto.LoginReq;
 import com.medassist.auth.web.dto.LoginResp;
 import com.medassist.auth.web.dto.MeResp;
@@ -63,6 +65,8 @@ public class AuthService {
     private final MeterRegistry meterRegistry;
     private final TenantService tenants;
     private final TenantProperties tenantProps;
+    private final PasswordPolicy passwordPolicy;
+    private final LoginThrottleProperties throttleProps;
 
     /** 用于用户名不存在时的恒定耗时比对（服务启动时生成一次，内容无意义）。 */
     private final String dummyHash;
@@ -70,7 +74,8 @@ public class AuthService {
     public AuthService(UserRepository users, RbacRepository rbac, TokenRepository tokens,
                        JwtTokenService jwt, LoginThrottle throttle, PasswordHasher hasher,
                        ObjectMapper objectMapper, MeterRegistry meterRegistry,
-                       TenantService tenants, TenantProperties tenantProps) {
+                       TenantService tenants, TenantProperties tenantProps,
+                       PasswordPolicy passwordPolicy, LoginThrottleProperties throttleProps) {
         this.users = users;
         this.rbac = rbac;
         this.tokens = tokens;
@@ -81,6 +86,8 @@ public class AuthService {
         this.meterRegistry = meterRegistry;
         this.tenants = tenants;
         this.tenantProps = tenantProps;
+        this.passwordPolicy = passwordPolicy;
+        this.throttleProps = throttleProps;
         this.dummyHash = hasher.encode(UUID.randomUUID().toString());
     }
 
@@ -170,7 +177,8 @@ public class AuthService {
                 Map.of("roles", roles, "deptIds", deptIds, "tokenId", access.tokenId(), "ip", clientIp));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt(), user.tenantCode());
+                user.orgCode(), deptIds, roles, permissions, user.mustChangePassword(),
+                user.lastLoginAt(), user.tenantCode());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -191,6 +199,9 @@ public class AuthService {
         // SSO 同样受租户状态约束：IdP 认证通过不代表这家医院还在服务期内
         tenants.requireUsableTenant(user.tenantCode() == null || user.tenantCode().isBlank()
                 ? tenantProps.effectiveDefaultCode() : user.tenantCode());
+        // §285：管理员代设的本地口令不能长期有效；SSO 已证明身份，直接作废该临时口令，
+        // 否则会形成死结——强制改密要求输入"当前口令"，而本人根本不知道管理员设了什么。
+        boolean temporaryRetired = retireTemporaryPasswordOnSso(user);
         List<String> roles = users.rolesOf(user.id());
         if (roles.isEmpty()) {
             audit(user.username(), "LOGIN_FAILED", user.id().toString(),
@@ -210,7 +221,9 @@ public class AuthService {
                 "tokenId", access.tokenId(), "ip", clientIp));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt(), user.tenantCode());
+                user.orgCode(), deptIds, roles, permissions,
+                temporaryRetired ? false : user.mustChangePassword(),
+                user.lastLoginAt(), user.tenantCode());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -257,8 +270,8 @@ public class AuthService {
                 Map.of("tokenId", access.tokenId(), "rotatedFrom", record.id().toString()));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), users.deptIdsOf(user.id()), roles, permissions, user.lastLoginAt(),
-                user.tenantCode());
+                user.orgCode(), users.deptIdsOf(user.id()), roles, permissions,
+                user.mustChangePassword(), user.lastLoginAt(), user.tenantCode());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -294,7 +307,8 @@ public class AuthService {
         }
         return new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
                 user.orgCode(), users.deptIdsOf(user.id()), users.rolesOf(user.id()),
-                rbac.permissionsOfUser(user.id()), user.lastLoginAt(), user.tenantCode());
+                rbac.permissionsOfUser(user.id()), user.mustChangePassword(),
+                user.lastLoginAt(), user.tenantCode());
     }
 
     /**
@@ -322,6 +336,102 @@ public class AuthService {
         }
         audit(actor, "SESSION_REVOKE", userId.toString(),
                 Map.of("sessionId", sessionId.toString()));
+    }
+
+    /**
+     * 自助改密（§285）。
+     *
+     * <p>闭环里最容易被做成 demo 的一步：只改哈希、不清标记，或只清标记不踢旧会话。
+     * 这里同时做四件事：
+     * <ol>
+     *   <li>校验当前口令（仅有访问令牌不够——共用工作站"人走屏留"时不能任人改密）；</li>
+     *   <li>新口令过统一策略，且不得与当前口令相同；</li>
+     *   <li>清 {@code must_change_password}（该口令从此是本人设置的最终凭据）；</li>
+     *   <li>撤销该账号<b>全部</b>刷新令牌并作废本次访问令牌 jti，随后给当前端签发新令牌——
+     *       即"其他设备立即下线，当前设备无感续用"。</li>
+     * </ol>
+     *
+     * <p>事务与 {@link #refresh} 同理：失败分支（口令错误、策略拒绝）必须保留
+     * 限速计数与审计，因此 {@code noRollbackFor = BusinessException.class}。
+     */
+    @Transactional(noRollbackFor = BusinessException.class)
+    public LoginResp changeOwnPassword(UUID userId, UUID currentTokenId, String currentPassword,
+                                       String newPassword, String clientIp, String userAgent) {
+        UserAccount user = users.findById(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED));
+        if (!user.active()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "账号已停用或锁定，请联系管理员");
+        }
+        tenants.requireUsableTenant(user.tenantCode() == null || user.tenantCode().isBlank()
+                ? tenantProps.effectiveDefaultCode() : user.tenantCode());
+
+        // 限速：持有令牌的人可以反复猜当前口令，不设阈值等于把改密接口变成口令爆破点。
+        // 复用登录限速的 PG 原子计数桶，但用独立前缀，避免影响正常登录。
+        String bucket = "pwd:" + user.id() + "|" + (clientIp == null ? "unknown" : clientIp);
+        if (throttleProps.enabled()
+                && tokens.claimThrottle(bucket, throttleProps.window()) > throttleProps.maxFailures()) {
+            throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS, "密码尝试次数过多，请稍后再试");
+        }
+
+        if (!hasher.verify(currentPassword, user.passwordHash())) {
+            audit(user.username(), "PASSWORD_CHANGE_FAILED", user.id().toString(),
+                    Map.of("reason", "BAD_CURRENT_PASSWORD", "ip", clientIp == null ? "unknown" : clientIp));
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "当前密码不正确");
+        }
+        if (hasher.verify(newPassword, user.passwordHash())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "新密码不能与当前密码相同");
+        }
+        passwordPolicy.validate(newPassword, user.username());
+
+        users.updatePassword(user.id(), hasher.encode(newPassword), false);
+
+        int revoked = tokens.revokeAllForUser(user.id());
+        if (currentTokenId != null) {
+            tokens.revokeJti(currentTokenId, user.id(),
+                    Instant.now().plus(jwt.properties().ttl()), "PASSWORD_CHANGE", user.username());
+        }
+        tokens.refundThrottle(bucket);
+
+        List<String> roles = users.rolesOf(user.id());
+        List<String> permissions = rbac.permissionsOfUser(user.id());
+        List<UUID> deptIds = users.deptIdsOf(user.id());
+        List<UUID> campusIds = users.campusIdsOf(user.id());
+        JwtTokenService.IssuedToken access = issueAccess(user, roles, permissions, deptIds, campusIds);
+        IssuedRefresh refresh = issueRefresh(user.id(), clientIp, userAgent, null);
+
+        audit(user.username(), "PASSWORD_CHANGE", user.id().toString(),
+                Map.of("revokedSessions", revoked, "ip", clientIp == null ? "unknown" : clientIp));
+
+        MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
+                user.orgCode(), deptIds, roles, permissions, false,
+                user.lastLoginAt(), user.tenantCode());
+        return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
+                refresh.token(), refresh.expiresAt(), me);
+    }
+
+    /**
+     * SSO 登录时作废"管理员代设的临时本地口令"（§285）。
+     *
+     * <p>为什么不是在 SSO 后弹强制改密：自助改密要求输入当前口令，而临时口令只有管理员知道，
+     * 本人在 SSO 场景下永远填不出来——强制弹窗会把人锁死在门外。
+     *
+     * <p>处理方式是把它换成一段<b>任何人都不知道</b>的随机口令并清标记：
+     * 管理员手里的旧口令立即失效，账号的凭据回到 IdP 手里。本地口令登录就此不可用，
+     * 需要时由管理员重置（重置后若仍走 SSO，会再次被作废）。
+     *
+     * @return 是否发生了作废（用于覆盖返回视图里的标记）
+     */
+    private boolean retireTemporaryPasswordOnSso(UserAccount user) {
+        if (!user.mustChangePassword()) {
+            return false;
+        }
+        byte[] raw = new byte[REFRESH_TOKEN_BYTES];
+        RANDOM.nextBytes(raw);
+        users.updatePassword(user.id(),
+                hasher.encode(Base64.getUrlEncoder().withoutPadding().encodeToString(raw)), false);
+        audit(user.username(), "PASSWORD_RETIRED_BY_SSO", user.id().toString(),
+                Map.of("reason", "TEMPORARY_CREDENTIAL", "provider", "sso"));
+        return true;
     }
 
     /** 内部令牌校验（排障用；不用于网关鉴权主链路——网关注入身份时本地校验）。 */

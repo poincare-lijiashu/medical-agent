@@ -142,8 +142,8 @@ public class JdbcCellDatabaseGateway implements CellDatabaseGateway {
                 try (PreparedStatement ps = connection.prepareStatement("""
                         INSERT INTO auth_svc.app_user
                             (id, username, password_hash, display_name, employee_no, status,
-                             version, tenant_code)
-                        VALUES (?, ?, ?, ?, ?, 'ACTIVE', 0, ?)
+                             must_change_password, version, tenant_code)
+                        VALUES (?, ?, ?, ?, ?, 'ACTIVE', true, 0, ?)
                         """)) {
                     ps.setObject(1, id);
                     ps.setString(2, spec.username());

@@ -260,13 +260,13 @@ class SsoServiceTest {
     private UserAccount user(String username) {
         Instant now = Instant.now();
         return new UserAccount(userId, username, "hash", "Doctor One", "E001", "D001",
-                "ACTIVE", 1L, now, now, now, "tenant-001");
+                "ACTIVE", false, 1L, now, now, now, "tenant-001");
     }
 
     private LoginResp loginResp(UserAccount user) {
         Instant now = Instant.now();
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), List.of(), List.of("DOCTOR"), List.of("emr:record:read"), now,
+                user.orgCode(), List.of(), List.of("DOCTOR"), List.of("emr:record:read"), false, now,
                 user.tenantCode());
         return new LoginResp("access", "Bearer", 1800, now.plusSeconds(1800),
                 "refresh", now.plusSeconds(604800), me);

@@ -190,6 +190,7 @@ import type {
   TechReportView,
   TechTemplateView,
   UserAccount,
+  ResetPasswordResult,
   Visit,
   VisitOrder,
   VisitTransfer,
@@ -206,6 +207,12 @@ export const authApi = {
     post<LoginResult>('/auth/refresh', { refreshToken }, { publicRequest: true }),
   me: () => get<Me>('/auth/me'),
   logout: () => post<void>('/auth/logout'),
+  /**
+   * 自助改密（§285）：校验当前口令，成功后返回新的令牌对（其他设备立即下线）。
+   * 首登必改的对话框与个人菜单的「修改密码」共用此接口。
+   */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    post<LoginResult>('/auth/me/password', { currentPassword, newPassword }),
 
   /** 统一身份 SSO（G42）：登录前接口，无令牌。 */
   ssoConfig: () => request<SsoConfig>('/auth/sso/config', { publicRequest: true }),
@@ -1640,8 +1647,9 @@ export const systemApi = {
   enableUser: (id: string) => post<UserAccount>(`/auth/users/${id}/enable`),
   assignRoles: (id: string, roles: string[]) =>
     put<UserAccount>(`/auth/users/${id}/roles`, { roles }),
-  resetPassword: (id: string, newPassword: string) =>
-    post<void>(`/auth/users/${id}/reset-password`, { newPassword }),
+  /** 管理员重置口令：newPassword 省略时由服务端生成一次性临时口令并置"首登必改"（§285）。 */
+  resetPassword: (id: string, newPassword?: string) =>
+    post<ResetPasswordResult>(`/auth/users/${id}/reset-password`, { newPassword }),
   roles: () => get<RoleRef[]>('/auth/rbac/roles'),
   orgs: () => get<OrgRef[]>('/auth/rbac/orgs'),
   /** 院区字典（G46）：账号院区分配与院区维护共用。 */

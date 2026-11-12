@@ -136,6 +136,15 @@ export const session = {
   applyLogin(result: LoginResult) {
     apply(result)
   },
+  /**
+   * 自助改密（§285）：后端返回新的令牌对（其他设备已下线），这里直接替换本地会话，
+   * 因此用户改完密码不需要重新登录，`mustChangePassword` 也随之变为 false。
+   */
+  async changePassword(currentPassword: string, newPassword: string) {
+    const result = await authApi.changePassword(currentPassword, newPassword)
+    apply(result)
+    return result
+  },
   async validate() {
     if (!state.accessToken) return false
     // 令牌临近过期时先刷新，避免启动阶段产生一次必然的 401（控制台噪音）

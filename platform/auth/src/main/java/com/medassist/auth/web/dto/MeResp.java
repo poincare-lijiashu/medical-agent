@@ -19,6 +19,8 @@ public record MeResp(
         List<UUID> deptIds,
         List<String> roles,
         List<String> permissions,
+        /** 口令为他人代设的临时凭据（§285）：前端据此弹出不可跳过的改密对话框。 */
+        boolean mustChangePassword,
         Instant lastLoginAt,
         /** 账号所属租户（ADR-001）；前端在页头展示"当前院区/实例"，避免在错误的入口操作。 */
         String tenantCode

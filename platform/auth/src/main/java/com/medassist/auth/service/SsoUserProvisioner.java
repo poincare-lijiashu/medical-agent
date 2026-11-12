@@ -72,7 +72,7 @@ public class SsoUserProvisioner {
         UUID userId = UUID.randomUUID();
         UserAccount user = new UserAccount(userId, username, passwordHash,
                 blankTo(displayName, username), null, blankToNull(props.defaultOrgCode()),
-                "ACTIVE", 0L, null, now, now,
+                "ACTIVE", false, 0L, null, now, now,
                 tenantCode == null || tenantCode.isBlank() ? null : tenantCode.trim());
         users.insert(user);
         users.replaceRoles(user.id(), props.defaultRoles());

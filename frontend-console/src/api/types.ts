@@ -24,6 +24,8 @@ export interface Me {
   orgCode: string | null
   roles: string[]
   permissions: string[]
+  /** 口令为他人代设的临时凭据（§285）：为 true 时控制台强制弹出改密对话框。 */
+  mustChangePassword?: boolean
   lastLoginAt: string | null
   /** 所属租户（ADR-001）：页头展示"当前院区"，避免在错误的入口操作。 */
   tenantCode?: string | null
@@ -2727,10 +2729,18 @@ export interface UserAccount {
   /** 可访问院区 ID（G45/G46；登录令牌下发 campuses 声明）。 */
   campusIds: string[]
   status: 'ACTIVE' | 'DISABLED' | 'LOCKED'
+  /** 口令为他人代设的临时凭据（§285）：本人尚未完成首登改密。 */
+  mustChangePassword?: boolean
   roles: string[]
   version: number
   lastLoginAt: string | null
   createdAt: string
+}
+
+/** 管理员重置口令结果（§285）：generated 时 temporaryPassword 只出现一次。 */
+export interface ResetPasswordResult {
+  generated: boolean
+  temporaryPassword: string | null
 }
 
 /** 院区字典（多院区数据归属边界）。 */

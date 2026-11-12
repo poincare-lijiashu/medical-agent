@@ -7,6 +7,7 @@ import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
 import com.medassist.auth.repo.UserRepository;
 import com.medassist.auth.security.PasswordHasher;
+import com.medassist.auth.security.PasswordPolicy;
 import com.medassist.auth.web.dto.CreateUserReq;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -53,7 +54,7 @@ class UserServiceDeptTest {
         rbac = mock(RbacRepository.class);
         PasswordHasher hasher = mock(PasswordHasher.class);
         service = new UserService(users, rbac, JsonMapper.builder().build(), hasher,
-                mock(TokenRepository.class), TENANT);
+                mock(TokenRepository.class), TENANT, new PasswordPolicy());
 
         when(users.existsByUsername(anyString(), anyString())).thenReturn(false);
         when(hasher.encode(anyString())).thenReturn("$2a$10$mock");
@@ -62,7 +63,7 @@ class UserServiceDeptTest {
         when(users.findById(any())).thenAnswer(inv -> {
             UUID id = inv.getArgument(0);
             return Optional.of(new UserAccount(id, "doctor01", "$2a$10$mock", "张医生",
-                    "E1001", null, UserAccount.STATUS_ACTIVE, 0L, null,
+                    "E1001", null, UserAccount.STATUS_ACTIVE, false, 0L, null,
                     Instant.now(), Instant.now(), "tenant-001"));
         });
         when(users.rolesOf(any())).thenReturn(List.of("DOCTOR"));

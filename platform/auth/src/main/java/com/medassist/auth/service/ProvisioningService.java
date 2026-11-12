@@ -6,6 +6,7 @@ import com.medassist.auth.domain.TenantQuotas;
 import com.medassist.auth.repo.ProvisionRepository;
 import com.medassist.auth.repo.TenantRepository;
 import com.medassist.auth.security.PasswordHasher;
+import com.medassist.auth.security.PasswordPolicy;
 import com.medassist.auth.web.dto.ProvisioningDtos;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -17,7 +18,6 @@ import org.springframework.stereotype.Service;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
-import java.security.SecureRandom;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -58,9 +58,6 @@ public class ProvisioningService {
     private static final Pattern JDBC_URL = Pattern.compile(
             "jdbc:postgresql://([^/:\\[]+|\\[[^]]+]+)(?::(\\d+))?/([^?]+).*");
 
-    private static final String PASSWORD_ALPHABET =
-            "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
-
     private static final int MAX_LIST = 50;
 
     private final ProvisionRepository jobs;
@@ -68,14 +65,15 @@ public class ProvisioningService {
     private final CellDatabaseGateway cell;
     private final LicenseGateway license;
     private final PasswordHasher hasher;
+    private final PasswordPolicy passwordPolicy;
     private final ObjectMapper json;
     private final String controlPlaneJdbcUrl;
     private final boolean requireLicenseByDefault;
-    private final SecureRandom random = new SecureRandom();
 
     public ProvisioningService(ProvisionRepository jobs, TenantRepository tenants,
                                CellDatabaseGateway cell, LicenseGateway license,
-                               PasswordHasher hasher, ObjectMapper json,
+                               PasswordHasher hasher, PasswordPolicy passwordPolicy,
+                               ObjectMapper json,
                                @Value("${spring.datasource.url:}") String controlPlaneJdbcUrl,
                                @Value("${medassist.provisioning.require-license:false}")
                                boolean requireLicenseByDefault) {
@@ -84,6 +82,7 @@ public class ProvisioningService {
         this.cell = cell;
         this.license = license;
         this.hasher = hasher;
+        this.passwordPolicy = passwordPolicy;
         this.json = json;
         this.controlPlaneJdbcUrl = controlPlaneJdbcUrl;
         this.requireLicenseByDefault = requireLicenseByDefault;
@@ -282,14 +281,15 @@ public class ProvisioningService {
             return Outcome.skip(Map.of("username", spec.adminUsername(), "existing", true),
                     "管理员已存在，未重置其口令");
         }
-        String password = generatePassword();
+        String password = passwordPolicy.generateTemporary();
         cell.createAdmin(new CellDatabaseGateway.AdminSpec(spec.dbHost(), spec.dbName(),
                 spec.tenantCode(), spec.adminUsername(), spec.adminDisplayName(),
                 spec.adminEmployeeNo(), hasher.encode(password)));
         result.put("adminUsername", spec.adminUsername());
         result.put("adminCreated", true);
+        // 首个管理员的口令是"一次性"：Cell 内已置 must_change_password，本人首登必须改密
         return Outcome.ok(Map.of("username", spec.adminUsername(), "created", true,
-                "roles", List.of("ADMIN")), password);
+                "roles", List.of("ADMIN"), "mustChangePassword", true), password);
     }
 
     private Outcome checkLicense(Spec spec, Map<String, Object> result) {
@@ -458,14 +458,6 @@ public class ProvisioningService {
             tenants.logChange(actor, "TENANT_PROVISION", tenantCode,
                     "{\"jobId\":\"" + jobId + "\",\"status\":\"" + status + "\"}");
         }
-    }
-
-    private String generatePassword() {
-        StringBuilder builder = new StringBuilder("Aa1");
-        for (int i = 0; i < 17; i++) {
-            builder.append(PASSWORD_ALPHABET.charAt(random.nextInt(PASSWORD_ALPHABET.length())));
-        }
-        return builder.toString();
     }
 
     private static DbCoord parseJdbcUrl(String url) {

@@ -5,6 +5,7 @@ import com.medassist.auth.web.dto.AssignCampusesReq;
 import com.medassist.auth.web.dto.AssignRolesReq;
 import com.medassist.auth.web.dto.CreateUserReq;
 import com.medassist.auth.web.dto.ResetPasswordReq;
+import com.medassist.auth.web.dto.ResetPasswordResp;
 import com.medassist.auth.web.dto.UpdateUserReq;
 import com.medassist.auth.web.dto.UserResp;
 import com.medassist.common.api.ApiResponse;
@@ -136,15 +137,21 @@ public class UserController {
         return ApiResponse.ok(service.assignCampuses(id, req.campusIds(), actor, tenant));
     }
 
+    /**
+     * 管理员重置口令（§285）：置"首登必改"标记并撤销全部刷新令牌。
+     *
+     * <p>请求体 {@code newPassword} 为空时由服务端生成一次性临时口令并只在本次响应返回，
+     * 管理员不必替别人想口令；指定口令时同样会强制本人首次登录修改。
+     */
     @PostMapping("/{id}/reset-password")
-    public ApiResponse<Void> resetPassword(
+    public ApiResponse<ResetPasswordResp> resetPassword(
             @PathVariable UUID id,
             @Valid @RequestBody ResetPasswordReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
             @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, RESET_PASSWORD);
-        service.resetPassword(id, req.newPassword(), actor, tenant);
-        return ApiResponse.ok(null);
+        String temp = service.resetPassword(id, req.newPassword(), actor, tenant);
+        return ApiResponse.ok(new ResetPasswordResp(temp != null, temp));
     }
 }

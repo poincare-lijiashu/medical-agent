@@ -121,6 +121,10 @@
               <div class="user-menu-sub">{{ session.roleLabel.value }} · {{ scopeLabel }}</div>
             </div>
             <!-- 第 211 批：控制台是唯一前端，AI 能力已内联为 /ai/* 页面，不再跨端新开页签 -->
+            <button class="user-menu-item" type="button" role="menuitem" @click="openPasswordChange">
+              <AppIcon name="key" :size="16" />
+              {{ t('shell.changePassword') }}
+            </button>
             <button class="user-menu-item" type="button" role="menuitem" @click="switchLocale">
               <AppIcon name="globe" :size="16" />
               {{ t('shell.language') }}
@@ -186,6 +190,14 @@
       @theme="toggleTheme"
       @logout="logout"
     />
+
+    <!-- §285：首登强制改密 / 个人菜单主动改密，共用同一个对话框 -->
+    <ChangePasswordDialog
+      v-model="pwdOpen"
+      :forced="pwdForced"
+      @saved="onPasswordSaved"
+      @signout="logout"
+    />
   </div>
 </template>
 
@@ -195,10 +207,12 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import AppIcon from '@/components/ui/AppIcon.vue'
 import AppErrorBoundary from '@/components/ui/AppErrorBoundary.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
+import ChangePasswordDialog from '@/components/auth/ChangePasswordDialog.vue'
 import { NAV_GROUPS, NAV_ITEMS, canSeeNav, findNav } from '@/navigation'
 import { navGroupLabel, navTitle, t, toggleLocale } from '@/i18n'
 import { broadcastLogout, onRemoteLogout } from '@/utils/sessionBus'
 import { clearSession, session } from '@/stores/session'
+import { toast } from '@/stores/toast'
 import { loadTodoItems, type TodoItem } from '@/todos'
 import { IDLE_EVENTS, idleSeconds, idleTimeoutMin, shouldWarnIdle } from '@/idle'
 
@@ -218,6 +232,36 @@ const todoTotal = computed(() =>
   todos.value.reduce((sum, item) => sum + (item.count ?? 0), 0),
 )
 let todoTimer = 0
+
+/* ---- §285 首登强制改密：标记来自 /auth/me，本人改密成功后由服务端清零 ---- */
+const pwdOpen = ref(false)
+const pwdForced = ref(false)
+
+function openPasswordChange() {
+  userMenuOpen.value = false
+  pwdForced.value = false
+  pwdOpen.value = true
+}
+
+/** 标记为真时打开不可跳过的对话框；用户可直接看到"为什么要求改密"。 */
+function guardPasswordChange() {
+  if (!session.user.value?.mustChangePassword) return
+  pwdForced.value = true
+  pwdOpen.value = true
+}
+
+function onPasswordSaved() {
+  pwdForced.value = false
+  toast.ok(t('pwd.changed'))
+}
+
+// 登录/刷新/SSO 都会替换会话对象：只要标记为真就立刻阻断，不依赖用户刷新页面
+watch(
+  () => session.user.value?.mustChangePassword,
+  (flag) => {
+    if (flag) guardPasswordChange()
+  },
+)
 
 /* ---- 空闲超时（第 221 批）：时间戳判定 + 60s 倒计时告警 ---- */
 const idleWarn = ref(false)
@@ -458,6 +502,8 @@ onMounted(async () => {
     void router.replace('/login')
   })
   await session.validate()
+  // 首登必改优先于一切：先弹改密，再谈待办与巡检
+  guardPasswordChange()
   await refreshTodos()
   todoTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') void refreshTodos()

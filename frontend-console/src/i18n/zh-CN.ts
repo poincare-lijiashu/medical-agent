@@ -26,6 +26,27 @@ const messages = {
   // 语言项显示的是"点了会切成什么"，所以中文界面下写 English
   'shell.language': 'English',
   'shell.console': '控制台',
+  'shell.changePassword': '修改密码',
+
+  /* ---------- 改密（§285） ---------- */
+  'pwd.forcedTitle': '首次登录请修改密码',
+  'pwd.title': '修改登录密码',
+  'pwd.forcedDesc': '当前口令由管理员代设，属于临时凭据。请先设置只有您本人知道的新口令；修改完成前无法使用其他功能。',
+  'pwd.desc': '修改后其他设备将立即下线，当前会话保持登录。',
+  'pwd.current': '当前密码',
+  'pwd.new': '新密码',
+  'pwd.confirm': '确认新密码',
+  'pwd.hint': '至少 8 位，同时包含字母与数字；不得包含用户名，且不能是常见弱口令。',
+  'pwd.submit': '确认修改',
+  'pwd.submitting': '正在修改…',
+  'pwd.cancel': '取消',
+  'pwd.signout': '退出登录',
+  'pwd.err.empty': '请填写当前密码与新密码',
+  'pwd.err.short': '新密码长度不能少于 8 位',
+  'pwd.err.mixed': '新密码必须同时包含字母与数字',
+  'pwd.err.same': '新密码不能与当前密码相同',
+  'pwd.err.mismatch': '两次输入的新密码不一致',
+  'pwd.changed': '密码已修改，其他设备已下线',
 
   /* ---------- 全局错误边界 ---------- */
   'boundary.title': '当前页面出错',

@@ -80,7 +80,8 @@ def test_one_time_password_is_never_persisted():
     assert "password" not in repo.lower()
     assert 'result.put("adminCreated"' in service
     assert "hasher.encode(password)" in service
-    assert "generatePassword" in service
+    # §285 起口令生成收敛到统一策略，避免"开通"与"重置"各生成一套
+    assert "passwordPolicy.generateTemporary()" in service
 
 
 def test_admin_step_is_idempotent():

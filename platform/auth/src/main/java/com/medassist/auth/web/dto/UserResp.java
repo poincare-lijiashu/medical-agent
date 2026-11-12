@@ -14,6 +14,8 @@ public record UserResp(
         List<UUID> deptIds,
         List<UUID> campusIds,
         String status,
+        /** 口令为他人代设的临时凭据（§285）：管理端可据此识别"尚未完成首登改密"的账号。 */
+        boolean mustChangePassword,
         List<String> roles,
         long version,
         Instant lastLoginAt,

@@ -71,7 +71,7 @@ class SsoControllerTest {
         Instant now = Instant.now();
         UUID id = UUID.randomUUID();
         MeResp me = new MeResp(id, "doctor01", "Doctor", "E001", "D001", List.of(),
-                List.of("DOCTOR"), List.of("emr:record:read"), now, "tenant-001");
+                List.of("DOCTOR"), List.of("emr:record:read"), false, now, "tenant-001");
         return new LoginResp("access", "Bearer", 1800, now.plusSeconds(1800),
                 "refresh", now.plusSeconds(604800), me);
     }

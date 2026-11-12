@@ -6,6 +6,7 @@ import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
 import com.medassist.auth.repo.UserRepository;
 import com.medassist.auth.security.PasswordHasher;
+import com.medassist.auth.security.PasswordPolicy;
 import com.medassist.auth.web.dto.CreateUserReq;
 import com.medassist.auth.web.dto.UpdateUserReq;
 import com.medassist.auth.web.dto.UserResp;
@@ -30,7 +31,8 @@ import java.util.UUID;
  * <p>生产级约束（逐条对应计划书 D12 验收矩阵）：
  * <ul>
  *   <li>用户名大小写不敏感唯一；</li>
- *   <li>密码强度：≥8 位且同时含字母与数字，且不得与用户名相同；</li>
+ *   <li>口令强度统一由 {@link PasswordPolicy} 校验（开户 / 重置 / 自助改密同一套规则）；</li>
+ *   <li>他人代设的口令一律标记 {@code must_change_password}，本人首次登录必须自行修改；</li>
  *   <li>角色必须为已定义角色（禁止任意字符串）；</li>
  *   <li>更新走乐观锁，冲突返回 {@link ErrorCode#CONFLICT}；</li>
  *   <li><b>不能停用最后一个启用状态的 ADMIN</b>——防止系统性锁死；</li>
@@ -41,12 +43,6 @@ import java.util.UUID;
 public class UserService {
 
     private static final String ADMIN_ROLE = "ADMIN";
-
-    /** 常见弱口令（小写）；只收真正高频、且满足"8 位 + 字母数字"因而能绕过组合规则的。 */
-    private static final Set<String> WEAK_PASSWORDS = Set.of(
-            "12345678", "123456789", "1234567890", "password", "password1", "passw0rd1",
-            "abc12345", "a1234567", "qwerty12", "admin123", "administrator", "11111111",
-            "88888888", "00000000", "hospital1", "doctor123", "nurse123", "medassist1");
 
     /** 单账号最多绑定的临床科室数（防止把"全院"用科室列表拼出来）。 */
     private static final int MAX_DEPTS_PER_USER = 20;
@@ -60,15 +56,18 @@ public class UserService {
     private final PasswordHasher hasher;
     private final TokenRepository tokens;
     private final TenantProperties tenantProps;
+    private final PasswordPolicy passwordPolicy;
 
     public UserService(UserRepository users, RbacRepository rbac, ObjectMapper objectMapper,
-                       PasswordHasher hasher, TokenRepository tokens, TenantProperties tenantProps) {
+                       PasswordHasher hasher, TokenRepository tokens, TenantProperties tenantProps,
+                       PasswordPolicy passwordPolicy) {
         this.users = users;
         this.rbac = rbac;
         this.objectMapper = objectMapper;
         this.hasher = hasher;
         this.tokens = tokens;
         this.tenantProps = tenantProps;
+        this.passwordPolicy = passwordPolicy;
     }
 
     /**
@@ -100,9 +99,10 @@ public class UserService {
         }
 
         UUID id = UUID.randomUUID();
+        // 开户口令由管理员代设，属于临时凭据：本人首次登录必须自行修改（§285）
         users.insert(new UserAccount(id, username, hasher.encode(req.password()),
                 req.displayName().trim(), blankToNull(req.employeeNo()), orgCode,
-                UserAccount.STATUS_ACTIVE, 0L, null, null, null, tenant));
+                UserAccount.STATUS_ACTIVE, true, 0L, null, null, null, tenant));
         users.replaceRoles(id, roles);
         users.replaceDepts(id, deptIds);
 
@@ -231,17 +231,38 @@ public class UserService {
         return detail(id, tenant);
     }
 
+    /**
+     * 管理员重置口令（§285）。
+     *
+     * <p>两种模式：
+     * <ul>
+     *   <li>{@code newPassword} 为空：服务端生成一次性临时口令，<b>只在返回值里出现一次</b>；</li>
+     *   <li>{@code newPassword} 非空：管理员指定口令（仍需通过同一套策略校验）。</li>
+     * </ul>
+     *
+     * <p>无论哪种模式都置 {@code must_change_password=true}：管理员知道的口令不是本人的凭据，
+     * 必须由本人在首次登录时替换。同时撤销全部刷新令牌——被盗的 refresh token 不能因为
+     * "管理员重置了一次"继续续签。
+     *
+     * @return 生成的临时口令；管理员显式指定口令时返回 {@code null}
+     */
     @Transactional
-    public void resetPassword(UUID id, String newPassword, String actor, String tenantCode) {
+    public String resetPassword(UUID id, String newPassword, String actor, String tenantCode) {
         String tenant = requireTenant(tenantCode);
         UserAccount current = requireInTenant(id, tenant);
-        validatePassword(newPassword, current.username());
-        users.updatePassword(id, hasher.encode(newPassword));
+
+        boolean generated = newPassword == null || newPassword.isBlank();
+        String effective = generated ? passwordPolicy.generateTemporary() : newPassword;
+        if (!generated) {
+            passwordPolicy.validate(effective, current.username());
+        }
+        users.updatePassword(id, hasher.encode(effective), true);
         // 改密必须踢掉既有会话：否则被盗的 refresh token 仍能在有效期内换新令牌，等于改密无效。
         int revoked = revokeAllSessions(id);
-        // 审计不记录密码本身，只记录发生重置
-        audit(actor, "USER_RESET_PASSWORD", id.toString(),
-                Map.of("username", current.username(), "revokedSessions", revoked));
+        // 审计不记录口令本身，只记录"发生重置"与是否由系统生成
+        audit(actor, "USER_RESET_PASSWORD", id.toString(), Map.of(
+                "username", current.username(), "revokedSessions", revoked, "generated", generated));
+        return generated ? effective : null;
     }
 
     /**
@@ -256,28 +277,9 @@ public class UserService {
 
     // ---------------------------------------------------------------- 内部方法
 
-    /** 密码强度校验：≥8 位、同时含字母与数字、不得与用户名相同、不得是常见弱口令。 */
+    /** 口令策略统一入口：规则集中在 {@link PasswordPolicy}，避免多入口各写一份。 */
     private void validatePassword(String password, String username) {
-        if (password == null || password.length() < 8) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码长度不能少于 8 位");
-        }
-        boolean hasLetter = password.chars().anyMatch(Character::isLetter);
-        boolean hasDigit = password.chars().anyMatch(Character::isDigit);
-        if (!hasLetter || !hasDigit) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码必须同时包含字母与数字");
-        }
-        if (password.equalsIgnoreCase(username)) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码不能与用户名相同");
-        }
-        // P1-S2：长度 + 字母数字的组合规则拦不住"Password1""hospital1"这类默认口令，
-        // 医院现场恰恰最常见；这里用小而准的黑名单兜底（不引入额外依赖）。
-        if (WEAK_PASSWORDS.contains(password.toLowerCase(java.util.Locale.ROOT))) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
-                    "密码过于常见（如 Password1、admin123），请更换为不易猜测的组合");
-        }
-        if (password.chars().distinct().count() == 1) {
-            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "密码不能是单一字符的重复");
-        }
+        passwordPolicy.validate(password, username);
     }
 
     /** 角色归一化：去空白、去重保序、校验角色存在。 */
@@ -364,6 +366,7 @@ public class UserService {
     private UserResp toResp(UserAccount u) {
         return new UserResp(u.id(), u.username(), u.displayName(), u.employeeNo(),
                 u.orgCode(), users.deptIdsOf(u.id()), users.campusIdsOf(u.id()), u.status(),
+                u.mustChangePassword(),
                 users.rolesOf(u.id()), u.version(), u.lastLoginAt(), u.createdAt(), u.tenantCode());
     }
 

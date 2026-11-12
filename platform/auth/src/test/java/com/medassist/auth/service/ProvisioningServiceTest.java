@@ -6,6 +6,7 @@ import com.medassist.auth.domain.TenantQuotas;
 import com.medassist.auth.repo.ProvisionRepository;
 import com.medassist.auth.repo.TenantRepository;
 import com.medassist.auth.security.PasswordHasher;
+import com.medassist.auth.security.PasswordPolicy;
 import com.medassist.auth.web.dto.ProvisioningDtos;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
@@ -50,7 +51,7 @@ class ProvisioningServiceTest {
         cell = new FakeCell();
         license = new FakeLicense();
         service = new ProvisioningService(jobs, tenants, cell, license, new PasswordHasher(),
-                JsonMapper.builder().build(), CONTROL_URL, false);
+                new PasswordPolicy(), JsonMapper.builder().build(), CONTROL_URL, false);
     }
 
     @Test
