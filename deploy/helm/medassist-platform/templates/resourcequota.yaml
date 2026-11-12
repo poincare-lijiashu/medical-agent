@@ -1,0 +1,25 @@
+{{/*
+每 Cell 资源配额（ADR-001）。
+一院一 Cell 的意义在于"别家吃饱不会饿到本院"：没有 ResourceQuota，一个院的
+诊断服务雪崩把节点吃满，别院 Pod 会被驱逐——隔离就只剩数据库那一层了。
+*/}}
+{{- $cell := .Values.cell | default dict }}
+{{- $q := $cell.resourceQuota | default dict }}
+{{- if and $q.enabled $cell.tenantCode }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "medassist.fullname" . }}-cell
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" . "component" "cell") | nindent 4 }}
+  annotations:
+    medassist.io/purpose: "per-cell capacity guard (ADR-001)"
+spec:
+  hard:
+    requests.cpu: {{ $q.requestsCpu | default "4" | quote }}
+    requests.memory: {{ $q.requestsMemory | default "8Gi" | quote }}
+    limits.cpu: {{ $q.limitsCpu | default "16" | quote }}
+    limits.memory: {{ $q.limitsMemory | default "32Gi" | quote }}
+    pods: {{ $q.pods | default "60" | quote }}
+{{- end }}

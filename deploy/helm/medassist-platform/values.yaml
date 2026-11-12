@@ -234,6 +234,32 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
+# ---- Cell（每院一个独立安装）----
+# ADR-001：一院一 Cell。做法不是"一个 release 里跑多租户"，而是**每院一套 release**：
+#   命名空间 medassist-<tenantCode>，external.postgres 指向该院独立实例，
+#   ingress.hosts 指向该院域名，TENANT_* 环境变量把身份钉死在本院。
+# 不填 tenantCode 表示"单院私有化"：不注入租户路由，行为与历史版本一致。
+cell:
+  tenantCode: ""
+  # 该院部署实例码：写入令牌 instance 声明，必须与授权书（license）实例码一致
+  instanceCode: ""
+  # 入口域名（网关按它把请求映射到本院；多院控制面时启用）
+  hosts: []
+  region: ""
+  # 资源配额（每 Cell 独立）。null 表示不生成 ResourceQuota
+  resourceQuota:
+    enabled: false
+    requestsCpu: "4"
+    requestsMemory: "8Gi"
+    limitsCpu: "16"
+    limitsMemory: "32Gi"
+    pods: "60"
+  # 容器默认 requests/limits（防止漏配的容器把节点吃满）
+  limitRange:
+    enabled: false
+    defaultCpu: "500m"
+    defaultMemory: "1Gi"
+
 # ---- 数据库迁移 Hook（auth / empi 各自的 Flyway 迁移)----
 migration:
   enabled: true

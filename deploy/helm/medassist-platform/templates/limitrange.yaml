@@ -1,0 +1,25 @@
+{{/*
+每 Cell 容器默认 requests/limits（ADR-001）。
+没有 LimitRange 时，一个漏配 resources 的容器可以无限申请，直接影响本 Cell
+的调度公平性；这里给"默认值兜底"，显式配置仍然优先。
+*/}}
+{{- $cell := .Values.cell | default dict }}
+{{- $l := $cell.limitRange | default dict }}
+{{- if and $l.enabled $cell.tenantCode }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "medassist.fullname" . }}-cell
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" . "component" "cell") | nindent 4 }}
+spec:
+  limits:
+    - type: Container
+      default:
+        cpu: {{ $l.defaultCpu | default "500m" | quote }}
+        memory: {{ $l.defaultMemory | default "1Gi" | quote }}
+      defaultRequest:
+        cpu: {{ $l.defaultRequestCpu | default "100m" | quote }}
+        memory: {{ $l.defaultRequestMemory | default "256Mi" | quote }}
+{{- end }}

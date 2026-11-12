@@ -155,6 +155,19 @@ public class TenantRepository {
                 .update() > 0;
     }
 
+    /**
+     * Cell 数据库坐标（仅控制面运维用：迁移台账读取、开通编排）。
+     *
+     * <p>刻意不放进 {@link Tenant} 与前端视图：库名/主机属于基础设施信息，
+     * 医院管理员不需要也不应该看到"自己这台机器的内网地址"。
+     */
+    public Optional<CellDatabase> findCellDatabase(String tenantCode) {
+        return jdbc.sql("SELECT db_host, db_name FROM auth_svc.tenant WHERE code = ?")
+                .param(tenantCode)
+                .query((rs, i) -> new CellDatabase(rs.getString("db_host"), rs.getString("db_name")))
+                .optional();
+    }
+
     public long countUsers(String tenantCode) {
         return jdbc.sql("SELECT count(*) FROM auth_svc.app_user WHERE tenant_code = ?")
                 .param(tenantCode).query(Long.class).single();
@@ -236,5 +249,9 @@ public class TenantRepository {
 
     /** 变更记录视图。 */
     public record ChangeEntry(Instant ts, String actor, String action, String detail) {
+    }
+
+    /** Cell 数据库坐标：{@code db_host} 允许写成 {@code host:port} 或只有 host。 */
+    public record CellDatabase(String dbHost, String dbName) {
     }
 }

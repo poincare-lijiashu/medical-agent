@@ -79,6 +79,24 @@ export interface UpdateTenantInput {
   version: number
 }
 
+/** Cell 迁移台账（§282）：回答"这家医院跑到哪一版、有没有失败迁移"。 */
+export interface CellMigrationItem {
+  service: string
+  version: string
+  description?: string | null
+  success: boolean
+  installedOn?: string | null
+}
+
+export interface CellMigrationView {
+  tenantCode: string
+  syncedAt?: string | null
+  reachable: boolean
+  error?: string | null
+  hasFailure: boolean
+  items: CellMigrationItem[]
+}
+
 export const tenantApi = {
   list: () => get<TenantList>('/auth/tenants'),
   detail: (code: string) => get<Tenant>(`/auth/tenants/${encodeURIComponent(code)}`),
@@ -90,6 +108,9 @@ export const tenantApi = {
   /** 状态流转（仅 tenant:manage）：停用/恢复/注销；停用会撤销全院刷新令牌。 */
   changeStatus: (code: string, status: Exclude<TenantStatus, 'PENDING'>, reason: string, version: number) =>
     post<Tenant>(`/auth/tenants/${encodeURIComponent(code)}/status`, { status, reason, version }),
+  /** Cell 迁移台账（仅 tenant:manage）：控制面连到该院数据库汇总版本，30 秒节流。 */
+  migrations: (code: string, refresh = false) =>
+    get<CellMigrationView>(`/auth/tenants/${encodeURIComponent(code)}/migrations`, { refresh }),
 }
 
 /** 状态文案与色调（页面与详情共用，避免两处写得不一样）。 */

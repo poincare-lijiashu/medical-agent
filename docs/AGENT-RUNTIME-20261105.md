@@ -12681,3 +12681,63 @@ Java：auth 88 passed（含 TenantServiceTest 11）；gateway 全绿（含新增
 - §284 开通自动化：一键开通（建库→迁移→编排→license→首个管理员）与租户健康度看板；
 - 控制台目前不提供"注销租户"入口（后端已支持 CLOSED 终态，避免误操作放在 P3 一并设计）；
 - SSO 自动开户已按入口租户落库，但 IdP 配置仍是单份：多院各自 IdP 需要按 Cell 配置（§282 一并处理）。
+
+## 282. 2026-11-12 Cell 数据面隔离与迁移台账（第 282 批 / ADR-001 P1）
+
+**为什么是"每院一个 release"而不是"一个 release 跑多院"**
+
+ADR-001 把隔离强度定为第一目标。落在部署上就是：**一家医院一套 Helm release + 一个独立命名空间
++ 一个独立 PostgreSQL 实例**，而不是在一个库里加 tenant_id。本批把这条从文档变成可执行资产，
+并把"哪家跑到哪版"这个物理隔离后最大的运维问题做成了可查询的台账。
+
+**本批做了什么**
+
+1. **Cell 部署契约**（Helm）：`values.yaml` 新增 `cell`（tenantCode / instanceCode / hosts / region /
+   resourceQuota / limitRange）；`_helpers.tpl` 给所有资源加 `medassist.io/tenant` 标签，
+   并按 cell 注入 `TENANT_DEFAULT_CODE`、`TENANT_INSTANCE_CODE`；**入口路由只开在网关**
+   （业务服务按 Cell 部署，不需要判断入口）。
+2. **每 Cell 资源配额**：新增 `resourcequota.yaml` / `limitrange.yaml`（一院打满不能挤掉别院）；
+   默认关闭，`values-cell-example.yaml` 演示两家院怎么开。
+3. **迁移台账**（auth V96）：`auth_svc.cell_migration` 记录 `(租户, 服务, 版本, checksum, 安装时间, 成败)`；
+   `tenant.db_name` 存该 Cell 的库名。台账由控制面从各 Cell 的 `flyway_schema_history` **只读汇总**，
+   不执行迁移、不写对方库。
+4. **台账服务**：`GET /api/v2/auth/tenants/{code}/migrations`（仅 `tenant:manage`）——
+   30 秒节流 + 5s 连接超时 + 10s 查询超时；库不可达时返回缓存与原因（离线医院是常态，
+   监控页不该白屏）；失败迁移用 `success=false` 永久保留，不会被后来的成功抹掉。
+5. **一次性迁移入口补齐**：`material` / `license` 此前没有 `MigrateOnlyRunner`
+   （迁移只能在应用启动时跑，多副本会争抢历史表锁）；本批补齐，并新增 `job-migrate-license.yaml`。
+6. **本地开通脚本** `scripts/new_cell.ps1`：起第二 PG（独立端口/数据卷）→ 15 个服务以
+   一次性 Job 模式迁移 → 控制面登记租户与库坐标。脚本会校验 jar 是否可执行包
+   （"服务在跑导致 repackage 失败、留下普通 jar"是本地最常见的坑）。
+7. **控制台**：租户页新增「Cell 迁移版本」（仅平台运营可见），按服务展示当前版本、失败标记与同步时间。
+
+**验证**
+
+```
+Java：auth 91 passed（新增 CellMigrationServiceTest 3）
+前端：typecheck / build 通过（入口 gzip 98.44KB < 110KB）
+契约：tests/test_console_cell_isolation.py 9 + test_console_tenant.py 16 → 25 passed
+全量：pytest -m "not e2e" → 见下条（本批新增 9 项）
+
+本地真实开通（scripts/new_cell.ps1，tenant-002）：
+  独立实例            127.0.0.1:5434（容器 medagent_pg_tenant002，独立数据卷）
+  迁移                15/15 服务成功（每个 migrate-only 进程迁移后退出）
+  物理隔离            cell1 账号 240 / 患者 731；cell2 账号 0 / 患者 0
+  二院登录（一院号）   401（二院库里没有这个账号）
+  一院令牌打二院入口   403 40321（entry=tenant-002 token=tenant-001）
+  未登记 Host          403
+
+迁移台账（ops01 / PLATFORM_OPERATOR）：
+  GET /auth/tenants                200 total=2 platformLevel=true
+  GET /tenants/tenant-002/migrations 200 reachable=true 15 个服务域
+      auth v96 · clinical v71 · emr v27 · insurance v24 · pharmacy v20 · tech v18 ·
+      material v5 · empi v5 · kb v4 · mdm v1 · mig v3 · ops v3 · release v2 · fhir v1 · license v1
+  GET /tenants/tenant-001/migrations 200 reachable=true（补登 db_host 后）
+```
+
+**遗留（下一批 §283/§284）**
+
+- 故障注入演练（kill 单 Cell 数据库 / 打满 CPU，验证别院 P99 波动 ≤5%）尚未做成脚本；
+- 二院只验证到"库与身份"层：其余 14 个服务未在二院起进程（本地资源所限），生产由 Helm 每院整套拉起；
+- 数据库备份仍是单实例 CronJob，按 Cell 独立备份桶 + PITR 窗口需随 §284 开通编排一起做；
+- 租户页尚未展示"落后于发布列车"的红黄标记（台账已有数据，判定逻辑放在 §283 验收一起做）。

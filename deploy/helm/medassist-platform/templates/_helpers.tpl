@@ -55,6 +55,13 @@ helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version | replace 
 app.kubernetes.io/version: {{ .root.Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 app.kubernetes.io/part-of: medassist-platform
+{{- $cell := .root.Values.cell | default dict }}
+{{- if $cell.tenantCode }}
+medassist.io/tenant: {{ $cell.tenantCode | quote }}
+{{- if $cell.region }}
+medassist.io/region: {{ $cell.region | quote }}
+{{- end }}
+{{- end }}
 {{- end -}}
 
 {{/* 镜像全名：imageRegistry 为空时直接用 repository（可写完整仓库地址）。
@@ -181,6 +188,28 @@ Java 服务公共环境变量。
     secretKeyRef:
       name: {{ include "medassist.secretName" (dict "root" .root "external" .root.Values.external.jwt "suffix" "jwt") }}
       key: {{ .root.Values.external.jwt.secretKey }}
+{{- end }}
+# ---- 租户与实例（ADR-001）：每 Cell 只认本院 ----
+# 默认租户 = 本院：入口 Host 未映射时回落到它，绝不会落到别家。
+{{- $cell := .root.Values.cell | default dict }}
+{{- if $cell.tenantCode }}
+- name: TENANT_DEFAULT_CODE
+  value: {{ $cell.tenantCode | quote }}
+{{- if $cell.instanceCode }}
+- name: TENANT_INSTANCE_CODE
+  value: {{ $cell.instanceCode | quote }}
+{{- end }}
+{{- if and $isGateway $cell.hosts }}
+# 多院入口路由只开在网关：业务服务按 Cell 部署，不需要也不应该判断入口
+{{- $pairs := list }}
+{{- range $h := $cell.hosts }}
+{{- $pairs = append $pairs (printf "%s=%s" $h $cell.tenantCode) }}
+{{- end }}
+- name: TENANT_ROUTING_ENABLED
+  value: "true"
+- name: TENANT_HOSTS
+  value: {{ join "," $pairs | quote }}
+{{- end }}
 {{- end }}
 # 服务间内部接口令牌：全平台唯一变量名（一处轮换、全部滚动重启即可）。
 # 各服务的 <SVC>_INTERNAL_TOKEN 仅作兼容回落，新部署只需维护 INTERNAL_API_TOKEN。

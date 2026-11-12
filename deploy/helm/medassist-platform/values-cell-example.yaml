@@ -1,0 +1,69 @@
+# ============================================================================
+# 每院一个 Cell 的 values 示例（ADR-001）
+#
+# 用法（两家医院 = 两个 release + 两个命名空间）：
+#   helm install hospital-a ./deploy/helm/medassist-platform \
+#     -n medassist-tenant-001 --create-namespace \
+#     -f values-prod.yaml -f values-cell-a.yaml
+#
+#   helm install hospital-b ./deploy/helm/medassist-platform \
+#     -n medassist-tenant-002 --create-namespace \
+#     -f values-prod.yaml -f values-cell-b.yaml
+#
+# 关键点（不要省）：
+#   1) 命名空间必须一院一个：NetworkPolicy 只在命名空间内互信，混住等于没隔离；
+#   2) external.postgres 指向该院独立实例与独立 Secret（不同账号/不同备份桶）；
+#   3) cell.hosts 写该院域名，网关据此把请求映射到本院；
+#   4) resourceQuota 必须开：一院打满不能挤掉别院。
+# ============================================================================
+
+# ---- 医院 A（市一院）----
+# 复制为 values-cell-a.yaml 使用
+cell:
+  tenantCode: tenant-001
+  instanceCode: MEDASSIST-HOSP-A-0001
+  hosts:
+    - hospital-a.example
+  region: cn-east
+  resourceQuota:
+    enabled: true
+    requestsCpu: "6"
+    requestsMemory: "12Gi"
+    limitsCpu: "24"
+    limitsMemory: "48Gi"
+    pods: "80"
+  limitRange:
+    enabled: true
+    defaultCpu: "500m"
+    defaultMemory: "1Gi"
+
+external:
+  postgres:
+    host: pg-hospital-a.database.svc.cluster.local
+    port: 5432
+    database: medagent
+    # 每院独立 Secret：账号与备份权限互不相通
+    existingSecret: medassist-postgres-tenant-001
+
+ingress:
+  enabled: true
+  hosts:
+    - host: hospital-a.example
+      paths:
+        - path: /
+          pathType: Prefix
+          service: gateway
+          port: 8080
+
+# ---- 医院 B（市二院）：第二个文件，改这三处即可 ----
+# cell:
+#   tenantCode: tenant-002
+#   instanceCode: MEDASSIST-HOSP-B-0001
+#   hosts: [hospital-b.example]
+# external:
+#   postgres:
+#     host: pg-hospital-b.database.svc.cluster.local
+#     existingSecret: medassist-postgres-tenant-002
+# ingress:
+#   hosts:
+#     - host: hospital-b.example

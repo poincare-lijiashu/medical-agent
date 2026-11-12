@@ -185,6 +185,47 @@
         </section>
       </div>
 
+      <section v-if="platformLevel" class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">Cell 迁移版本</span>
+          <span class="spacer" />
+          <span class="hint">
+            控制面直接读取该院数据库的 Flyway 历史（只读）；不可达时展示缓存并说明原因
+          </span>
+          <button class="btn btn--sm btn--ghost" type="button" :disabled="migLoading" @click="reloadMigrations()">
+            <AppIcon name="refresh" :size="14" /> {{ migLoading ? '同步中…' : '重新同步' }}
+          </button>
+        </div>
+        <div v-if="migrations && !migrations.reachable" class="alert-list" role="status">
+          <div class="alert-item danger">
+            <AppIcon name="alert" :size="15" />
+            <span>{{ migrations.error || '该院数据库当前不可达，以下为上次同步结果' }}</span>
+          </div>
+        </div>
+        <div v-if="migrations?.hasFailure" class="alert-list" role="status">
+          <div class="alert-item danger">
+            <AppIcon name="alert" :size="15" />
+            <span>该院存在失败的迁移记录：请核对该服务的 schema 后再放量。</span>
+          </div>
+        </div>
+        <EmptyState
+          v-if="!migrations || !migrations.items.length"
+          title="尚无迁移记录"
+          desc="该院 Cell 尚未登记数据库坐标（db_host），或库内还没有 Flyway 历史。"
+        />
+        <div v-else class="mig-grid">
+          <div v-for="m in migrations.items" :key="m.service" class="mig-item">
+            <span class="mig-service">{{ m.service }}</span>
+            <span class="mono mig-version">v{{ m.version }}</span>
+            <span class="sub mig-desc" :title="m.description || ''">{{ m.description || '—' }}</span>
+            <span v-if="!m.success" class="badge badge--danger">失败</span>
+          </div>
+        </div>
+        <p v-if="migrations?.syncedAt" class="hint mig-foot">
+          最近同步：{{ dateTime(migrations.syncedAt) }} · 共 {{ migrations.items.length }} 个服务域
+        </p>
+      </section>
+
       <section class="sheet">
         <div class="sheet-head">
           <span class="sheet-title">隔离契约</span>
@@ -376,6 +417,7 @@ import { errorText, isForbidden } from '@/api/http'
 import {
   TENANT_STATUS_TEXT,
   tenantApi,
+  type CellMigrationView,
   type Tenant,
   type TenantList,
   type TenantStatus,
@@ -385,6 +427,8 @@ import { toast } from '@/stores/toast'
 
 const list = ref<TenantList | null>(null)
 const selected = ref<Tenant | null>(null)
+const migrations = ref<CellMigrationView | null>(null)
+const migLoading = ref(false)
 const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
@@ -422,13 +466,37 @@ async function load() {
   }
 }
 
-/** 选中某一行并加载它的详情（含最近变更）。 */
+/** 选中某一行并加载它的详情（含最近变更）与迁移台账（仅平台运营）。 */
 async function selectTenant(t: Tenant) {
   try {
     selected.value = await tenantApi.detail(t.code)
   } catch {
     // 列表已经能展示关键信息；详情失败不打断整页
     selected.value = t
+  }
+  if (platformLevel.value) {
+    await reloadMigrations(false)
+  } else {
+    migrations.value = null
+  }
+}
+
+/** 平台运营视角：拉取该院 Cell 的迁移版本（force=true 时忽略后端 30s 节流）。 */
+async function reloadMigrations(force = true) {
+  if (!selected.value) return
+  migLoading.value = true
+  try {
+    migrations.value = await tenantApi.migrations(selected.value.code, force)
+  } catch {
+    migrations.value = {
+      tenantCode: selected.value.code,
+      reachable: false,
+      hasFailure: false,
+      error: '迁移台账暂不可达（需要 tenant:manage 权限或租户服务异常）',
+      items: [],
+    }
+  } finally {
+    migLoading.value = false
   }
 }
 
@@ -801,6 +869,40 @@ function suggestCode(): string {
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+.mig-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 8px;
+  padding: 10px 16px 4px;
+}
+.mig-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--ground);
+  min-width: 0;
+}
+.mig-service {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  min-width: 62px;
+}
+.mig-version {
+  font-weight: 600;
+}
+.mig-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mig-foot {
+  padding: 0 16px 12px;
 }
 .contract {
   list-style: none;
