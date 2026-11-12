@@ -3,6 +3,7 @@ package com.medassist.ops.web;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.ops.repo.OpsRepository;
+import com.medassist.ops.service.AlertIngestService;
 import com.medassist.ops.service.IncidentService;
 import com.medassist.ops.service.OpsDashboardService;
 import com.medassist.ops.service.OnCallService;
@@ -33,6 +34,7 @@ class OpsControllerPermissionTest {
     private OpsDashboardService dashboardService;
     private OnCallService onCallService;
     private IncidentService incidentService;
+    private AlertIngestService alertIngestService;
     private OpsRepository repo;
     private OpsController controller;
 
@@ -43,9 +45,10 @@ class OpsControllerPermissionTest {
         dashboardService = mock(OpsDashboardService.class);
         onCallService = mock(OnCallService.class);
         incidentService = mock(IncidentService.class);
+        alertIngestService = mock(AlertIngestService.class);
         repo = mock(OpsRepository.class);
         controller = new OpsController(slaService, ticketService, dashboardService,
-                onCallService, incidentService, repo);
+                onCallService, incidentService, alertIngestService, repo);
     }
 
     private void assertForbidden(Runnable call) {

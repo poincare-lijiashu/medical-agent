@@ -112,12 +112,13 @@
         </button>
       </div>
       <span class="spacer" />
-      <span class="hint">工单按 SLA 策略自动计时；事件复盘需第二人批准。</span>
+      <span class="hint">工单按 SLA 自动计时；复盘需第二人批准；告警可按接入源自动建单。</span>
     </div>
 
     <OpsTicketPanel v-if="activeTab === 'tickets'" @changed="loadDashboard" />
     <OpsIncidentPanel v-else-if="activeTab === 'incidents'" @changed="loadDashboard" />
-    <OpsOnCallPanel v-else @changed="loadDashboard" />
+    <OpsOnCallPanel v-else-if="activeTab === 'oncall'" @changed="loadDashboard" />
+    <OpsIntegrationPanel v-else @changed="loadDashboard" />
   </div>
 </template>
 
@@ -127,6 +128,7 @@ import AppIcon from '@/components/ui/AppIcon.vue'
 import KpiCard from '@/components/ui/KpiCard.vue'
 import PageHeader from '@/components/ui/PageHeader.vue'
 import OpsIncidentPanel from '@/components/domain/ops/OpsIncidentPanel.vue'
+import OpsIntegrationPanel from '@/components/domain/ops/OpsIntegrationPanel.vue'
 import OpsOnCallPanel from '@/components/domain/ops/OpsOnCallPanel.vue'
 import OpsTicketPanel from '@/components/domain/ops/OpsTicketPanel.vue'
 import { opsApi, type OpsDashboard } from '@/api/ops'
@@ -134,12 +136,13 @@ import { errorText } from '@/api/http'
 import { hasPermission } from '@/stores/session'
 import { toast } from '@/stores/toast'
 
-type TabKey = 'tickets' | 'incidents' | 'oncall'
+type TabKey = 'tickets' | 'incidents' | 'oncall' | 'integration'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'tickets', label: '工单' },
   { key: 'incidents', label: '重大事件' },
   { key: 'oncall', label: '值班' },
+  { key: 'integration', label: '自动化' },
 ]
 
 const canWrite = hasPermission('ops:ticket:write')

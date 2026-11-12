@@ -57,6 +57,13 @@ export interface RequestOptions {
   signal?: AbortSignal
   /** 额外请求头（如 Idempotency-Key）。 */
   headers?: Record<string, string>
+  /**
+   * 副作用失败（如侧栏待办角标）不触发全局登出。
+   *
+   * <p>AI 中台与 Java 网关的令牌验收口径可能暂时不一致；让一个角标把整个会话踢掉，
+   * 会让用户连"重新登录"之外的页面都打不开。调用方需自行展示失败态（如“—”）。
+   */
+  noSessionExpire?: boolean
 }
 
 function buildUrlWith(base: string, path: string, query?: RequestOptions['query']) {
@@ -368,7 +375,7 @@ async function aiOnce<T>(path: string, opts: RequestOptions, retried: boolean): 
 
   if (res.status === 401) {
     if (!retried && (await doRefresh())) return aiOnce<T>(path, opts, true)
-    onSessionExpired?.()
+    if (!opts.noSessionExpire) onSessionExpired?.()
     throw new AiRequestError('登录状态已失效，请重新登录', 401)
   }
   if (!res.ok) throw new AiRequestError(aiErrorMessage(text, res.status), res.status)
@@ -385,8 +392,13 @@ export function aiRequest<T>(path: string, opts: RequestOptions = {}): Promise<T
   return aiOnce<T>(path, opts, false)
 }
 
-export function aiGet<T>(path: string, query?: RequestOptions['query'], signal?: AbortSignal) {
-  return aiRequest<T>(path, { query, signal })
+export function aiGet<T>(
+  path: string,
+  query?: RequestOptions['query'],
+  signal?: AbortSignal,
+  opts?: Pick<RequestOptions, 'noSessionExpire'>,
+) {
+  return aiRequest<T>(path, { query, signal, ...opts })
 }
 
 export function aiPost<T>(path: string, body?: unknown, signal?: AbortSignal) {

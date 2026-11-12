@@ -256,6 +256,10 @@ medassist:
         - /api/v2/auth/sso/config
         - /api/v2/auth/sso/oidc/authorize
         - /api/v2/auth/sso/oidc/callback
+        # 外部系统入站（告警平台/CI）：网关不验用户令牌，服务端按接入源令牌校验并固定 actor。
+        # 仅这两个前缀放行，管理接入源的 /api/v2/ops/integrations/** 仍需 JWT。
+        - /api/v2/ops/hooks/**
+        - /api/v2/release/hooks/**
         # K8s 探针路径为 /actuator/health/liveness|readiness，必须放行，否则探针会拿到 401；
         # 但**不再放行 /actuator/** 整段**（那会把路由表、指标、bean 信息一并裸奔），
         # 只精确白名单健康检查与 Prometheus 抓取（后者由 NetworkPolicy 限制来源）。
@@ -327,6 +331,16 @@ medassist:
           qps: ${SENTINEL_QPS_MDM:60}
         - path: /api/v2/audit
           qps: ${SENTINEL_QPS_AUDIT:100}
+        # 外部入站（告警/CI）：无用户令牌，必须单独限流，防止接入方故障时打满进程。
+        # 列表按顺序前缀匹配，需放在通用 ops/release 之前。
+        - path: /api/v2/ops/hooks
+          qps: ${SENTINEL_QPS_OPS_HOOKS:30}
+        - path: /api/v2/release/hooks
+          qps: ${SENTINEL_QPS_RELEASE_HOOKS:30}
+        - path: /api/v2/ops
+          qps: ${SENTINEL_QPS_OPS:100}
+        - path: /api/v2/release
+          qps: ${SENTINEL_QPS_RELEASE:100}
       # 熔断规则（慢调用比例）：慢下游不要靠排队硬扛，直接快速失败并给下游恢复窗口。
       # slow-rt-ms 必须明显小于网关 response-timeout（30s），否则永远等不到熔断就 504 了。
       degrade-rules:

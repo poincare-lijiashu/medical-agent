@@ -731,6 +731,50 @@ SLA/目录、值班、复盘审批、审计）。**SLA 修改不能让一线自�
 「建单 → 详情 → 取消」与「发布列车就绪 → 补丁状态 → 部署检查单」的端到端走查，
 控制台无错误/警告。
 
+## 外部接入：告警自动建单与 CI/CD 回写（§276）
+
+**定位**：把"监控平台发现 → 人工转单"和"流水线发版 → 人工补部署记录"这两段机械劳动交给系统，
+但**不绕过任何现有门禁**：告警仍生成标准工单，部署仍走冻结窗口/生产检查单/回滚链。
+
+| 能力 | 端点 | 权限 |
+|---|---|---|
+| 告警接入源管理 | `GET/POST /ops/integrations/alert-sources`、`POST /{id}/rotate`、`POST /{id}/disable` | `ops:read` / `ops:integration:manage` |
+| 告警入站（Alertmanager） | `POST /ops/hooks/alerts/{sourceCode}` | 接入源 Bearer 令牌 |
+| 告警入站日志 | `GET /ops/integrations/alert-events` | `ops:read` |
+| CI 接入源管理 | `GET/POST /release/integrations/ci-sources`、`POST /{id}/rotate`、`POST /{id}/disable` | `release:read` / `release:integration:manage` |
+| CI 入站（构建/部署） | `POST /release/hooks/cicd/{sourceCode}` + `X-CI-Event-Id` | 接入源 Bearer 令牌 |
+| CI 入站日志 | `GET /release/integrations/ci-events` | `release:read` |
+
+**告警语义**
+
+- 按 `(sourceCode, fingerprint)` 唯一：重复 firing 只更新 `last_seen_at`，在节流窗口外追加一条说明，不重复建单；
+- `severity_map` 可配置 `critical→P1 / warning→P2 / info→IGNORE`；`IGNORE` 只留痕不建单；
+- 标签 `service/app/job/component` 依次尝试映射服务目录，找不到回退接入源默认服务，再回退 `infra-monitoring`；
+- `resolved` 且接入源开启 `auto_resolve` 时：处理中→解决；已派单→接单后解决；人工接单前已恢复→取消并说明；
+- 每次入站都写 `ops_hook_event`，响应返回 received/created/commented/resolved/ignored/deduped/failed。
+
+**CI 语义**
+
+- `(sourceCode, eventId)` 幂等：已处理事件重复投递直接返回首次 `deploymentId`，不重复落部署；
+- `BUILD` 成功且版本不存在时自动登记 **DRAFT** 版本（发布仍需人工审批）；构建失败只留痕；
+- `DEPLOY` 复用 `DeploymentService.record`：冻结窗口 409、PROD 检查单缺失 422、回滚必须指向原部署；
+- 接入源可配置 `allowed_components`，防止一条流水线误发其他服务的部署记录；
+- 部署 `actor` 固定为 `ci:<sourceCode>`，原始 `actor` 写入 reason，保证机器操作可追溯。
+
+**安全边界**
+
+- 令牌只存 SHA-256（`HookTokens` 常量时间比较），明文只在创建/轮换时返回一次；
+- 网关白名单只放行 `/api/v2/ops/hooks/**` 与 `/api/v2/release/hooks/**`；
+  管理接入源的 `/api/v2/{ops,release}/integrations/**` 仍需 JWT；
+- 通用 `ActorGuardFilter` 只豁免 `hooks` 前缀，管理接口仍必须带 `X-Actor`；
+- 入站路径单独限流（默认 30 QPS），且排在通用 ops/release 规则之前。
+
+**前端**：运营工作台新增「自动化」页签（接入源、一次性令牌、入站事件、Alertmanager 示例），
+发布管理新增「CI 集成」页签（接入源、组件白名单、CI 事件、示例 payload）。
+
+**可机检**：`tests/test_ops_ci_integration.py`（10 项）校验表结构、令牌只存哈希、
+网关只放行 hooks、限流顺序、事件去重/幂等、越权路径与前端页签接线。
+
 ## 构建与运行
 
 ```powershell

@@ -40,7 +40,11 @@ public class ActorGuardFilter extends OncePerRequestFilter {
     private static final String[] EXEMPT_PREFIXES = {
             "/internal/", "/actuator/",
             "/auth/login", "/auth/refresh", "/auth/sso/",
-            "/login", "/refresh", "/sso/"
+            "/login", "/refresh", "/sso/",
+            // 外部系统入站（告警平台/CI）：没有登录用户，身份由接入源令牌校验，
+            // 服务端把 actor 固定为 integration:<sourceCode>，不信任请求体自报。
+            // 注意只豁免 /hooks/，管理接入源仍必须带 X-Actor。
+            "/ops/hooks/", "/release/hooks/"
     };
 
     /** 历史兜底值：出现即视为"没有真实操作者"。 */

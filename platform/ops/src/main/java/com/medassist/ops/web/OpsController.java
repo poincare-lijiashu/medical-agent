@@ -4,6 +4,9 @@ import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.PageResult;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
+import com.medassist.ops.domain.OpsIntegrationModel.AlertSource;
+import com.medassist.ops.domain.OpsIntegrationModel.HookEvent;
+import com.medassist.ops.domain.OpsIntegrationModel.SourceCreated;
 import com.medassist.ops.domain.OpsModel.AuditLog;
 import com.medassist.ops.domain.OpsModel.Calendar;
 import com.medassist.ops.domain.OpsModel.Incident;
@@ -14,6 +17,7 @@ import com.medassist.ops.domain.OpsModel.ServiceCatalog;
 import com.medassist.ops.domain.OpsModel.SlaPolicy;
 import com.medassist.ops.domain.OpsModel.Ticket;
 import com.medassist.ops.repo.OpsRepository;
+import com.medassist.ops.service.AlertIngestService;
 import com.medassist.ops.service.IncidentService;
 import com.medassist.ops.service.OpsDashboardService;
 import com.medassist.ops.service.OnCallService;
@@ -60,22 +64,26 @@ public class OpsController {
     private static final String INCIDENT_WRITE = "ops:incident:write";
     private static final String ONCALL_MANAGE = "ops:oncall:manage";
     private static final String AUDIT_READ = "ops:audit:read";
+    private static final String INTEGRATION_MANAGE = "ops:integration:manage";
 
     private final SlaService slaService;
     private final TicketService ticketService;
     private final OpsDashboardService dashboardService;
     private final OnCallService onCallService;
     private final IncidentService incidentService;
+    private final AlertIngestService alertIngestService;
     private final OpsRepository repo;
 
     public OpsController(SlaService slaService, TicketService ticketService,
                          OpsDashboardService dashboardService, OnCallService onCallService,
-                         IncidentService incidentService, OpsRepository repo) {
+                         IncidentService incidentService, AlertIngestService alertIngestService,
+                         OpsRepository repo) {
         this.slaService = slaService;
         this.ticketService = ticketService;
         this.dashboardService = dashboardService;
         this.onCallService = onCallService;
         this.incidentService = incidentService;
+        this.alertIngestService = alertIngestService;
         this.repo = repo;
     }
 
@@ -507,6 +515,74 @@ public class OpsController {
             @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
         Permissions.require(permissions, INCIDENT_WRITE);
         return ApiResponse.ok(incidentService.approvePostmortem(id, req, actor, clientIp, traceId));
+    }
+
+    // ------------------------------------------------------------------ 告警接入（§276）
+
+    @GetMapping("/integrations/alert-sources")
+    public ApiResponse<List<AlertSource>> alertSources(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(alertIngestService.listSources());
+    }
+
+    @PostMapping("/integrations/alert-sources")
+    public ApiResponse<SourceCreated> createAlertSource(
+            @Valid @RequestBody OpsIntegrationDtos.AlertSourceReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INTEGRATION_MANAGE);
+        return ApiResponse.ok(alertIngestService.createSource(req, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/integrations/alert-sources/{id}/rotate")
+    public ApiResponse<SourceCreated> rotateAlertSource(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INTEGRATION_MANAGE);
+        return ApiResponse.ok(alertIngestService.rotate(id, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/integrations/alert-sources/{id}/disable")
+    public ApiResponse<AlertSource> disableAlertSource(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, INTEGRATION_MANAGE);
+        return ApiResponse.ok(alertIngestService.disable(id, actor, clientIp, traceId));
+    }
+
+    @GetMapping("/integrations/alert-events")
+    public ApiResponse<List<HookEvent>> alertEvents(
+            @RequestParam(required = false) String sourceCode,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(alertIngestService.listEvents(sourceCode, limit));
+    }
+
+    /**
+     * 告警平台入站（Alertmanager Webhook）。
+     *
+     * <p>网关白名单放行该前缀，身份由接入源令牌（Bearer）校验；
+     * 不接受请求体自报操作人，工单 actor 固定为 {@code integration:<sourceCode>}。
+     */
+    @PostMapping("/hooks/alerts/{sourceCode}")
+    public ApiResponse<Map<String, Object>> ingestAlerts(
+            @PathVariable String sourceCode,
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestBody OpsIntegrationDtos.AlertmanagerPayload payload,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        return ApiResponse.ok(alertIngestService.ingest(sourceCode, authorization, payload,
+                clientIp, traceId));
     }
 
     // ------------------------------------------------------------------ 看板/SLA 扫描/审计

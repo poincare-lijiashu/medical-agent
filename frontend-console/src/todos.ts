@@ -54,7 +54,7 @@ export async function loadTodoItems(): Promise<TodoItem[]> {
   if (hasRole(['ADMIN', 'DOCTOR', 'PHARMACIST', 'QC'])) {
     jobs.push(
       tally('review', t('todo.review'), '/ai/review?tab=pending', async () => {
-        const page = await aiReviewPending({ limit: 1, compact: 1 })
+        const page = await aiReviewPending({ limit: 1, compact: 1 }, { noSessionExpire: true })
         return page.total ?? 0
       }),
     )

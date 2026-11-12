@@ -12307,3 +12307,71 @@ E2E 冒烟（真实网关 8080 + 真实库）：
 - 事件大屏（值班室投屏）与工单批量操作；
 - 发布日历视图（列车 + 冻结窗口 + 维护窗口叠加）；
 - 认证记录与权限联动（§274 遗留）。
+
+## 276. 2026-11-12 告警自动建单与 CI/CD 回写（第 276 批）
+
+**背景**
+
+§271/§273 把工单与发布记录做成了"人的真源"，但真实运维里还有两段机械劳动：
+监控平台告警要人手工转单，流水线发版后要人手工补部署记录。只要这两段靠人，
+SLA 与发布审计就永远有缺口。
+
+**本批做了什么**
+
+1. **告警接入（ops V3）**
+   - `ops_alert_source`：令牌只存 SHA-256 + 前缀提示，`severity_map` 可把级别映射为 `IGNORE`，
+     `auto_resolve`/`repeat_comment_minutes` 可配；
+   - `ops_alert_state`：按 `(source_code, fingerprint)` 唯一，firing 重复通知只更新 last_seen；
+   - `ops_hook_event`：追加式入站留痕（数据库触发器兜底）；
+   - `AlertIngestService`：severity→优先级、服务标签映射与 `infra-monitoring` 兜底、
+     重复 firing 节流追加说明、resolved 按工单状态补齐前置动作后解决/取消；
+   - `POST /ops/hooks/alerts/{sourceCode}`：网关白名单 + Bearer 令牌，actor 固定 `integration:<source>`。
+2. **CI 接入（release V2）**
+   - `rel_ci_source`：令牌只存哈希、`allowed_components` 白名单；
+   - `rel_ci_event`：`(source_code, event_id)` 唯一，FAILED 允许同事件重试，PROCESSED 直接返回首次结果；
+   - `CiIngestService`：BUILD 成功可自动登记 DRAFT 版本；DEPLOY 复用 `DeploymentService.record`，
+     冻结窗口/生产检查单/回滚链原样生效；actor 固定 `ci:<source>`；
+   - `POST /release/hooks/cicd/{sourceCode}` + `X-CI-Event-Id`。
+3. **权限与边界**
+   - auth V92：`ops:integration:manage`、`release:integration:manage`，仅授予经理/管理员；
+   - 通用 `ActorGuardFilter` 只豁免 `hooks` 前缀（管理接入源仍必须带 X-Actor）；
+   - 网关白名单只放行 hooks，入站路径单独 30 QPS 限流且排在通用 ops/release 之前；
+   - 新增 `HookTokens`：SecureRandom 生成、SHA-256 存储、`MessageDigest.isEqual` 常量时间比较。
+4. **前端**
+   - 运营工作台第 4 个页签「自动化」：接入源列表、创建/轮换/停用、一次性令牌弹窗、
+     Alertmanager 接入示例、入站事件；
+   - 发布管理第 5 个页签「CI 集成」：接入源、组件白名单、CI 事件、示例 payload；
+   - 顺手修复：AI 待办角标的 401 不再触发全局登出（`noSessionExpire`），
+     避免 AI 中台与网关令牌口径暂时不一致时把整个会话踢掉。
+5. **可机检**：`tests/test_ops_ci_integration.py`（10 项）校验表结构、令牌只存哈希、
+   只放行 hooks、限流顺序、事件幂等、越权路径与前端接线。
+
+**验证**
+
+```
+单测：AlertIngestServiceTest(8) + CiIngestServiceTest(8) → 通过
+      ops/release 全量单测 → 通过
+前端：typecheck / build → 通过
+全量：pytest -m "not e2e" → 1924 passed / 1 skipped
+真实库 E2E（经网关）：
+  告警 firing  → 建 P1 工单 OP20261112000004（NEW）
+  告警 resolved→ received=1, resolved=1；工单自动取消；事件 TICKET_CREATED/TICKET_RESOLVED
+  CI BUILD     → 自动登记 DRAFT 1.9.08
+  CI DEPLOY    → STAGING 部署记录 deploymentId=809f63ed…；同 eventId 重投 duplicate=true
+  浏览器：/ops「自动化」与 /release「CI 集成」均渲染真实接入源与事件，无运行时错误
+```
+
+**踩坑与修复**
+
+- 网关 `PathPattern` 白名单：`/ops/hooks/` 只匹配带尾斜杠的精确路径，必须写 `/ops/hooks/**`；
+- PG `text[]` 不能用 `getObject(String[].class)`，改为 `getArray().getArray()`；
+- `(:param IS NULL OR col = :param)` 在参数为 null 时 PostgreSQL 无法推断类型，
+  统一改为 `CAST(:param AS text)`；
+- PowerShell `Invoke-RestMethod` 默认非 UTF-8 发送中文名称会变成 `???`（仅测试数据，非系统缺陷）。
+
+**遗留**
+
+- 出站 Webhook（工单/事件变更反向通知第三方）与签名重试；
+- 告警自动合并（同一服务多条告警归并为一张工单）与静默期（maintenance silence）；
+- CI 产物签名/来源证明（SLSA）与制品库联动；
+- 开放平台 OAuth2 client credentials（当前只做接入源令牌，不做第三方应用授权）。

@@ -4,6 +4,9 @@ import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.PageResult;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
+import com.medassist.release.domain.ReleaseIntegrationModel.CiEvent;
+import com.medassist.release.domain.ReleaseIntegrationModel.CiSource;
+import com.medassist.release.domain.ReleaseIntegrationModel.CiSourceCreated;
 import com.medassist.release.domain.ReleaseModel.AuditLog;
 import com.medassist.release.domain.ReleaseModel.ChangeWindow;
 import com.medassist.release.domain.ReleaseModel.Compatibility;
@@ -14,6 +17,7 @@ import com.medassist.release.domain.ReleaseModel.Train;
 import com.medassist.release.domain.ReleaseModel.Version;
 import com.medassist.release.repo.ReleaseRepository;
 import com.medassist.release.service.ChangeWindowService;
+import com.medassist.release.service.CiIngestService;
 import com.medassist.release.service.CompatibilityService;
 import com.medassist.release.service.DeploymentService;
 import com.medassist.release.service.PatchService;
@@ -56,6 +60,7 @@ public class ReleaseController {
     private static final String APPROVE = "release:approve";
     private static final String DEPLOY = "release:deploy";
     private static final String AUDIT_READ = "release:audit:read";
+    private static final String CI_MANAGE = "release:integration:manage";
 
     private final ReleaseCatalogService catalogService;
     private final ReleaseTrainService trainService;
@@ -64,12 +69,14 @@ public class ReleaseController {
     private final ChangeWindowService windowService;
     private final DeploymentService deploymentService;
     private final ReleaseDashboardService dashboardService;
+    private final CiIngestService ciIngestService;
     private final ReleaseRepository repo;
 
     public ReleaseController(ReleaseCatalogService catalogService, ReleaseTrainService trainService,
                              CompatibilityService compatibilityService, PatchService patchService,
                              ChangeWindowService windowService, DeploymentService deploymentService,
-                             ReleaseDashboardService dashboardService, ReleaseRepository repo) {
+                             ReleaseDashboardService dashboardService, CiIngestService ciIngestService,
+                             ReleaseRepository repo) {
         this.catalogService = catalogService;
         this.trainService = trainService;
         this.compatibilityService = compatibilityService;
@@ -77,6 +84,7 @@ public class ReleaseController {
         this.windowService = windowService;
         this.deploymentService = deploymentService;
         this.dashboardService = dashboardService;
+        this.ciIngestService = ciIngestService;
         this.repo = repo;
     }
 
@@ -464,6 +472,74 @@ public class ReleaseController {
             @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
         Permissions.require(permissions, DEPLOY);
         return ApiResponse.ok(deploymentService.rollback(id, req.reason(), actor, clientIp, traceId));
+    }
+
+    // ------------------------------------------------------------------ CI/CD 接入（§276）
+
+    @GetMapping("/integrations/ci-sources")
+    public ApiResponse<List<CiSource>> ciSources(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(ciIngestService.listSources());
+    }
+
+    @PostMapping("/integrations/ci-sources")
+    public ApiResponse<CiSourceCreated> createCiSource(
+            @Valid @RequestBody ReleaseIntegrationDtos.CiSourceReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, CI_MANAGE);
+        return ApiResponse.ok(ciIngestService.createSource(req, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/integrations/ci-sources/{id}/rotate")
+    public ApiResponse<CiSourceCreated> rotateCiSource(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, CI_MANAGE);
+        return ApiResponse.ok(ciIngestService.rotate(id, actor, clientIp, traceId));
+    }
+
+    @PostMapping("/integrations/ci-sources/{id}/disable")
+    public ApiResponse<CiSource> disableCiSource(
+            @PathVariable UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, required = false) String actor,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        Permissions.require(permissions, CI_MANAGE);
+        return ApiResponse.ok(ciIngestService.disable(id, actor, clientIp, traceId));
+    }
+
+    @GetMapping("/integrations/ci-events")
+    public ApiResponse<List<CiEvent>> ciEvents(
+            @RequestParam(required = false) String sourceCode,
+            @RequestParam(required = false) String kind,
+            @RequestParam(required = false) Integer limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(ciIngestService.listEvents(sourceCode, kind, limit));
+    }
+
+    /**
+     * 流水线入站：网关白名单放行，令牌校验通过后按事件幂等号处理。
+     * 部署仍走完整门禁（冻结窗口/生产检查单/回滚链）。
+     */
+    @PostMapping("/hooks/cicd/{sourceCode}")
+    public ApiResponse<Map<String, Object>> ingestCi(
+            @PathVariable String sourceCode,
+            @RequestHeader(value = "Authorization", required = false) String authorization,
+            @RequestHeader(value = "X-CI-Event-Id", required = false) String eventId,
+            @RequestBody ReleaseIntegrationDtos.CiEventReq req,
+            @RequestHeader(value = AuthHeaders.CLIENT_IP, required = false) String clientIp,
+            @RequestHeader(value = AuthHeaders.TRACE_ID, required = false) String traceId) {
+        return ApiResponse.ok(ciIngestService.ingest(sourceCode, authorization, eventId, req,
+                clientIp, traceId));
     }
 
     // ------------------------------------------------------------------ 看板/审计

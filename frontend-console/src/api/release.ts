@@ -137,6 +137,44 @@ export interface ReleaseAuditLog {
   traceId: string | null
 }
 
+/** CI 接入源（§276）：令牌明文只在创建/轮换时返回一次。 */
+export interface CiSource {
+  id: string
+  code: string
+  name: string
+  kind: 'GITHUB' | 'GITLAB' | 'JENKINS' | 'GENERIC'
+  tokenHint: string
+  allowedComponents: string[]
+  status: 'ACTIVE' | 'INACTIVE'
+  lastUsedAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CiSourceCreated {
+  source: CiSource
+  token: string
+}
+
+export interface CiEvent {
+  id: number
+  ts: string
+  sourceCode: string
+  eventId: string
+  kind: 'BUILD' | 'DEPLOY'
+  componentCode: string
+  versionNo: string | null
+  environment: string | null
+  action: string | null
+  result: string | null
+  deploymentId: string | null
+  status: 'PROCESSED' | 'FAILED'
+  message: string | null
+  payload: Record<string, unknown>
+}
+
 export interface ReleaseDashboard {
   generatedAt: string
   versionsByStatus: Record<string, number>
@@ -281,4 +319,19 @@ export const releaseApi = {
     post<Deployment>(`/release/deployments/${id}/rollback`, { reason }),
 
   audit: (limit = 100) => get<ReleaseAuditLog[]>('/release/audit', { limit }),
+
+  // ---- CI 接入（§276）----
+  ciSources: () => get<CiSource[]>('/release/integrations/ci-sources'),
+  createCiSource: (body: {
+    code: string
+    name: string
+    kind?: 'GITHUB' | 'GITLAB' | 'JENKINS' | 'GENERIC'
+    allowedComponents?: string[]
+  }) => post<CiSourceCreated>('/release/integrations/ci-sources', body),
+  rotateCiSource: (id: string) =>
+    post<CiSourceCreated>(`/release/integrations/ci-sources/${id}/rotate`),
+  disableCiSource: (id: string) =>
+    post<CiSource>(`/release/integrations/ci-sources/${id}/disable`),
+  ciEvents: (sourceCode?: string, kind?: string, limit = 100) =>
+    get<CiEvent[]>('/release/integrations/ci-events', { sourceCode, kind, limit }),
 }

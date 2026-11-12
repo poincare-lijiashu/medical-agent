@@ -81,7 +81,8 @@
     <ReleaseVersionPanel v-if="activeTab === 'versions'" @changed="loadDashboard" />
     <ReleaseTrainPanel v-else-if="activeTab === 'trains'" @changed="loadDashboard" />
     <ReleasePatchPanel v-else-if="activeTab === 'patches'" @changed="loadDashboard" />
-    <ReleaseDeployPanel v-else @changed="loadDashboard" />
+    <ReleaseDeployPanel v-else-if="activeTab === 'deploy'" @changed="loadDashboard" />
+    <ReleaseIntegrationPanel v-else @changed="loadDashboard" />
   </div>
 </template>
 
@@ -94,17 +95,19 @@ import ReleaseVersionPanel from '@/components/domain/release/ReleaseVersionPanel
 import ReleaseTrainPanel from '@/components/domain/release/ReleaseTrainPanel.vue'
 import ReleasePatchPanel from '@/components/domain/release/ReleasePatchPanel.vue'
 import ReleaseDeployPanel from '@/components/domain/release/ReleaseDeployPanel.vue'
+import ReleaseIntegrationPanel from '@/components/domain/release/ReleaseIntegrationPanel.vue'
 import { releaseApi, type ReleaseDashboard } from '@/api/release'
 import { errorText } from '@/api/http'
 import { toast } from '@/stores/toast'
 
-type TabKey = 'versions' | 'trains' | 'patches' | 'deploy'
+type TabKey = 'versions' | 'trains' | 'patches' | 'deploy' | 'ci'
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'versions', label: '版本与兼容' },
   { key: 'trains', label: '发布列车' },
   { key: 'patches', label: '补丁' },
   { key: 'deploy', label: '变更与部署' },
+  { key: 'ci', label: 'CI 集成' },
 ]
 
 const dashboard = ref<ReleaseDashboard | null>(null)

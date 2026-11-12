@@ -4,6 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.release.repo.ReleaseRepository;
 import com.medassist.release.service.ChangeWindowService;
+import com.medassist.release.service.CiIngestService;
 import com.medassist.release.service.CompatibilityService;
 import com.medassist.release.service.DeploymentService;
 import com.medassist.release.service.PatchService;
@@ -37,7 +38,7 @@ class ReleaseControllerPermissionTest {
                 mock(ReleaseTrainService.class), mock(CompatibilityService.class),
                 mock(PatchService.class), mock(ChangeWindowService.class),
                 mock(DeploymentService.class), mock(ReleaseDashboardService.class),
-                mock(ReleaseRepository.class));
+                mock(CiIngestService.class), mock(ReleaseRepository.class));
     }
 
     private void assertForbidden(Runnable call) {

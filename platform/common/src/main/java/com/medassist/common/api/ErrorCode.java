@@ -535,6 +535,10 @@ public enum ErrorCode {
     OPS_POSTMORTEM_STATUS_INVALID(52424, "当前复盘状态不允许该操作"),
     OPS_POSTMORTEM_INCOMPLETE(52425, "复盘提交前必须填写根因与至少一条纠正措施"),
     OPS_INCIDENT_INVALID(52426, "事件内容不合法（影响服务为空或关联工单不存在）"),
+    OPS_INTEGRATION_SOURCE_NOT_FOUND(52427, "未找到该告警接入源，或该接入源已停用"),
+    OPS_INTEGRATION_PAYLOAD_INVALID(52428, "告警格式不合法（缺少 alerts/fingerprint/status）"),
+    /** 接入令牌错误：401 段，网关白名单放行后由服务自身校验。 */
+    OPS_INTEGRATION_TOKEN_INVALID(40129, "接入令牌无效或已轮换，请更新告警平台配置"),
 
     // ---- 版本与补丁（53xxx，§273）----
     REL_COMPONENT_NOT_FOUND(53401, "未找到该发布组件"),
@@ -557,7 +561,10 @@ public enum ErrorCode {
     REL_TRAIN_DUPLICATE(53418, "发布列车编码已存在"),
     REL_PATCH_INVALID(53419, "补丁内容不合法（影响版本为空或修复版本不属于该组件）"),
     REL_WINDOW_NOT_FOUND(53420, "未找到该变更窗口"),
-    REL_WINDOW_INVALID(53421, "变更窗口不合法（结束时间必须晚于开始时间）");
+    REL_WINDOW_INVALID(53421, "变更窗口不合法（结束时间必须晚于开始时间）"),
+    REL_CI_SOURCE_NOT_FOUND(53422, "未找到该 CI 接入源，或该接入源已停用"),
+    REL_CI_PAYLOAD_INVALID(53424, "CI 事件格式不合法（kind/component/version/result 有误）"),
+    REL_CI_TOKEN_INVALID(40131, "CI 接入令牌无效或已轮换，请更新流水线密钥");
 
     private final int code;
     private final String defaultMessage;

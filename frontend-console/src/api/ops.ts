@@ -227,6 +227,42 @@ export interface OpsAuditLog {
   traceId: string | null
 }
 
+/** 告警接入源（§276）：令牌明文只在创建/轮换时返回一次。 */
+export interface AlertSource {
+  id: string
+  code: string
+  name: string
+  kind: 'ALERTMANAGER' | 'GENERIC'
+  tokenHint: string
+  defaultService: string | null
+  severityMap: Record<string, string>
+  autoResolve: boolean
+  repeatCommentMinutes: number
+  status: 'ACTIVE' | 'INACTIVE'
+  lastUsedAt: string | null
+  createdBy: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AlertSourceCreated {
+  source: AlertSource
+  token: string
+}
+
+export interface AlertHookEvent {
+  id: number
+  ts: string
+  sourceCode: string
+  fingerprint: string | null
+  action: 'TICKET_CREATED' | 'TICKET_COMMENTED' | 'TICKET_RESOLVED' | 'IGNORED' | 'DEDUPED' | 'FAILED'
+  ticketId: string | null
+  note: string | null
+  payload: Record<string, unknown>
+  traceId: string | null
+}
+
 export interface TicketFilter {
   status?: string
   priority?: string
@@ -342,4 +378,22 @@ export const opsApi = {
     post<Postmortem>(`/ops/incidents/${id}/postmortem/approve`, { note }),
 
   audit: (limit = 100) => get<OpsAuditLog[]>('/ops/audit', { limit }),
+
+  // ---- 告警接入（§276）----
+  alertSources: () => get<AlertSource[]>('/ops/integrations/alert-sources'),
+  createAlertSource: (body: {
+    code: string
+    name: string
+    kind?: 'ALERTMANAGER' | 'GENERIC'
+    defaultService?: string
+    severityMap?: Record<string, string>
+    autoResolve?: boolean
+    repeatCommentMinutes?: number
+  }) => post<AlertSourceCreated>('/ops/integrations/alert-sources', body),
+  rotateAlertSource: (id: string) =>
+    post<AlertSourceCreated>(`/ops/integrations/alert-sources/${id}/rotate`),
+  disableAlertSource: (id: string) =>
+    post<AlertSource>(`/ops/integrations/alert-sources/${id}/disable`),
+  alertEvents: (sourceCode?: string, limit = 100) =>
+    get<AlertHookEvent[]>('/ops/integrations/alert-events', { sourceCode, limit }),
 }

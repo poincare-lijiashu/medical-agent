@@ -80,8 +80,11 @@ export interface AiReviewQuery {
   hide_drug?: number
 }
 
-export function aiReviewPending(query: AiReviewQuery = {}): Promise<AiReviewPage> {
-  return aiGet<AiReviewPage>('/medical/review/pending', { ...query })
+export function aiReviewPending(
+  query: AiReviewQuery = {},
+  opts?: { noSessionExpire?: boolean },
+): Promise<AiReviewPage> {
+  return aiGet<AiReviewPage>('/medical/review/pending', { ...query }, undefined, opts)
 }
 
 /* ---- 全局待办角标（第 220 批）：全部走 summary/limit=0，只取计数 ---- */
