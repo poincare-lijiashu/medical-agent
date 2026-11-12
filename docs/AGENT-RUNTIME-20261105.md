@@ -12419,8 +12419,23 @@ iframe 会递归加载控制台自身，URL 里的 token 也没有任何人消�
 网络：各页 /api/v1 与 /api/v2 请求全部 200（无 401/404/5xx）
 ```
 
+**演示数据（同批灌入，走真实四眼链路，非直接写库）**
+
+| 对象 | 编码 | 结果 |
+| --- | --- | --- |
+| 技能卡 | `lit-guideline-first` 文献循证·指南优先级裁决 | admin01 创建送审 → qc01 审核通过 PUBLISHED v1 |
+| 技能卡 | `drug-highrisk-interaction` 用药审核·高危联用拦截 | admin01 创建送审 → qc01 审核通过 PUBLISHED v1 |
+| 技能卡 | `qc-homepage-defect-grading` 病案首页质控·缺陷分级 | 送审后保留 IN_REVIEW（演示待审队列） |
+| Bot | `bot-lit-round` 循证查房助手 | PUBLISHED v1，绑定 `lit-guideline-first` |
+| Bot | `bot-drug-safety` 用药安全助手 | PUBLISHED v1，绑定 `drug-highrisk-interaction` |
+| Bot 团队 | `team-safe-prescribing` 安全用药多学科小组 | ACTIVE，成员 2 个已发布 Bot |
+| 长期记忆 | `renal-dose-adjust`（eGFR 调整口径） | admin01 录入 CANDIDATE → qc01 确认为 CONFIRMED |
+
+灌入后 `/ai/agent` 的「编排就绪度」显示 `已就绪 · 技能卡 2 · Bot 2 · 团队 1`，
+三个治理页均为真实数据；审核意见、创建人/审核人、rowVersion 全部落库可查。
+
 **遗留**
 
-- AI 治理页（技能卡 / Bot / Bot 团队 / 技能运营）当前无数据，页面为空态而非故障；
-  演示需要时可按四眼审核流程灌入示例技能卡与团队；
+- 技能卡与 Bot 的四眼审核目前只覆盖"创建→送审→审核"主链路，没有批量送审/到期复审提醒；
+- 演示数据中的提示模板与证据引用为院内常见指南口径，正式上线前需由医务处/药学部逐条确认；
 - 8001 单端口模式缺少前置反代，生产必须按 `docs/DEPLOY.md` 的 nginx 口径部署。
