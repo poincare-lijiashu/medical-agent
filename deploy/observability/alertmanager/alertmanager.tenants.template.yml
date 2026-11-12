@@ -1,0 +1,60 @@
+# ============================================================================
+# Alertmanager 按院路由模板（第 287 批）
+#
+# 不要直接手改本文件：用 scripts/ops/render_alertmanager_tenants.py 渲染出
+# alertmanager.generated.yml，再挂载到 Alertmanager。
+#
+# 设计：
+#   * 每条租户告警先走该院值班渠道（tenant="<code>"），continue=true 表示
+#     平台值班也会收到一份（集团/厂商需要兜底，不能只依赖院方接收）；
+#   * 没有匹配到租户的告警按 severity 走平台默认/critical/IM；
+#   * 同一院 Cell 不可达时，抑制其备份未就绪告警，避免一次故障刷屏。
+#
+# 占位符（渲染器替换，勿在注释里写花括号形式，避免被渲染器误替换）：
+#   DEFAULT_WEBHOOK / CRITICAL_WEBHOOK / IM_WEBHOOK
+#   TENANT_ROUTES / TENANT_RECEIVERS
+# ============================================================================
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: medassist-default
+  group_by: ["alertname", "tenant"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+{{TENANT_ROUTES}}
+    - matchers: ['severity="critical"']
+      receiver: medassist-critical
+      group_wait: 10s
+      repeat_interval: 30m
+      continue: true
+    - matchers: ['severity="warning"']
+      receiver: medassist-im
+      repeat_interval: 4h
+
+inhibit_rules:
+  # Cell 整体不可达时，它的备份告警只是派生现象，不应同时打爆两个渠道
+  - source_matchers: ['alertname="MedassistTenantCellDown"']
+    target_matchers: ['component="backup"']
+    equal: ["tenant"]
+
+receivers:
+  - name: medassist-default
+    webhook_configs:
+      - url: "{{DEFAULT_WEBHOOK}}"
+        send_resolved: true
+        max_alerts: 20
+
+  - name: medassist-critical
+    webhook_configs:
+      - url: "{{CRITICAL_WEBHOOK}}"
+        send_resolved: true
+        max_alerts: 0
+
+  - name: medassist-im
+    webhook_configs:
+      - url: "{{IM_WEBHOOK}}"
+        send_resolved: true
+{{TENANT_RECEIVERS}}

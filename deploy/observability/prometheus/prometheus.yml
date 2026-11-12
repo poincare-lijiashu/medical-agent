@@ -49,3 +49,15 @@ scrape_configs:
       - targets: ["host.docker.internal:8001"]
         labels:
           component: ai-core
+
+  # 第 287 批：auth 暴露租户健康度指标（medassist_tenant_*），供按院告警使用。
+  # 指标值来自 auth 内 60s 一次的定时刷新，抓取本身不触发任何 JDBC 探测。
+  # 生产形态：每个 Cell 一套 auth，Prometheus 侧给每个 target 打 tenant 标签；
+  # 本文件是本地共享实例（tenant 标签由指标自身携带）。
+  - job_name: medassist-auth
+    metrics_path: /actuator/prometheus
+    scheme: http
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+        labels:
+          component: auth

@@ -13029,3 +13029,68 @@ MinIO            /minio_data 下已出现 medassist-backup-tenant-003（SigV4 �
 **下一批建议（§287）**
 
 租户健康度接入 Prometheus/Alertmanager 并按院路由告警；授权书签发/导入与开通联动。
+
+---
+
+## 287. 2026-11-12 租户健康度指标与按院告警路由（第 287 批 / ADR-001 §3）
+
+**为什么"有看板"不等于"能告警"**
+
+§284 的健康度只存在于控制台：平台运营不看页面就不知道哪家医院挂了。
+ADR-001 §3 要求"指标/日志/追踪带 tenant 标签，可按院出 SLO；告警按院路由到该院值班组"。
+本批把健康度变成 Prometheus 指标、把告警规则与路由做成可校验的交付物。
+
+**本批做了什么**
+
+1. **健康度指标化**（`TenantHealthMetrics`）：
+   - 60 秒定时刷新、单飞（上一轮未完成则跳过），**抓取只读缓存值**——不会因为一家离线医院
+     把 `/actuator/prometheus` 拖住；
+   - 指标：`medassist_tenant_health_state{tenant,state}`、`cell_reachable`、`backup_state`、
+     `backup_ready`、`active_users`、`last_archived_timestamp_seconds`、
+     `medassist_tenant_count{state}`、刷新时间戳/耗时/错误计数；
+   - 只暴露租户编码、状态与计数，不含医院名称、联系人与任何患者数据。
+2. **抓取**：Prometheus 新增 `medassist-auth` job（`/actuator/prometheus`），
+   本地与院区形态均可直接复用。
+3. **告警规则**（`deploy/prometheus/medassist-tenant.rules.yml`）：
+   `CellDown`（critical 3m）、`Degraded`（warning 15m）、`BackupNotReady`（warning 1h）、
+   `WalArchiveStale`（critical，归档停滞 1h）、`HealthStale`（刷新停滞 5m）、
+   `HealthMetricsMissing`（`absent()`，抓取断链 10m）。
+   监控自身故障也必须告警——否则"没有告警"会被误读为"都正常"。
+4. **按院路由**：
+   - 模板 `alertmanager.tenants.template.yml`：租户路由 `continue: true`（院方 + 平台双送达），
+     severity 兜底，Cell 不可达时抑制该院备份告警；
+   - 联系人 `tenant-contacts.example.yaml`（仅渠道，不含业务数据）；
+   - 渲染器 `scripts/ops/render_alertmanager_tenants.py`：校验编码/协议/severity，
+     可用 `--auth-url/--token` 拉租户台账，**ACTIVE 租户缺值班渠道直接失败**（退出码 2）；
+   - 生成结果用 `amtool check-config` 与 `amtool config routes test` 实测命中关系。
+5. **看板**：Grafana `medassist-tenant-slo`（租户变量 + 8 个面板：状态、需关注数、
+   备份未就绪数、刷新年龄、各院结论、探测耗时、活跃账号、WAL 归档年龄）。
+6. **运维手册**：PROVISIONING-RUNBOOK 新增「10. 指标与按院告警」操作步骤。
+
+**验证**
+
+```
+Java：TenantHealthMetricsTest 2 passed（按院标签、失败可观测）
+契约：tests/test_tenant_alerting_contract.py 6 passed
+真实栈：
+  /actuator/prometheus      medassist_tenant_* 10 组指标，tenant-003 backup_ready=1
+  Prometheus target         medassist-auth health=up，首次抓取成功
+  规则                      medassist-tenant-health 6 条全部加载（inactive/pending 符合预期）
+  查询                      medassist_tenant_backup_ready{tenant="tenant-003"} = 1
+  Alertmanager 渲染         3 条租户路由 / 6 个 receiver；amtool check-config SUCCESS
+  amtool routes test        severity=critical,tenant=tenant-003 → tenant-003-oncall,medassist-critical
+  Grafana                   medassist-tenant-slo 已加载（8 个面板）
+```
+
+**已知边界（下一批处理）**
+
+- 本地 Prometheus 仍抓共享实例（tenant 标签由指标携带）；生产每 Cell 独立抓取时，
+  建议给 target 再加 `instance/tenant` 静态标签并在告警里做一致性校验；
+- 告警送达只验证了路由与配置合法性，未接真实短信/电话网关（本地 sink 仅证明链路通）；
+- 静默、升级策略（15 分钟未确认升级）与排班表属于院方运维流程，当前只提供
+  Alertmanager 配置骨架与手册；
+- 备份作业失败告警仍由 Cell 侧 CronJob 指标覆盖（`MedassistBackupStale`）。
+
+**下一批建议（§288）**
+
+授权书签发/导入与开通联动；单院恢复演练纳入发布门禁；跨院汇总仓单独立项（ADR §10）。

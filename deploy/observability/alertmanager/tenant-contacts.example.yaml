@@ -1,0 +1,29 @@
+# ============================================================================
+# 按院值班渠道（Alertmanager 渲染输入；不含任何患者数据）
+#
+# 用法：
+#   1) 复制为 tenant-contacts.yaml（或放到院方配置仓），替换 REPLACE_ME；
+#   2) 运行 scripts/ops/render_alertmanager_tenants.py 渲染完整配置；
+#   3) 校验：docker run --rm -v <生成文件>:/etc/alertmanager/alertmanager.yml \
+#        prom/alertmanager:v0.27.0 amtool check-config /etc/alertmanager/alertmanager.yml
+#
+# 约定：
+#   * webhook 支持企业微信/钉钉/飞书机器人、院内 IM 网关、工单系统；
+#   * 一个院一条记录；ACTIVE 租户缺记录时渲染器默认报错（--allow-missing 可放宽）；
+#   * 这里只放"送到哪里"，不放患者信息、口令；密钥请用 `${ENV_VAR}` 由部署侧替换。
+# ============================================================================
+default:
+  webhook: http://alert-sink:8080/alerts
+  critical: http://alert-sink:8080/alerts
+  im: http://alert-sink:8080/alerts
+
+tenants:
+  tenant-001:
+    # 市一院（演示）：先送到本地 sink，生产替换为院内值班机器人
+    webhook: http://alert-sink:8080/alerts
+  tenant-002:
+    # 市二院（隔离演练 Cell）：同样先送本地 sink
+    webhook: http://alert-sink:8080/alerts
+  tenant-003:
+    # 市三院：企业微信机器人；key 由 Secret 注入，不写进版本库
+    webhook: https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=REPLACE_ME

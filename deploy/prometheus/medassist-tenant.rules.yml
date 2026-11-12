@@ -1,0 +1,77 @@
+# ============================================================================
+# 租户健康度告警（第 287 批 / ADR-001 §3 观测契约）
+#
+# 数据来源：auth 的 /actuator/prometheus（medassist_tenant_*，按 tenant 标签）。
+# 加载位置：本地 Prometheus 挂载 deploy/prometheus → /etc/prometheus/rules/*.yml。
+#
+# 设计原则：
+#   1) 每条告警都带 tenant 标签 —— Alertmanager 才能按院路由到该院值班组；
+#   2) 监控自身故障也要可告警（指标消失 / 刷新陈旧），否则"没告警"会被误读为"都正常"；
+#   3) 目标不可达时抑制其派生的备份告警，避免一次故障刷出十几条。
+# ============================================================================
+groups:
+  - name: medassist-tenant-health
+    rules:
+      - alert: MedassistTenantCellDown
+        # 只对"在服务中"的院告警：已停用/已注销的 Cell 不可达是预期状态，不能误报
+        expr: medassist_tenant_cell_reachable == 0 and on(tenant) medassist_tenant_health_state{state=~"OK|DEGRADED"} == 1
+        for: 3m
+        labels:
+          severity: critical
+          component: tenant
+        annotations:
+          summary: "医院 {{ $labels.tenant }} 的 Cell 数据库不可达"
+          description: "该院数据面已连续 3 分钟探测失败：登录、开医嘱与查询全部受影响。先查网络/实例，再看 PROVISIONING-RUNBOOK §6。"
+          runbook: "docs/PROVISIONING-RUNBOOK.md#6-健康度与巡检"
+
+      - alert: MedassistTenantDegraded
+        expr: medassist_tenant_health_state{state="DEGRADED"} == 1
+        for: 15m
+        labels:
+          severity: warning
+          component: tenant
+        annotations:
+          summary: "医院 {{ $labels.tenant }} 处于需关注状态"
+          description: "迁移失败、上次开通失败或备份/PITR 未就绪。到租户页查看问题项，必要时 resume 开通任务。"
+
+      - alert: MedassistTenantBackupNotReady
+        expr: medassist_tenant_backup_ready == 0 and on(tenant) medassist_tenant_health_state{state=~"OK|DEGRADED"} == 1
+        for: 1h
+        labels:
+          severity: warning
+          component: backup
+        annotations:
+          summary: "医院 {{ $labels.tenant }} 的备份/PITR 未就绪"
+          description: "超过 1 小时未达到 READY：检查 archive_mode/wal_level、归档失败次数与桶权限。当前只能恢复到最近一次全备。"
+          runbook: "docs/PROVISIONING-RUNBOOK.md#9-备份与恢复286"
+
+      - alert: MedassistTenantWalArchiveStale
+        # 仅对"已就绪且曾经成功归档"的院生效：刚开启归档的窗口期不应误报
+        expr: medassist_tenant_backup_ready == 1 and on(tenant) medassist_tenant_last_archived_timestamp_seconds > 0 and (time() - medassist_tenant_last_archived_timestamp_seconds > 3600)
+        for: 10m
+        labels:
+          severity: critical
+          component: backup
+        annotations:
+          summary: "医院 {{ $labels.tenant }} 的 WAL 归档已停滞"
+          description: "最近一次成功归档超过 1 小时，PITR 的 RPO 正在退化。检查 archive_command / 对象存储可达性与磁盘。"
+
+      - alert: MedassistTenantHealthStale
+        expr: time() - medassist_tenant_health_refresh_timestamp_seconds > 300
+        for: 2m
+        labels:
+          severity: critical
+          component: tenant
+        annotations:
+          summary: "租户健康度指标已 5 分钟未刷新"
+          description: "auth 的定时刷新卡住或线程池耗尽；此时租户告警可能失真，先恢复监控链路。"
+
+      - alert: MedassistTenantHealthMetricsMissing
+        expr: absent(medassist_tenant_health_refresh_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: critical
+          component: tenant
+        annotations:
+          summary: "租户健康度指标缺失"
+          description: "Prometheus 抓不到 auth 的 /actuator/prometheus：检查 auth 存活、抓取配置与网络策略。"

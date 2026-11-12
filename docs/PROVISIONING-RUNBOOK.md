@@ -214,3 +214,62 @@ powershell -ExecutionPolicy Bypass -File scripts\backup\cell_backup.ps1 `
 
 产物：`.dump`（自定义格式，支持选择性/并行恢复）、`.sha256`、`.json` 清单（含归档事实），
 默认保留 14 份。归档未开启时会打印警告：只能恢复到本次全备，RPO≈备份间隔。
+
+## 10. 指标与按院告警（§287）
+
+### 10.1 auth 暴露的租户指标
+
+| 指标 | 含义 |
+| --- | --- |
+| `medassist_tenant_health_state{tenant,state}` | 健康结论（每院一条为 1）：OK/DEGRADED/DOWN/PENDING/SUSPENDED/CLOSED |
+| `medassist_tenant_cell_reachable{tenant}` | Cell 数据库可达性（1/0） |
+| `medassist_tenant_backup_ready{tenant}` | 备份/PITR 是否 READY（1/0） |
+| `medassist_tenant_backup_state{tenant,state}` | 备份状态明细（READY/DEGRADED/NONE/UNKNOWN…） |
+| `medassist_tenant_active_users{tenant}` | 启用账号数 |
+| `medassist_tenant_last_archived_timestamp_seconds{tenant}` | 最近成功 WAL 归档时刻（0=从未） |
+| `medassist_tenant_health_refresh_timestamp_seconds` | 指标刷新时刻（停走说明刷新卡住） |
+| `medassist_tenant_health_refresh_duration_seconds` / `..._errors_total` | 刷新耗时 / 失败次数 |
+
+- 指标由 auth 每 60 秒刷新（`medassist.tenant-health.metrics-interval`），**抓取不触发 JDBC**；
+- 单飞：上一轮未完成会跳过本轮，避免离线医院堆积任务；
+- 排查：`curl -s localhost:8081/actuator/prometheus | grep medassist_tenant`。
+
+### 10.2 告警规则与路由
+
+- 规则：`deploy/prometheus/medassist-tenant.rules.yml`（本地 Prometheus 自动加载；改后
+  `curl -X POST localhost:9090/-/reload`）；
+- 关键告警：
+  - `MedassistTenantCellDown`（critical，3 分钟）→ 该院数据面不可用；
+  - `MedassistTenantBackupNotReady`（warning，1 小时）→ 无可恢复备份；
+  - `MedassistTenantWalArchiveStale`（critical）→ PITR 的 RPO 正在退化；
+  - `MedassistTenantHealthStale` / `HealthMetricsMissing` → 监控链路自身故障。
+
+生成按院路由（生产必须按院配置值班渠道）：
+
+```bash
+# 1) 准备联系人（复制示例，替换 REPLACE_ME；不要把 key 提交到版本库）
+cp deploy/observability/alertmanager/tenant-contacts.example.yaml /etc/medassist/tenant-contacts.yaml
+
+# 2) 渲染（会校验 ACTIVE 租户是否都有渠道，缺失直接退出码 2）
+python scripts/ops/render_alertmanager_tenants.py \
+    --contacts /etc/medassist/tenant-contacts.yaml \
+    --auth-url https://console.example --token '<平台运营令牌>' \
+    --out /etc/alertmanager/alertmanager.yml
+
+# 3) 校验配置与命中关系
+amtool check-config /etc/alertmanager/alertmanager.yml
+amtool config routes test --config.file=/etc/alertmanager/alertmanager.yml \
+    severity=critical tenant=tenant-003
+# 期望输出：tenant-003-oncall,medassist-critical（院方 + 平台双送达）
+```
+
+- 租户路由 `continue: true`：院方值班与平台值班都会收到，避免"只依赖院方"；
+- 同一院 Cell 不可达时抑制其备份告警（`inhibit_rules`），防止一次故障刷屏；
+- 新开一家医院：在 contacts 里加一条记录并重渲染；未加记录时渲染器会失败，
+  不会出现"告警静默丢失"。
+
+### 10.3 看板
+
+- Grafana：`MedAssist · 租户 SLO`（`deploy/observability/grafana/dashboards/medassist-tenant-slo.json`）；
+- 顶部 `tenant` 变量支持多选/全选；面板含状态、需关注数、备份未就绪数、刷新年龄、
+  各院结论、探测耗时、活跃账号、WAL 归档年龄。
