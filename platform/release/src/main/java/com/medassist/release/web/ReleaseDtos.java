@@ -87,6 +87,11 @@ public final class ReleaseDtos {
             @NotBlank @Size(max = 64) String componentCode,
             @NotNull UUID versionId,
             @NotBlank @Pattern(regexp = "DEV|STAGING|PROD") String environment,
+            /** 目标 Cell（医院租户）；为空表示平台级部署（ADR-001 之前的历史语义）。 */
+            @Size(max = 32) @Pattern(regexp = "[a-z0-9][a-z0-9-]{1,31}")
+            String tenantCode,
+            /** 灰度批次标签（PILOT/CANARY_10/ALL 等），仅用于演练与审计追溯。 */
+            @Size(max = 32) String batchLabel,
             @NotBlank @Pattern(regexp = "DEPLOY|ROLLBACK|HOTFIX") String action,
             @NotBlank @Pattern(regexp = "SUCCESS|FAILED") String result,
             Map<String, Object> checklist,
@@ -94,6 +99,40 @@ public final class ReleaseDtos {
             @Size(max = 500) String reason,
             @NotNull Instant startedAt,
             Instant finishedAt) {
+    }
+
+    /** Cell 内单个组件的发布对齐结论。 */
+    public record CellComponentStatus(
+            String componentCode,
+            String targetVersion,
+            String deployedVersion,
+            /** UP_TO_DATE / BEHIND / NEVER_DEPLOYED */
+            String status,
+            Instant deployedAt) {
+    }
+
+    /**
+     * 某家医院相对"最近一次已发布列车"的对齐情况。
+     *
+     * <p>{@code state} 是页面直接使用的结论：
+     * <ul>
+     *   <li>ALIGNED：全部组件与列车一致；</li>
+     *   <li>BEHIND：存在落后/未部署组件（黄）；</li>
+     *   <li>FAILED：最近一次部署失败（红，优先于落后）；</li>
+     *   <li>UNKNOWN：尚无已发布列车，无法判定。</li>
+     * </ul>
+     */
+    public record CellReleaseStatus(
+            String tenantCode,
+            UUID trainId,
+            String trainCode,
+            Instant trainReleasedAt,
+            String state,
+            int totalComponents,
+            int behindComponents,
+            int failedComponents,
+            List<CellComponentStatus> components,
+            Instant generatedAt) {
     }
 
     public record RollbackReq(

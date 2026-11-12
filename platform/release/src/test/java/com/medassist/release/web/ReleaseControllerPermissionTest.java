@@ -4,6 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.release.repo.ReleaseRepository;
 import com.medassist.release.service.ChangeWindowService;
+import com.medassist.release.service.CellReleaseStatusService;
 import com.medassist.release.service.CiIngestService;
 import com.medassist.release.service.CompatibilityService;
 import com.medassist.release.service.DeploymentService;
@@ -37,8 +38,9 @@ class ReleaseControllerPermissionTest {
         controller = new ReleaseController(catalogService,
                 mock(ReleaseTrainService.class), mock(CompatibilityService.class),
                 mock(PatchService.class), mock(ChangeWindowService.class),
-                mock(DeploymentService.class), mock(ReleaseDashboardService.class),
-                mock(CiIngestService.class), mock(ReleaseRepository.class));
+                mock(DeploymentService.class), mock(CellReleaseStatusService.class),
+                mock(ReleaseDashboardService.class), mock(CiIngestService.class),
+                mock(ReleaseRepository.class));
     }
 
     private void assertForbidden(Runnable call) {
@@ -74,7 +76,7 @@ class ReleaseControllerPermissionTest {
     @DisplayName("部署：必须 release:deploy，审批权限不能替代")
     void deployPermission() {
         ReleaseDtos.DeployReq req = new ReleaseDtos.DeployReq("platform-clinical",
-                UUID.randomUUID(), "PROD", "DEPLOY", "SUCCESS",
+                UUID.randomUUID(), "PROD", null, null, "DEPLOY", "SUCCESS",
                 Map.of("backup", true), null, "reason", Instant.now(), Instant.now());
         assertForbidden(() -> controller.recordDeployment(req, "release:approve",
                 "deploy01", null, null));

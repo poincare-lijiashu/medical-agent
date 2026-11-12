@@ -1,0 +1,92 @@
+﻿{
+    "generatedAt":  "2026-11-12T19:42:41.1453971+08:00",
+    "adr":  "ADR-001 §3 计算/数据隔离契约",
+    "cellA":  "http://127.0.0.1:8080",
+    "cellB":  "http://127.0.0.1:8180",
+    "target":  {
+                   "container":  "medagent_pg_tenant002",
+                   "authPort":  8181
+               },
+    "samplePath":  "GET /api/v2/auth/me（主院，经 8080 网关）",
+    "baseline":  {
+                     "count":  29,
+                     "errors":  0,
+                     "errorRate":  0,
+                     "p50":  22.8,
+                     "p95":  30,
+                     "p99":  166.7,
+                     "max":  166.7
+                 },
+    "phases":  [
+                   {
+                       "name":  "baseline",
+                       "label":  "基线（无故障）",
+                       "injection":  "none",
+                       "stats":  {
+                                     "count":  29,
+                                     "errors":  0,
+                                     "errorRate":  0,
+                                     "p50":  22.8,
+                                     "p95":  30,
+                                     "p99":  166.7,
+                                     "max":  166.7
+                                 }
+                   },
+                   {
+                       "name":  "cpu",
+                       "label":  "CPU 打满（目标 Cell）",
+                       "injection":  "docker-exec dd x2",
+                       "stats":  {
+                                     "count":  36,
+                                     "errors":  0,
+                                     "errorRate":  0,
+                                     "p50":  22.1,
+                                     "p95":  282.5,
+                                     "p99":  427.9,
+                                     "max":  427.9
+                                 },
+                       "p99DeltaPct":  156.69,
+                       "pass":  false
+                   },
+                   {
+                       "name":  "kill-auth",
+                       "label":  "目标 Cell auth 被杀",
+                       "injection":  "Stop-Process -Force",
+                       "stats":  {
+                                     "count":  38,
+                                     "errors":  0,
+                                     "errorRate":  0,
+                                     "p50":  23.9,
+                                     "p95":  36.6,
+                                     "p99":  48.2,
+                                     "max":  48.2
+                                 },
+                       "p99DeltaPct":  -71.09,
+                       "pass":  true
+                   },
+                   {
+                       "name":  "stop-db",
+                       "label":  "目标 Cell 数据库停机",
+                       "injection":  "docker stop",
+                       "stats":  {
+                                     "count":  38,
+                                     "errors":  0,
+                                     "errorRate":  0,
+                                     "p50":  20.6,
+                                     "p95":  29.2,
+                                     "p99":  32.5,
+                                     "max":  32.5
+                                 },
+                       "p99DeltaPct":  -80.5,
+                       "pass":  true
+                   }
+               ],
+    "verdict":  {
+                    "processIsolation":  "PASS",
+                    "dbIsolation":  "PASS",
+                    "cpuIsolation":  "LOCAL_REFERENCE",
+                    "notes":  [
+                                  "CPU 阶段 P99 波动 156.69%（本地单机共享内核，仅作参考；生产由 per-Cell ResourceQuota 保证）"
+                              ]
+                }
+}

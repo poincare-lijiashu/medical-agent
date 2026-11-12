@@ -144,7 +144,28 @@ if (-not $SkipMigrate) {
     Write-Step "跳过迁移（-SkipMigrate）"
 }
 
-# ---------------------------------------------------------------- 3. 控制面登记
+# ---------------------------------------------------------------- 3. Cell 内租户登记
+# auth_svc.app_user 有 tenant_code 外键（V95）。Cell 库是独立实例，控制面台账不会
+# 自动出现在这里；不做这一步，二院建首个账号时报 fk_app_user_tenant。
+Write-Step "在 Cell 内登记本租户（auth_svc.tenant）"
+$sqlCell = @"
+INSERT INTO auth_svc.tenant
+    (code, instance_code, name, edition_code, status, cell_endpoint, region, created_by)
+VALUES
+    ('$Code', '$InstanceCode', '$Name', 'ENTERPRISE', 'ACTIVE', '$CellEndpoint', 'local', 'new_cell.ps1')
+ON CONFLICT (code) DO UPDATE
+   SET instance_code = EXCLUDED.instance_code,
+       name          = EXCLUDED.name,
+       status        = 'ACTIVE',
+       cell_endpoint = EXCLUDED.cell_endpoint,
+       updated_at    = now();
+"@
+$b64Cell = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sqlCell))
+docker exec $Container bash -lc "echo $b64Cell | base64 -d | psql -U $DbUser -d medagent -v ON_ERROR_STOP=1" | Out-Null
+if ($LASTEXITCODE -ne 0) { Fail "Cell 内租户登记失败（确认迁移已跑过 auth V95）" }
+Write-Ok "Cell 内已登记 $Code"
+
+# ---------------------------------------------------------------- 4. 控制面登记
 Write-Step "登记租户到控制面台账（$ControlContainer）"
 $sql = @"
 INSERT INTO auth_svc.tenant
@@ -166,7 +187,7 @@ docker exec $ControlContainer bash -lc "echo $b64 | base64 -d | psql -U $DbUser 
 if ($LASTEXITCODE -ne 0) { Fail "控制面登记失败（确认 $ControlContainer 在运行，且 auth 已迁移到 V96）" }
 Write-Ok "已登记 $Code（db_host=127.0.0.1:$Port）"
 
-# ---------------------------------------------------------------- 4. 摘要
+# ---------------------------------------------------------------- 5. 摘要
 $schemas = (docker exec $Container psql -U $DbUser -d medagent -t -A -c `
         "SELECT count(DISTINCT table_schema) FROM information_schema.tables WHERE table_name='flyway_schema_history'")
 Write-Step "完成"

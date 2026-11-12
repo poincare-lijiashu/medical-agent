@@ -42,13 +42,14 @@ public class DeploymentService {
     }
 
     public List<Deployment> list(String component, String environment, String result,
-                                 int limit, int offset) {
+                                 String tenantCode, int limit, int offset) {
         int size = Math.min(Math.max(limit, 1), properties.getMaxPageSize());
-        return repo.listDeployments(component, environment, result, size, Math.max(offset, 0));
+        return repo.listDeployments(component, environment, result, blankToNull(tenantCode),
+                size, Math.max(offset, 0));
     }
 
-    public long count(String component, String environment, String result) {
-        return repo.countDeployments(component, environment, result);
+    public long count(String component, String environment, String result, String tenantCode) {
+        return repo.countDeployments(component, environment, result, blankToNull(tenantCode));
     }
 
     public Deployment requireDeployment(UUID id) {
@@ -98,7 +99,8 @@ public class DeploymentService {
         }
 
         Deployment deployment = new Deployment(UUID.randomUUID(), req.componentCode(),
-                req.versionId(), req.environment(), req.action(), req.result(),
+                req.versionId(), req.environment(), blankToNull(req.tenantCode()),
+                blankToNull(req.batchLabel()), req.action(), req.result(),
                 req.checklist() == null ? Map.of() : req.checklist(), req.rollbackOf(),
                 req.reason(), actor, req.startedAt(),
                 req.finishedAt() == null ? now : req.finishedAt(), now);
@@ -106,7 +108,10 @@ public class DeploymentService {
         repo.audit(actor, "DEPLOY_RECORD",
                 req.componentCode() + "@" + version.version(),
                 Map.of("environment", req.environment(), "action", req.action(),
-                        "result", req.result()), clientIp, traceId);
+                        "result", req.result(),
+                        "tenant", deployment.tenantCode() == null ? "" : deployment.tenantCode(),
+                        "batch", deployment.batchLabel() == null ? "" : deployment.batchLabel()),
+                clientIp, traceId);
         return deployment;
     }
 
@@ -123,18 +128,24 @@ public class DeploymentService {
             throw new BusinessException(ErrorCode.REL_RELEASE_INVALID, "只有成功的部署可以回滚");
         }
         Deployment previous = repo.previousSuccessfulDeployment(current.componentCode(),
-                        current.environment(), current.id())
+                        current.environment(), current.tenantCode(), current.id())
                 .orElseThrow(() -> new BusinessException(ErrorCode.REL_ROLLBACK_NO_TARGET));
         Instant now = clock.instant();
         Deployment rollback = new Deployment(UUID.randomUUID(), current.componentCode(),
-                previous.versionId(), current.environment(), "ROLLBACK", "SUCCESS",
+                previous.versionId(), current.environment(), current.tenantCode(),
+                current.batchLabel(), "ROLLBACK", "SUCCESS",
                 Map.of(), current.id(), reason.trim(), actor, now, now, now);
         repo.insertDeployment(rollback);
         repo.audit(actor, "DEPLOY_ROLLBACK", current.componentCode(),
                 Map.of("fromDeployment", current.id().toString(),
                         "toDeployment", previous.id().toString(),
+                        "tenant", current.tenantCode() == null ? "" : current.tenantCode(),
                         "reason", reason), clientIp, traceId);
         return rollback;
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private void requireChecklist(Map<String, Object> checklist) {

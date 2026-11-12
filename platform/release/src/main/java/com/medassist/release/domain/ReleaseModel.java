@@ -124,6 +124,10 @@ public final class ReleaseModel {
             String componentCode,
             UUID versionId,
             String environment,
+            /** 目标 Cell（医院租户）；null = 平台级/ADR-001 之前的历史记录。 */
+            String tenantCode,
+            /** 灰度批次标签（PILOT/CANARY_10/ALL）；仅审计追溯，不参与业务判断。 */
+            String batchLabel,
             String action,
             String result,
             Map<String, Object> checklist,

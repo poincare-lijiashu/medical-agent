@@ -17,6 +17,7 @@ import com.medassist.release.domain.ReleaseModel.Train;
 import com.medassist.release.domain.ReleaseModel.Version;
 import com.medassist.release.repo.ReleaseRepository;
 import com.medassist.release.service.ChangeWindowService;
+import com.medassist.release.service.CellReleaseStatusService;
 import com.medassist.release.service.CiIngestService;
 import com.medassist.release.service.CompatibilityService;
 import com.medassist.release.service.DeploymentService;
@@ -68,6 +69,7 @@ public class ReleaseController {
     private final PatchService patchService;
     private final ChangeWindowService windowService;
     private final DeploymentService deploymentService;
+    private final CellReleaseStatusService cellStatusService;
     private final ReleaseDashboardService dashboardService;
     private final CiIngestService ciIngestService;
     private final ReleaseRepository repo;
@@ -75,6 +77,7 @@ public class ReleaseController {
     public ReleaseController(ReleaseCatalogService catalogService, ReleaseTrainService trainService,
                              CompatibilityService compatibilityService, PatchService patchService,
                              ChangeWindowService windowService, DeploymentService deploymentService,
+                             CellReleaseStatusService cellStatusService,
                              ReleaseDashboardService dashboardService, CiIngestService ciIngestService,
                              ReleaseRepository repo) {
         this.catalogService = catalogService;
@@ -83,6 +86,7 @@ public class ReleaseController {
         this.patchService = patchService;
         this.windowService = windowService;
         this.deploymentService = deploymentService;
+        this.cellStatusService = cellStatusService;
         this.dashboardService = dashboardService;
         this.ciIngestService = ciIngestService;
         this.repo = repo;
@@ -431,16 +435,30 @@ public class ReleaseController {
             @RequestParam(required = false) String componentCode,
             @RequestParam(required = false) String environment,
             @RequestParam(required = false) String result,
+            @RequestParam(required = false) String tenantCode,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, READ);
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), PageResult.MAX_PAGE_SIZE);
-        long total = deploymentService.count(componentCode, environment, result);
+        long total = deploymentService.count(componentCode, environment, result, tenantCode);
         return ApiResponse.ok(PageResult.of(safePage, safeSize, total,
-                deploymentService.list(componentCode, environment, result, safeSize,
+                deploymentService.list(componentCode, environment, result, tenantCode, safeSize,
                         (safePage - 1) * safeSize)));
+    }
+
+    /**
+     * 某家医院相对最近一次已发布列车的对齐情况（§283）。
+     *
+     * <p>只读、无副作用；租户页用它渲染红/黄标记，发布演练脚本用它做分批推进的判定。
+     */
+    @GetMapping("/cells/{tenantCode}/status")
+    public ApiResponse<ReleaseDtos.CellReleaseStatus> cellStatus(
+            @PathVariable String tenantCode,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, READ);
+        return ApiResponse.ok(cellStatusService.status(tenantCode));
     }
 
     @PostMapping("/deployments")

@@ -101,8 +101,8 @@ class DeploymentServiceTest {
     @DisplayName("回滚：没有上一次成功部署时拒绝")
     void rollbackWithoutTarget() {
         when(repo.findDeployment(DEPLOYMENT_ID)).thenReturn(Optional.of(deployment(DEPLOYMENT_ID)));
-        when(repo.previousSuccessfulDeployment("platform-clinical", "PROD", DEPLOYMENT_ID))
-                .thenReturn(Optional.empty());
+        when(repo.previousSuccessfulDeployment("platform-clinical", "PROD", "tenant-001",
+                DEPLOYMENT_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.rollback(DEPLOYMENT_ID, "rollback",
                 "deploy01", null, null))
@@ -116,11 +116,11 @@ class DeploymentServiceTest {
     void rollbackCreatesRecord() {
         UUID previousId = UUID.randomUUID();
         Deployment previous = new Deployment(previousId, "platform-clinical", VERSION_ID, "PROD",
-                "DEPLOY", "SUCCESS", Map.of(), null, null, "deploy01",
+                "tenant-001", null, "DEPLOY", "SUCCESS", Map.of(), null, null, "deploy01",
                 NOW.minusSeconds(3600), NOW.minusSeconds(3500), NOW.minusSeconds(3600));
         when(repo.findDeployment(DEPLOYMENT_ID)).thenReturn(Optional.of(deployment(DEPLOYMENT_ID)));
-        when(repo.previousSuccessfulDeployment("platform-clinical", "PROD", DEPLOYMENT_ID))
-                .thenReturn(Optional.of(previous));
+        when(repo.previousSuccessfulDeployment("platform-clinical", "PROD", "tenant-001",
+                DEPLOYMENT_ID)).thenReturn(Optional.of(previous));
 
         service.rollback(DEPLOYMENT_ID, "bad release", "deploy01", null, null);
 
@@ -130,11 +130,34 @@ class DeploymentServiceTest {
         assertThat(saved.action()).isEqualTo("ROLLBACK");
         assertThat(saved.rollbackOf()).isEqualTo(DEPLOYMENT_ID);
         assertThat(saved.versionId()).isEqualTo(VERSION_ID);
+        // 回滚记录必须继承原部署的 Cell：否则台账里会出现"回滚到别家"的歧义
+        assertThat(saved.tenantCode()).isEqualTo("tenant-001");
+    }
+
+    @Test
+    @DisplayName("部署：Cell 编码落台账，空白归一为平台级")
+    void tenantRecorded() {
+        Deployment deployment = service.record(
+                new ReleaseDtos.DeployReq("platform-clinical", VERSION_ID, "PROD",
+                        " tenant-002 ", "PILOT", "DEPLOY", "SUCCESS", fullChecklist(),
+                        null, "pilot", NOW, NOW.plusSeconds(60)),
+                "deploy01", null, null);
+        assertThat(deployment.tenantCode()).isEqualTo("tenant-002");
+        assertThat(deployment.batchLabel()).isEqualTo("PILOT");
+
+        Deployment platform = service.record(
+                new ReleaseDtos.DeployReq("platform-clinical", VERSION_ID, "PROD",
+                        "  ", "", "DEPLOY", "SUCCESS", fullChecklist(),
+                        null, "platform", NOW, NOW.plusSeconds(60)),
+                "deploy01", null, null);
+        assertThat(platform.tenantCode()).isNull();
+        assertThat(platform.batchLabel()).isNull();
     }
 
     private ReleaseDtos.DeployReq req(String action, Map<String, Object> checklist) {
-        return new ReleaseDtos.DeployReq("platform-clinical", VERSION_ID, "PROD", action,
-                "SUCCESS", checklist, null, "release 1.0.0", NOW, NOW.plusSeconds(60));
+        return new ReleaseDtos.DeployReq("platform-clinical", VERSION_ID, "PROD",
+                "tenant-001", null, action, "SUCCESS", checklist, null,
+                "release 1.0.0", NOW, NOW.plusSeconds(60));
     }
 
     private static Map<String, Object> fullChecklist() {
@@ -143,8 +166,8 @@ class DeploymentServiceTest {
     }
 
     private static Deployment deployment(UUID id) {
-        return new Deployment(id, "platform-clinical", VERSION_ID, "PROD", "DEPLOY", "SUCCESS",
-                fullChecklist(), null, null, "deploy01", NOW.minusSeconds(60),
-                NOW.minusSeconds(30), NOW.minusSeconds(60));
+        return new Deployment(id, "platform-clinical", VERSION_ID, "PROD", "tenant-001", null,
+                "DEPLOY", "SUCCESS", fullChecklist(), null, null, "deploy01",
+                NOW.minusSeconds(60), NOW.minusSeconds(30), NOW.minusSeconds(60));
     }
 }

@@ -567,6 +567,8 @@ public class ReleaseRepository {
             rs.getString("component_code"),
             rs.getObject("version_id", UUID.class),
             rs.getString("environment"),
+            rs.getString("tenant_code"),
+            rs.getString("batch_label"),
             rs.getString("action"),
             rs.getString("result"),
             readMap(rs.getString("checklist")),
@@ -578,22 +580,25 @@ public class ReleaseRepository {
             instant(rs, "created_at"));
 
     private static final String DEPLOY_COLUMNS = """
-            id, component_code, version_id, environment, action, result, checklist, rollback_of,
-            reason, actor, started_at, finished_at, created_at
+            id, component_code, version_id, environment, tenant_code, batch_label,
+            action, result, checklist, rollback_of, reason, actor, started_at, finished_at, created_at
             """;
 
     public void insertDeployment(Deployment deployment) {
         jdbc.update("""
                 INSERT INTO release_svc.rel_deployment
-                    (id, component_code, version_id, environment, action, result, checklist,
-                     rollback_of, reason, actor, started_at, finished_at)
-                VALUES (:id, :component, :version, :env, :action, :result,
-                        CAST(:checklist AS jsonb), :rollbackOf, :reason, :actor, :started, :finished)
+                    (id, component_code, version_id, environment, tenant_code, batch_label,
+                     action, result, checklist, rollback_of, reason, actor, started_at, finished_at)
+                VALUES (:id, :component, :version, :env, :tenant, :batch,
+                        :action, :result, CAST(:checklist AS jsonb), :rollbackOf, :reason, :actor,
+                        :started, :finished)
                 """, new MapSqlParameterSource()
                 .addValue("id", deployment.id())
                 .addValue("component", deployment.componentCode())
                 .addValue("version", deployment.versionId())
                 .addValue("env", deployment.environment())
+                .addValue("tenant", deployment.tenantCode())
+                .addValue("batch", deployment.batchLabel())
                 .addValue("action", deployment.action())
                 .addValue("result", deployment.result())
                 .addValue("checklist", write(deployment.checklist()))
@@ -611,7 +616,7 @@ public class ReleaseRepository {
     }
 
     public List<Deployment> listDeployments(String component, String environment, String result,
-                                            int limit, int offset) {
+                                            String tenantCode, int limit, int offset) {
         StringBuilder sql = new StringBuilder("SELECT " + DEPLOY_COLUMNS
                 + " FROM release_svc.rel_deployment WHERE 1 = 1");
         MapSqlParameterSource params = new MapSqlParameterSource();
@@ -627,12 +632,17 @@ public class ReleaseRepository {
             sql.append(" AND result = :result");
             params.addValue("result", result);
         }
+        if (tenantCode != null && !tenantCode.isBlank()) {
+            sql.append(" AND tenant_code = :tenant");
+            params.addValue("tenant", tenantCode);
+        }
         sql.append(" ORDER BY started_at DESC LIMIT :limit OFFSET :offset");
         params.addValue("limit", limit).addValue("offset", offset);
         return jdbc.query(sql.toString(), params, DEPLOY_MAPPER);
     }
 
-    public long countDeployments(String component, String environment, String result) {
+    public long countDeployments(String component, String environment, String result,
+                                 String tenantCode) {
         StringBuilder sql = new StringBuilder(
                 "SELECT count(*) FROM release_svc.rel_deployment WHERE 1 = 1");
         MapSqlParameterSource params = new MapSqlParameterSource();
@@ -648,24 +658,95 @@ public class ReleaseRepository {
             sql.append(" AND result = :result");
             params.addValue("result", result);
         }
+        if (tenantCode != null && !tenantCode.isBlank()) {
+            sql.append(" AND tenant_code = :tenant");
+            params.addValue("tenant", tenantCode);
+        }
         Long count = jdbc.queryForObject(sql.toString(), params, Long.class);
         return count == null ? 0 : count;
     }
 
-    /** 回滚目标：同一组件/环境最近一次成功部署（排除当前记录）。 */
+    /**
+     * 回滚目标：同一组件/环境/**同一 Cell** 最近一次成功部署（排除当前记录）。
+     *
+     * <p>租户必须用 {@code IS NOT DISTINCT FROM} 比较：历史记录（tenant 为空）
+     * 只能回滚到同为空的记录，绝不能命中某家医院的部署；反之亦然。
+     */
     public Optional<Deployment> previousSuccessfulDeployment(String component, String environment,
-                                                             UUID excludeId) {
+                                                             String tenantCode, UUID excludeId) {
         return jdbc.query("SELECT " + DEPLOY_COLUMNS + """
                   FROM release_svc.rel_deployment
                  WHERE component_code = :component AND environment = :env
+                   AND tenant_code IS NOT DISTINCT FROM :tenant
                    AND result = 'SUCCESS' AND action IN ('DEPLOY', 'HOTFIX')
                    AND id <> :exclude
                  ORDER BY started_at DESC LIMIT 1
                 """, new MapSqlParameterSource()
                         .addValue("component", component)
                         .addValue("env", environment)
+                        .addValue("tenant", tenantCode)
                         .addValue("exclude", excludeId),
                 DEPLOY_MAPPER).stream().findFirst();
+    }
+
+    // ------------------------------------------------------------- Cell 发布对齐
+
+    /** 该 Cell 每个组件最近一次成功部署（PROD），用于判断"是否落后于已发布列车"。 */
+    public List<CellDeployment> latestCellDeployments(String tenantCode) {
+        return jdbc.query("""
+                SELECT DISTINCT ON (d.component_code)
+                       d.component_code, d.version_id, v.version, d.started_at
+                  FROM release_svc.rel_deployment d
+                  JOIN release_svc.rel_version v ON v.id = d.version_id
+                 WHERE d.tenant_code = :tenant AND d.environment = 'PROD'
+                   AND d.result = 'SUCCESS' AND d.action IN ('DEPLOY', 'HOTFIX')
+                 ORDER BY d.component_code, d.started_at DESC
+                """, new MapSqlParameterSource("tenant", tenantCode),
+                (rs, n) -> new CellDeployment(
+                        rs.getString("component_code"),
+                        rs.getObject("version_id", UUID.class),
+                        rs.getString("version"),
+                        instant(rs, "started_at")));
+    }
+
+    /** 该 Cell 每个组件最近一次部署（不论成败）：最近一次失败要在页面上红标。 */
+    public List<CellDeployment> latestCellAttempts(String tenantCode) {
+        return jdbc.query("""
+                SELECT DISTINCT ON (d.component_code)
+                       d.component_code, d.version_id, v.version, d.started_at, d.result
+                  FROM release_svc.rel_deployment d
+                  JOIN release_svc.rel_version v ON v.id = d.version_id
+                 WHERE d.tenant_code = :tenant AND d.environment = 'PROD'
+                 ORDER BY d.component_code, d.started_at DESC
+                """, new MapSqlParameterSource("tenant", tenantCode),
+                (rs, n) -> new CellDeployment(
+                        rs.getString("component_code"),
+                        rs.getObject("version_id", UUID.class),
+                        rs.getString("version"),
+                        instant(rs, "started_at"),
+                        rs.getString("result")));
+    }
+
+    /** 最近一次已发布列车（含车厢）。没有已发布列车时返回空。 */
+    public Optional<Train> latestReleasedTrain() {
+        return jdbc.query("""
+                SELECT * FROM release_svc.rel_release_train
+                 WHERE status = 'RELEASED'
+                 ORDER BY COALESCE(released_at, created_at) DESC LIMIT 1
+                """, TRAIN_MAPPER).stream().findFirst()
+                .map(train -> new Train(train.id(), train.trainCode(), train.name(),
+                        train.plannedDate(), train.freezeAt(), train.status(), train.notes(),
+                        train.releasedAt(), train.createdBy(), train.version(),
+                        train.createdAt(), train.updatedAt(), listTrainItems(train.id())));
+    }
+
+    /** Cell 维度的一条部署事实（组件 / 版本 / 时间 / 结果）。 */
+    public record CellDeployment(String componentCode, UUID versionId, String version,
+                                 Instant startedAt, String result) {
+        public CellDeployment(String componentCode, UUID versionId, String version,
+                              Instant startedAt) {
+            this(componentCode, versionId, version, startedAt, "SUCCESS");
+        }
     }
 
     // ------------------------------------------------------------------ 看板/审计

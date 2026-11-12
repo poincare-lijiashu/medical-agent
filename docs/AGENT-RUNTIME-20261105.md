@@ -12741,3 +12741,70 @@ Java：auth 91 passed（新增 CellMigrationServiceTest 3）
 - 二院只验证到"库与身份"层：其余 14 个服务未在二院起进程（本地资源所限），生产由 Helm 每院整套拉起；
 - 数据库备份仍是单实例 CronJob，按 Cell 独立备份桶 + PITR 窗口需随 §284 开通编排一起做；
 - 租户页尚未展示"落后于发布列车"的红黄标记（台账已有数据，判定逻辑放在 §283 验收一起做）。
+
+## 283. 2026-11-12 隔离验收：越权套件、故障注入、分批发布（第 283 批 / ADR-001 P2）
+
+**为什么"写了脚本"不等于"验收通过"**
+
+隔离是可以用证据说话的能力，不是架构图上的承诺。本批把 ADR-001 §3 的契约表逐条变成了
+**可重复执行、会失败、会留证据**的三条流水线，并把发布台账补上了 Cell 维度——
+否则"分批灰度"和"单院回滚"在数据上根本无从证明。
+
+**本批做了什么**
+
+1. **部署台账加 Cell 维度**（release V3）：`rel_deployment.tenant_code` + `batch_label`；
+   回滚匹配从"组件+环境"改为"组件+环境+Cell"，用 `IS NOT DISTINCT FROM` 让"空=空"也成立，
+   避免历史记录回滚时命中某家医院。部署/回滚 API 与 CI 事件同步支持 `tenantCode`/`batchLabel`。
+2. **发布对齐服务**：`GET /api/v2/release/cells/{tenantCode}/status` —— 以"最近一次 RELEASED 列车"
+   为目标，与各 Cell 在 PROD 下每个组件最近一次成功部署的**版本 ID** 比对（不做版本号字符串比较），
+   输出 ALIGNED / BEHIND / FAILED / UNKNOWN 与逐组件明细；最近一次部署失败优先红标。
+3. **平台运营只读可见性**（auth V97）：只授予 `release:read`；编排/审批/部署权仍分离，
+   运维能看某院是否落后、上次部署是否失败，但不能替院方发版。
+4. **控制台**：租户页新增「发布列车对齐」面板与列表「发布对齐」列（平台运营视角）；
+   单院台账不可读只让该行显示"—"，不把整页打成错误。
+5. **越权套件** `scripts/e2e/cell_isolation_suite.py`：A↔B 双向、404/403/40321/401 语义分别断言，
+   只用标准库；证据落 `artifacts/isolation/*.json`。
+6. **故障注入** `scripts/chaos_cell.ps1`：CPU 打满 / kill -9 auth / 停独立 PG 三类故障，
+   持续采样主院 `/auth/me` 并计算 P50/P95/P99/错误率；护栏写死（目标必须是 `medagent_pg_tenant<N>`、
+   端口不得落在 8080-8095、只 kill 命令行含 `platform-auth` 且端口匹配的进程）。
+7. **分批发布演练** `scripts/release/cell_rollout_drill.ps1`：BASELINE → PILOT → 10% → ALL →
+   单院回滚；每批校验台账归属，回滚后校验别院部署 ID 未变。
+8. **开通脚本修复**：`new_cell.ps1` 补"Cell 内租户登记"（`auth_svc.tenant`）。
+   这是本轮 E2E 抓到的真问题：`app_user.tenant_code` 有外键，Cell 库没有该行时，
+   新院建首个账号会直接报 `fk_app_user_tenant`。
+
+**验证**
+
+```
+Java：auth + release 129 passed（新增 CellReleaseStatusServiceTest 5、DeploymentServiceTest +2）
+契约：tests/test_isolation_acceptance.py 13 passed（脚本护栏/台账口径/报告完整性）
+前端：typecheck / build 通过（入口 gzip 98.48KB < 110KB）
+全量：pytest -m "not e2e" → 1977 passed / 1 skipped
+```
+
+真实栈证据（详见 `docs/ISOLATION-ACCEPTANCE-20261112.md`）：
+
+```
+跨 Cell 越权套件         16/16 PASS（A↔B 双向；同名 admin01 两院独立存在）
+A 令牌打 B 入口          403 / 40321
+A 院独有账号在 B 院登录   401
+未登记 Host              403 / 40321
+故障注入（tenant-002）    kill auth：主院 0 错误，P99 -71%；停 PG：0 错误，P99 -80.5%
+CPU 打满                 本地单机 +156.7%，标记 LOCAL_REFERENCE（不计通过）
+分批发布 + 回滚           PASS=6：三批归属正确；试点院回滚成功；别院部署 ID 未变
+发布对齐                 两院相对列车 2026.11 均为 ALIGNED
+```
+
+**已知边界（不粉饰）**
+
+- 本地单机共享内核，CPU 隔离只能给参考值；生产需在 K8s（每 Cell 独立配额/节点池）复跑。
+- 流量分桶、单院 PITR、按院 SLO 看板尚未演练，随 §284 开通编排落地。
+- 主演示网关 8080 是**单入口模式**（未开入口路由）：跨院令牌在这里被本 Cell auth 以 401 拒绝，
+  而不是网关 403/40321；多入口拓扑（8183/8180）已验证网关即拦截。两种模式都拒绝，但契约只对多入口成立。
+- 二院 `admin01` 是验收种子账号（与一院同用户名/同口令哈希），用于证明租户内用户名唯一；
+  生产由 §284 的首个管理员流程创建，不复制演示账号。
+
+**下一批 §284（P3 开通自动化）**
+
+一键开通（建库→迁移→Cell 内租户登记→命名空间/配额→license→首个管理员）、
+租户停用/注销的数据保留策略、租户健康度看板、单院备份桶 + PITR 与恢复演练。

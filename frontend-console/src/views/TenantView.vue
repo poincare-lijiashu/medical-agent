@@ -65,6 +65,7 @@
                 <th>实例码</th>
                 <th>状态</th>
                 <th class="right">账号</th>
+                <th v-if="platformLevel">发布对齐</th>
                 <th>Cell 入口</th>
                 <th>更新时间</th>
                 <th />
@@ -87,6 +88,15 @@
                   <span class="badge" :class="statusBadge(t.status)">{{ statusText(t.status) }}</span>
                 </td>
                 <td class="right mono">{{ t.activeUserCount }} / {{ t.userCount }}</td>
+                <td v-if="platformLevel">
+                  <span
+                    class="badge"
+                    :class="releaseBadge(cellStatuses[t.code])"
+                    :title="releaseTitle(cellStatuses[t.code])"
+                  >
+                    {{ releaseText(cellStatuses[t.code]) }}
+                  </span>
+                </td>
                 <td class="mono ellipsis" :title="t.cellEndpoint || ''">{{ t.cellEndpoint || '—' }}</td>
                 <td class="nowrap sub">{{ dateTime(t.updatedAt) }}</td>
                 <td class="right nowrap" @click.stop>
@@ -224,6 +234,80 @@
         <p v-if="migrations?.syncedAt" class="hint mig-foot">
           最近同步：{{ dateTime(migrations.syncedAt) }} · 共 {{ migrations.items.length }} 个服务域
         </p>
+      </section>
+
+      <section v-if="platformLevel" class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">发布列车对齐</span>
+          <span v-if="selectedStatus?.trainCode" class="badge badge--neutral">
+            {{ selectedStatus.trainCode }}
+          </span>
+          <span class="spacer" />
+          <span class="hint">
+            目标 = 最近一次已发布列车；事实 = 该院 PROD 最近一次部署（只读台账）
+          </span>
+          <button class="btn btn--sm btn--ghost" type="button" :disabled="statusLoading" @click="reloadCellStatuses()">
+            <AppIcon name="refresh" :size="14" /> {{ statusLoading ? '读取中…' : '刷新' }}
+          </button>
+        </div>
+        <div v-if="!selectedStatus" class="alert-list" role="status">
+          <div class="alert-item">
+            <AppIcon name="alert" :size="15" />
+            <span>
+              尚无该院的发布对齐数据：可能还没有部署记录，或发布服务不可达（该面板需要 <span class="mono">release:read</span>）。
+            </span>
+          </div>
+        </div>
+        <template v-else>
+          <div v-if="selectedStatus.state === 'FAILED'" class="alert-list" role="status">
+            <div class="alert-item danger">
+              <AppIcon name="alert" :size="15" />
+              <span>
+                该院有 {{ selectedStatus.failedComponents }} 个组件最近一次部署失败：先处置失败项，再推进下一批。
+              </span>
+            </div>
+          </div>
+          <div v-else-if="selectedStatus.state === 'BEHIND'" class="alert-list" role="status">
+            <div class="alert-item warn">
+              <AppIcon name="alert" :size="15" />
+              <span>
+                落后于已发布列车：{{ selectedStatus.behindComponents }} / {{ selectedStatus.totalComponents }} 个组件未对齐。
+              </span>
+            </div>
+          </div>
+          <div v-else-if="selectedStatus.state === 'UNKNOWN'" class="alert-list" role="status">
+            <div class="alert-item">
+              <AppIcon name="alert" :size="15" />
+              <span>平台尚无「已发布列车」，无法判定该院是否落后；发布第一列车后这里会自动对齐。</span>
+            </div>
+          </div>
+          <div v-else class="alert-list" role="status">
+            <div class="alert-item ok">
+              <AppIcon name="check" :size="15" />
+              <span>已对齐最近一次发布列车（{{ selectedStatus.totalComponents }} 个组件全部一致）。</span>
+            </div>
+          </div>
+          <div v-if="selectedStatus.components.length" class="rel-grid">
+            <div
+              v-for="c in selectedStatus.components"
+              :key="c.componentCode"
+              class="rel-item"
+              :class="`rel-item--${c.status.toLowerCase()}`"
+            >
+              <span class="rel-service">{{ c.componentCode }}</span>
+              <span class="mono rel-version">{{ c.deployedVersion || '未部署' }}</span>
+              <span v-if="c.status !== 'UP_TO_DATE'" class="sub rel-target">
+                目标 {{ c.targetVersion || '—' }}
+              </span>
+              <span class="badge" :class="componentBadge(c.status)">{{ componentText(c.status) }}</span>
+            </div>
+          </div>
+          <p class="hint mig-foot">
+            列车 {{ selectedStatus.trainCode || '—' }}
+            <template v-if="selectedStatus.trainReleasedAt"> · 发布于 {{ dateTime(selectedStatus.trainReleasedAt) }}</template>
+            · 读取于 {{ dateTime(selectedStatus.generatedAt) }}
+          </p>
+        </template>
       </section>
 
       <section class="sheet">
@@ -414,6 +498,7 @@ import PageHeader from '@/components/ui/PageHeader.vue'
 import PermissionDenied from '@/components/ui/PermissionDenied.vue'
 import TableSkeleton from '@/components/ui/TableSkeleton.vue'
 import { errorText, isForbidden } from '@/api/http'
+import { releaseApi, type CellComponentStatus, type CellReleaseStatus } from '@/api/release'
 import {
   TENANT_STATUS_TEXT,
   tenantApi,
@@ -433,6 +518,9 @@ const loading = ref(false)
 const busy = ref(false)
 const error = ref('')
 const forbidden = ref(false)
+/** 各院相对已发布列车的对齐结论（平台运营视角；租户管理员不请求）。 */
+const cellStatuses = ref<Record<string, CellReleaseStatus>>({})
+const statusLoading = ref(false)
 
 const platformLevel = computed(() => list.value?.platformLevel === true)
 const canSelfManage = computed(() => session.hasPermission('tenant:self:manage'))
@@ -441,6 +529,9 @@ const ownTenant = computed(() => {
   return list.value?.items.find((t) => t.code === current) || null
 })
 const currentStatus = computed(() => ownTenant.value?.status || null)
+const selectedStatus = computed(() =>
+  selected.value ? cellStatuses.value[selected.value.code] || null : null,
+)
 
 onMounted(load)
 
@@ -451,6 +542,11 @@ async function load() {
   try {
     const data = await tenantApi.list()
     list.value = data
+    if (platformLevel.value) {
+      await loadCellStatuses()
+    } else {
+      cellStatuses.value = {}
+    }
     // 优先展示本院详情：租户管理员打开页面就是要看"我在哪家院、入口是什么"
     const preferred = data.items.find((t) => t.code === data.currentTenant) || data.items[0]
     if (preferred) {
@@ -498,6 +594,82 @@ async function reloadMigrations(force = true) {
   } finally {
     migLoading.value = false
   }
+}
+
+/* ---------------------------------------------------------------- 发布对齐 */
+
+/**
+ * 平台运营视角：并行读取各院"相对已发布列车"的对齐结论。
+ *
+ * 单院失败（无 release:read / 发布服务不可达）只让该行显示"—"，
+ * 不能因为一家院的发布台账不可读就把整页打成错误。
+ */
+async function loadCellStatuses() {
+  const items = list.value?.items || []
+  if (!items.length) {
+    cellStatuses.value = {}
+    return
+  }
+  statusLoading.value = true
+  try {
+    const entries = await Promise.all(
+      items.map(async (t) => {
+        try {
+          return [t.code, await releaseApi.cellStatus(t.code)] as const
+        } catch {
+          return null
+        }
+      }),
+    )
+    const next: Record<string, CellReleaseStatus> = {}
+    for (const entry of entries) {
+      if (entry) next[entry[0]] = entry[1]
+    }
+    cellStatuses.value = next
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+function reloadCellStatuses() {
+  return loadCellStatuses()
+}
+
+function releaseText(status?: CellReleaseStatus): string {
+  if (!status) return '—'
+  if (status.state === 'FAILED') return `部署失败 ${status.failedComponents}`
+  if (status.state === 'BEHIND') return `落后 ${status.behindComponents}`
+  if (status.state === 'ALIGNED') return '已对齐'
+  return '待发布'
+}
+
+function releaseBadge(status?: CellReleaseStatus): string {
+  if (!status) return 'badge--neutral'
+  if (status.state === 'FAILED') return 'badge--danger'
+  if (status.state === 'BEHIND') return 'badge--warn'
+  if (status.state === 'ALIGNED') return 'badge--ok'
+  return 'badge--neutral'
+}
+
+function releaseTitle(status?: CellReleaseStatus): string {
+  if (!status) return '暂无发布对齐数据（无部署记录或发布服务不可达）'
+  if (status.state === 'UNKNOWN') return '平台尚无已发布列车，无法判定'
+  return `列车 ${status.trainCode}：${status.totalComponents - status.behindComponents}/${status.totalComponents} 个组件已对齐`
+}
+
+function componentText(status: CellComponentStatus['status']): string {
+  const map: Record<string, string> = {
+    UP_TO_DATE: '一致',
+    BEHIND: '落后',
+    NEVER_DEPLOYED: '未部署',
+  }
+  return map[status] || status
+}
+
+function componentBadge(status: CellComponentStatus['status']): string {
+  if (status === 'UP_TO_DATE') return 'badge--ok'
+  if (status === 'BEHIND') return 'badge--warn'
+  return 'badge--neutral'
 }
 
 /* ---------------------------------------------------------------- 开通 */
@@ -774,6 +946,57 @@ function suggestCode(): string {
   border-color: color-mix(in srgb, var(--negative) 35%, var(--border));
   background: var(--negative-bg);
   color: var(--negative);
+}
+.alert-item.warn {
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
+  color: var(--warning);
+}
+.alert-item.ok {
+  border-color: color-mix(in srgb, var(--positive) 30%, var(--border));
+  background: color-mix(in srgb, var(--positive) 8%, var(--surface));
+  color: var(--positive);
+}
+.rel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 8px;
+  padding: 10px 16px 4px;
+}
+.rel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--ground);
+  min-width: 0;
+}
+.rel-item--up_to_date {
+  border-left-color: var(--positive);
+}
+.rel-item--behind {
+  border-left-color: var(--warning);
+}
+.rel-item--never_deployed {
+  border-left-color: var(--border);
+}
+.rel-service {
+  font-size: var(--fs-small);
+  color: var(--muted);
+  min-width: 108px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rel-version {
+  font-weight: 600;
+}
+.rel-target {
+  flex: 1;
+  min-width: 0;
 }
 .table-wrap {
   overflow: auto;

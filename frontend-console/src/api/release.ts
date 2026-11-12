@@ -115,6 +115,10 @@ export interface Deployment {
   componentCode: string
   versionId: string
   environment: DeployEnv
+  /** 目标 Cell（医院租户）；为空表示平台级或 ADR-001 之前的历史记录。 */
+  tenantCode: string | null
+  /** 灰度批次标签（PILOT/CANARY_10/ALL）。 */
+  batchLabel: string | null
   action: DeployAction
   result: 'SUCCESS' | 'FAILED'
   checklist: Record<string, unknown>
@@ -124,6 +128,32 @@ export interface Deployment {
   startedAt: string
   finishedAt: string
   createdAt: string
+}
+
+/** Cell 内单个组件与"最近一次已发布列车"的对齐结论。 */
+export interface CellComponentStatus {
+  componentCode: string
+  targetVersion: string | null
+  deployedVersion: string | null
+  status: 'UP_TO_DATE' | 'BEHIND' | 'NEVER_DEPLOYED'
+  deployedAt: string | null
+}
+
+/**
+ * 某家医院相对已发布列车的对齐情况（§283）。
+ * state：ALIGNED 已对齐 / BEHIND 落后 / FAILED 部署失败 / UNKNOWN 尚无已发布列车。
+ */
+export interface CellReleaseStatus {
+  tenantCode: string
+  trainId: string | null
+  trainCode: string | null
+  trainReleasedAt: string | null
+  state: 'ALIGNED' | 'BEHIND' | 'FAILED' | 'UNKNOWN'
+  totalComponents: number
+  behindComponents: number
+  failedComponents: number
+  components: CellComponentStatus[]
+  generatedAt: string
 }
 
 export interface ReleaseAuditLog {
@@ -300,6 +330,7 @@ export const releaseApi = {
     componentCode?: string
     environment?: string
     result?: string
+    tenantCode?: string
     page?: number
     size?: number
   }) => get<PageResult<Deployment>>('/release/deployments', { ...params }),
@@ -307,6 +338,8 @@ export const releaseApi = {
     componentCode: string
     versionId: string
     environment: DeployEnv
+    tenantCode?: string
+    batchLabel?: string
     action: DeployAction
     result: 'SUCCESS' | 'FAILED'
     checklist?: Record<string, unknown>
@@ -317,6 +350,10 @@ export const releaseApi = {
   }) => post<Deployment>('/release/deployments', body),
   rollback: (id: string, reason: string) =>
     post<Deployment>(`/release/deployments/${id}/rollback`, { reason }),
+
+  /** 某家医院相对最近一次已发布列车的对齐情况（租户页红黄标记 / 发布演练判定）。 */
+  cellStatus: (tenantCode: string) =>
+    get<CellReleaseStatus>(`/release/cells/${encodeURIComponent(tenantCode)}/status`),
 
   audit: (limit = 100) => get<ReleaseAuditLog[]>('/release/audit', { limit }),
 

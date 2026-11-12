@@ -48,6 +48,10 @@ public final class ReleaseIntegrationDtos {
             String schemaVersion,
             Boolean breakingChanges,
             String changelog,
-            String eventId) {
+            String eventId,
+            /** 目标 Cell（医院租户）；为空表示平台级部署。 */
+            String tenantCode,
+            /** 灰度批次标签（PILOT/CANARY_10/ALL），仅审计追溯。 */
+            String batchLabel) {
     }
 }

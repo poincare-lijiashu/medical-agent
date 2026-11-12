@@ -1,0 +1,128 @@
+﻿{
+    "generatedAt":  "2026-11-12T19:41:03.6642063+08:00",
+    "adr":  "ADR-001 §3 发布隔离契约",
+    "gateway":  "http://127.0.0.1:8080",
+    "component":  "platform-gateway",
+    "version":  {
+                    "id":  "7e596c8f-6e28-48d6-8834-4f2d28157608",
+                    "version":  "0.1.0-drill-20261112",
+                    "status":  "RELEASED"
+                },
+    "plan":  [
+                 {
+                     "batch":  "BASELINE",
+                     "tenants":  [
+                                     "tenant-001",
+                                     "tenant-002"
+                                 ],
+                     "note":  "基线部署（提供回滚目标）"
+                 },
+                 {
+                     "batch":  "PILOT",
+                     "tenants":  [
+                                     "tenant-001"
+                                 ],
+                     "note":  "首批 1 家"
+                 },
+                 {
+                     "batch":  "CANARY_10",
+                     "tenants":  [
+
+                                 ],
+                     "note":  "推进到累计 1 家（10%）"
+                 },
+                 {
+                     "batch":  "ALL",
+                     "tenants":  [
+                                     "tenant-002"
+                                 ],
+                     "note":  "推进剩余全部"
+                 }
+             ],
+    "records":  [
+                    {
+                        "tenant":  "tenant-001",
+                        "batch":  "BASELINE",
+                        "deploymentId":  "d966e672-5f87-4f6b-a63c-8392a5d7c028",
+                        "action":  "DEPLOY",
+                        "result":  "SUCCESS",
+                        "startedAt":  "2026-11-12T11:41:03.315539500Z"
+                    },
+                    {
+                        "tenant":  "tenant-002",
+                        "batch":  "BASELINE",
+                        "deploymentId":  "22b82029-7fe7-4fb9-aa36-1707faf21ff2",
+                        "action":  "DEPLOY",
+                        "result":  "SUCCESS",
+                        "startedAt":  "2026-11-12T11:41:03.359934200Z"
+                    },
+                    {
+                        "tenant":  "tenant-001",
+                        "batch":  "PILOT",
+                        "deploymentId":  "e96ed2cc-61b4-4134-8069-42a115720189",
+                        "action":  "DEPLOY",
+                        "result":  "SUCCESS",
+                        "startedAt":  "2026-11-12T11:41:03.418242500Z"
+                    },
+                    {
+                        "tenant":  "tenant-002",
+                        "batch":  "ALL",
+                        "deploymentId":  "aa903eb1-eaac-4d39-b824-eae9203d9108",
+                        "action":  "DEPLOY",
+                        "result":  "SUCCESS",
+                        "startedAt":  "2026-11-12T11:41:03.474173600Z"
+                    }
+                ],
+    "rollback":  {
+                     "tenant":  "tenant-001",
+                     "rolledBackDeployment":  "e96ed2cc-61b4-4134-8069-42a115720189",
+                     "rollbackDeployment":  "327f44bc-e034-4b01-9a4e-3bc047f20f39",
+                     "otherTenant":  "tenant-002"
+                 },
+    "deploymentsByTenant":  {
+                                "tenant-001":  [
+                                                   {
+                                                       "id":  "327f44bc-e034-4b01-9a4e-3bc047f20f39",
+                                                       "action":  "ROLLBACK",
+                                                       "result":  "SUCCESS",
+                                                       "batch":  "PILOT",
+                                                       "startedAt":  "2026-11-12T11:41:03.576545Z"
+                                                   },
+                                                   {
+                                                       "id":  "e96ed2cc-61b4-4134-8069-42a115720189",
+                                                       "action":  "DEPLOY",
+                                                       "result":  "SUCCESS",
+                                                       "batch":  "PILOT",
+                                                       "startedAt":  "2026-11-12T11:41:03.418243Z"
+                                                   },
+                                                   {
+                                                       "id":  "d966e672-5f87-4f6b-a63c-8392a5d7c028",
+                                                       "action":  "DEPLOY",
+                                                       "result":  "SUCCESS",
+                                                       "batch":  "BASELINE",
+                                                       "startedAt":  "2026-11-12T11:41:03.315540Z"
+                                                   }
+                                               ],
+                                "tenant-002":  [
+                                                   {
+                                                       "id":  "aa903eb1-eaac-4d39-b824-eae9203d9108",
+                                                       "action":  "DEPLOY",
+                                                       "result":  "SUCCESS",
+                                                       "batch":  "ALL",
+                                                       "startedAt":  "2026-11-12T11:41:03.474174Z"
+                                                   },
+                                                   {
+                                                       "id":  "22b82029-7fe7-4fb9-aa36-1707faf21ff2",
+                                                       "action":  "DEPLOY",
+                                                       "result":  "SUCCESS",
+                                                       "batch":  "BASELINE",
+                                                       "startedAt":  "2026-11-12T11:41:03.359934Z"
+                                                   }
+                                               ]
+                            },
+    "summary":  {
+                    "pass":  6,
+                    "fail":  0
+                },
+    "verdict":  "PASS"
+}

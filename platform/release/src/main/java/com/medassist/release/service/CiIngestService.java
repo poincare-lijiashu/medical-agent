@@ -277,7 +277,8 @@ public class CiIngestService {
         String reason = "ci:" + sourceCode
                 + (blankToNull(req.actor()) == null ? "" : " by " + req.actor().trim())
                 + (blankToNull(req.reason()) == null ? "" : " — " + req.reason().trim());
-        return new ReleaseDtos.DeployReq(componentCode, version.id(), environment, action, result,
+        return new ReleaseDtos.DeployReq(componentCode, version.id(), environment,
+                blankToNull(req.tenantCode()), blankToNull(req.batchLabel()), action, result,
                 req.checklist(), req.rollbackOf(), truncate(reason, MAX_REASON), startedAt,
                 finishedAt);
     }

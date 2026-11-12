@@ -1,0 +1,99 @@
+{
+  "generatedAt": "2026-11-12T11:37:26.719958+00:00",
+  "adr": "ADR-001 §3 数据/身份隔离契约",
+  "cellA": "http://127.0.0.1:8183",
+  "cellB": "http://127.0.0.1:8180",
+  "hostA": "hospital-a.example",
+  "hostB": "hospital-b.example",
+  "results": [
+    {
+      "name": "A 院登录成功",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "A 院令牌带 tenant 声明",
+      "status": "PASS",
+      "detail": "tenant=tenant-001"
+    },
+    {
+      "name": "A 院令牌带 instance 声明",
+      "status": "PASS",
+      "detail": "instance=MEDASSIST-DEV-0001"
+    },
+    {
+      "name": "A 院 /auth/me 200 且租户一致",
+      "status": "PASS",
+      "detail": "HTTP 200 · tenantCode=tenant-001"
+    },
+    {
+      "name": "账号列表只含本院账号",
+      "status": "PASS",
+      "detail": "HTTP 200 · 跨院账号=[]"
+    },
+    {
+      "name": "A 院令牌读 B 院租户详情 404",
+      "status": "PASS",
+      "detail": "HTTP 404 · code=56401"
+    },
+    {
+      "name": "A 院管理员读 B 院迁移台账被拒",
+      "status": "PASS",
+      "detail": "HTTP 403 · code=40300"
+    },
+    {
+      "name": "未登记 Host 访问被拒 403",
+      "status": "PASS",
+      "detail": "HTTP 403 · code=40321"
+    },
+    {
+      "name": "A 院令牌打 B 院入口 403/40321",
+      "status": "PASS",
+      "detail": "HTTP 403 · code=40321"
+    },
+    {
+      "name": "A 院独有账号（doctor01）在 B 院库登录 401",
+      "status": "PASS",
+      "detail": "HTTP 401 · code=40100 · 用户名或密码错误"
+    },
+    {
+      "name": "B 院登录成功",
+      "status": "PASS",
+      "detail": ""
+    },
+    {
+      "name": "B 院令牌租户与 A 院不同",
+      "status": "PASS",
+      "detail": "tenantB=tenant-002 tenantA=tenant-001"
+    },
+    {
+      "name": "B 院 /auth/me 200",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "name": "B 院令牌打 A 院入口 403/40321",
+      "status": "PASS",
+      "detail": "HTTP 403 · code=40321"
+    },
+    {
+      "name": "B 院令牌读 A 院租户详情 404",
+      "status": "PASS",
+      "detail": "HTTP 404 · code=56401"
+    },
+    {
+      "name": "B 院账号列表只含本院账号",
+      "status": "PASS",
+      "detail": "HTTP 200 · 跨院账号=[]"
+    }
+  ],
+  "tenantA": "tenant-001",
+  "instanceA": "MEDASSIST-DEV-0001",
+  "tenantB": "tenant-002",
+  "summary": {
+    "pass": 16,
+    "fail": 0,
+    "skip": 0
+  },
+  "verdict": "PASS"
+}

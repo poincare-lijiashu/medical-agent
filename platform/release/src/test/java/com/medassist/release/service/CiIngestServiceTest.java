@@ -197,7 +197,8 @@ class CiIngestServiceTest {
     }
 
     private static Deployment deployment() {
-        return new Deployment(UUID.randomUUID(), COMPONENT, VERSION_ID, "PROD", "DEPLOY",
+        return new Deployment(UUID.randomUUID(), COMPONENT, VERSION_ID, "PROD", null, null,
+                "DEPLOY",
                 "SUCCESS", Map.of(), null, "ci", "ci:" + SOURCE, Instant.now(), null,
                 Instant.now());
     }
@@ -205,12 +206,13 @@ class CiIngestServiceTest {
     private static CiEventReq deployReq(String action, String environment, String result) {
         return new CiEventReq("DEPLOY", COMPONENT, "1.1.0", null, environment, action, result,
                 Map.of("backup", true), null, "pipeline run 1", "2026-11-12T08:00:00Z",
-                "2026-11-12T08:10:00Z", "github-actions", null, null, null, null, null, null);
+                "2026-11-12T08:10:00Z", "github-actions", null, null, null, null, null, null,
+                "tenant-001", "PILOT");
     }
 
     private static CiEventReq buildReq(String version, String result) {
         return new CiEventReq("BUILD", COMPONENT, version, null, null, null, result,
                 null, null, "pipeline run 2", "2026-11-12T08:00:00Z", null, "github-actions",
-                "abc123", "sha256:x", null, false, "CI build for 1.2.0", null);
+                "abc123", "sha256:x", null, false, "CI build for 1.2.0", null, null, null);
     }
 }
