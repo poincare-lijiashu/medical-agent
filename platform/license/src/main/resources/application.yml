@@ -49,8 +49,13 @@ medassist:
     verify-key: ${LICENSE_VERIFY_KEY:}
     # 私钥落盘目录（仅开发自动生成时使用；生产用 KMS/HSM 或环境变量注入）
     key-dir: ${LICENSE_KEY_DIR:data/license}
-    # 是否允许本服务签发授权书（厂商侧能力）。生产环境默认关闭，只有厂商构建才开启
-    issuance-enabled: ${LICENSE_ISSUANCE_ENABLED:true}
+    # 交付形态（§289，fail-closed）：
+    #   hospital（默认）= 院方构建，禁止签发；若同时把 issuance-enabled 打开会**拒绝启动**；
+    #   vendor          = 厂商构建，允许签发授权书（必须显式设置）。
+    # 默认取 hospital 而不是 vendor：忘记配置的院内部署不会意外获得"给自己发证"的能力。
+    deployment-mode: ${LICENSE_DEPLOYMENT_MODE:hospital}
+    # 是否允许本服务签发授权书（厂商侧能力）。默认关闭；厂商构建才开启
+    issuance-enabled: ${LICENSE_ISSUANCE_ENABLED:false}
     # 到期宽限期（天）：宽限期内只告警不阻断，超过则视为 EXPIRED
     grace-days: ${LICENSE_GRACE_DAYS:30}
     # 模块门禁（网关侧执行）：关闭时只展示授权状态，不拦截业务请求

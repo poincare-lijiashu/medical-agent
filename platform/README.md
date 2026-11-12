@@ -1147,14 +1147,20 @@ Argo Rollouts 灰度（可选）、日志采集（Loki/Promtail）与告警规�
 | GET | `/license/licenses` `/license/audit` | read | 历史授权与变更审计 |
 | POST | `/license/import` | manage | 导入授权书（逐字节验签 + 实例校验） |
 | POST | `/license/{id}/revoke` | manage | 吊销（必填原因） |
-| POST | `/license/issue` | manage | 签发（仅 `LICENSE_ISSUANCE_ENABLED=true` 的厂商构建） |
-| POST | `/license/usage` | manage | 上报用量快照 |
+| POST | `/license/issue` | manage | 签发（仅 `LICENSE_DEPLOYMENT_MODE=vendor` 的厂商构建） |
+| POST | `/license/usage` | manage | 上报用量快照（人工/外部任务，可一次写床位/账号/AI） |
+| POST | `/internal/license/usage/ai` | 内部令牌 | AI 中台日调用量自动上报（只写 `ai_calls`，当日/前一日，幂等） |
+| GET | `/internal/license/summary` | 内部令牌 | 开通编排读取授权摘要（不返回授权书正文） |
 
 ### 部署要点
 
-- 院内生产：`LICENSE_ISSUANCE_ENABLED=false`、`LICENSE_VERIFY_KEY=<厂商公钥>`、
-  `LICENSE_INSTANCE_CODE=<院区实例码>`；私钥不应出现在院内任何节点；
-- 开发/演示：未配置密钥时自动在 `data/license/` 生成密钥对（仅本地），
+- 交付形态（§289）：`LICENSE_DEPLOYMENT_MODE` 取 `vendor` / `hospital`，**默认 `hospital`**；
+  院方构建若同时打开 `LICENSE_ISSUANCE_ENABLED=true` 会**拒绝启动**（防止院方自签）；
+- 院内生产：`LICENSE_DEPLOYMENT_MODE=hospital`、`LICENSE_ISSUANCE_ENABLED=false`、
+  `LICENSE_VERIFY_KEY=<厂商公钥>`、`LICENSE_INSTANCE_CODE=<院区实例码>`；私钥不应出现在院内任何节点；
+- 厂商侧：`LICENSE_DEPLOYMENT_MODE=vendor` + `LICENSE_ISSUANCE_ENABLED=true` + 私钥注入；
+- 开发/演示：`--spring.profiles.active=dev`（`application-dev.yml` 已按 vendor 配置），
+  未配置密钥时自动在 `data/license/` 生成密钥对（仅本地），
   便于走通"签发 → 导入 → 生效 → 吊销"全链路。
 
 ## 开放平台（§280 / 计划书 W9.3）

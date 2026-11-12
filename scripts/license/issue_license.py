@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """签发授权书（第 288 批，厂商侧）。
 
-前提：license 服务以厂商构建启动（`LICENSE_ISSUANCE_ENABLED=true`），
-院内生产构建必须关闭该开关——否则等于把"给自己发证"的能力交给院方。
+前提：license 服务以厂商构建启动（`LICENSE_DEPLOYMENT_MODE=vendor` +
+`LICENSE_ISSUANCE_ENABLED=true`，开发用 `--spring.profiles.active=dev`）。
+院方构建（默认 `hospital`）会把签发能力关死：若仍打开该开关，服务**拒绝启动**（§289）。
 
   python scripts/license/issue_license.py \
       --base-url http://127.0.0.1:8095 --permissions license:manage --actor vendor-ops \

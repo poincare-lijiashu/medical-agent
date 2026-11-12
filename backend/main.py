@@ -191,12 +191,32 @@ async def lifespan(app: FastAPI):
                         detail="未配置内部认证地址/令牌：仅本地验签，不同步撤销与停用")
     except Exception as exc:  # noqa: BLE001 —— 同步失败不阻断启动（业务侧有缓存兜底）
         logger.warning("medical_agent.startup.identity_sync_failed", error=str(exc)[:120])
+    try:
+        # §289：AI 日调用量上报（授权计费口径）。未配置授权服务地址/内部令牌时不启动，
+        # 行为与历史一致；授权服务不可达只影响对账，不影响问答。
+        from backend.agents import ai_usage
+        if ai_usage.start():
+            logger.info("medical_agent.startup.ai_usage_started",
+                        base_url=settings.platform_license_base_url,
+                        interval_s=float(settings.ai_usage_flush_seconds or 60))
+        else:
+            logger.info("medical_agent.startup.ai_usage_disabled",
+                        detail="未配置 PLATFORM_LICENSE_BASE_URL/INTERNAL_API_TOKEN：不上报 AI 用量")
+    except Exception as exc:  # noqa: BLE001 —— 上报失败不阻断启动
+        logger.warning("medical_agent.startup.ai_usage_failed", error=str(exc)[:120])
     logger.info("medical_agent.startup.done")
     yield
     logger.info("medical_agent.shutdown")
     try:
         from backend.core import platform_identity
         platform_identity.stop()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        # §289：先停线程，再把最后一批计数落盘（PG 关闭之前）。上报失败只留痕，不拖慢下线。
+        from backend.agents import ai_usage
+        ai_usage.stop()
+        ai_usage.flush()
     except Exception:  # noqa: BLE001
         pass
     if _snapshot_stop is not None:
@@ -421,6 +441,12 @@ async def metrics(user: dict = Depends(require_metrics_access)):
             agent_ops = skill_trends.prometheus_text()
         except Exception:  # noqa: BLE001 —— 运营指标聚合失败不能拖垮抓取本身
             agent_ops = ""
+        # §289：AI 日调用量（授权计费口径）+ 上报心跳。台账读取失败退化为空串。
+        try:
+            from backend.agents import ai_usage as _ai_usage
+            usage_ops = _ai_usage.prometheus_text()
+        except Exception:  # noqa: BLE001
+            usage_ops = ""
         # 第 68 批：向量库检索面（看门狗超时/重建/降级）。含一次 0.5s 上界的 TCP 预检，
         # 抓取在 5s 缓存窗口内只探一次；异常时退化为空串，不影响其它指标。
         try:
@@ -435,8 +461,8 @@ async def metrics(user: dict = Depends(require_metrics_access)):
         except Exception:  # noqa: BLE001 —— 探测失败绝不影响抓取
             pass
         return (observability.exposition() + consult_metrics.prometheus_text()
-                + agent_ops + _pg_store.prometheus_text() + _stores.prometheus_text()
-                + kb_ops)
+                + usage_ops + agent_ops + _pg_store.prometheus_text()
+                + _stores.prometheus_text() + kb_ops)
 
     text = await asyncio.to_thread(_build)
     _metrics_cache.update(at=now, text=text)

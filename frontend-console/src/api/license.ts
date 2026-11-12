@@ -90,6 +90,8 @@ export interface LicenseStatus {
   issuanceEnabled?: boolean
   enforce?: boolean
   verifyKeyId?: string | null
+  /** 交付形态（§289）：vendor=厂商构建可签发；hospital=院方构建禁止签发 */
+  deploymentMode?: string
 }
 
 export interface IssuedDocument {

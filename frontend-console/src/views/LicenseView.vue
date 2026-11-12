@@ -161,6 +161,7 @@
 
       <dl class="runtime">
         <div><dt>验签公钥</dt><dd class="mono">{{ status.verifyKeyId || '—' }}</dd></div>
+        <div><dt>交付形态</dt><dd>{{ status.deploymentMode === 'vendor' ? '厂商构建（可签发）' : '院方构建（禁止签发）' }}</dd></div>
         <div><dt>签发能力</dt><dd>{{ status.issuanceEnabled ? '已开启（厂商构建）' : '已关闭（院内构建）' }}</dd></div>
         <div><dt>模块门禁</dt><dd>{{ status.enforce ? '强制执行' : '观察模式（不拦截）' }}</dd></div>
       </dl>

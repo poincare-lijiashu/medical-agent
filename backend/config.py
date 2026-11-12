@@ -215,6 +215,13 @@ class Settings(BaseSettings):
     platform_auth_base_url: str = ""
     internal_api_token: str = ""
     identity_sync_seconds: float = 15.0
+    # §289 AI 日调用量自动上报：AI 中台把"成功统一问答次数"按 UTC 日累计，
+    # 定时推给授权服务（直连 8095，不经网关）：
+    #   POST /internal/license/usage/ai   { date, aiCalls, source, workerId, workerCount }
+    # platform_license_base_url 留空 = 不上报（单机/离线形态，行为与历史一致）。
+    # 授权服务不可达不阻断问答：计数留在本地台账（agent_usage_daily），下一轮重试。
+    platform_license_base_url: str = ""
+    ai_usage_flush_seconds: float = 60.0
     auth_enabled: bool = True
     auth_seed_demo: bool = False  # 首次运行是否注入演示账号（doctor01 等）；默认关闭，仅演示环境显式开启
     auth_demo_password: str = ""  # 演示账号统一口令；留空则 seed 时随机生成（仅 dev 演示，生产不 seed）

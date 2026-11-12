@@ -57,3 +57,28 @@ groups:
         annotations:
           summary: "实例 {{ $labels.instance }} 配额超限：{{ $labels.quota }}"
           description: "配额对照按每日用量快照计算；持续超限需要扩容或修正上报口径。临床连续性优先，不自动阻断。"
+
+      # §289：AI 中台每 60 秒推送一次用量，正常新鲜度应在分钟级。
+      # 26 小时阈值容忍一次夜间维护窗口；超过即视为"自动对账链路断了"，
+      # 此时配额页的数字不可再用于商务判断。
+      - alert: MedassistLicenseUsageStale
+        expr: medassist_license_usage_age_seconds > 93600
+        for: 1h
+        labels:
+          severity: warning
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 的用量快照已超过 26 小时未更新"
+          description: "确认 AI 中台是否配置了 PLATFORM_LICENSE_BASE_URL/INTERNAL_API_TOKEN，以及 8095 是否可达；否则配额告警与对账全部失效。"
+          runbook: "docs/PROVISIONING-RUNBOOK.md#12-ai-用量自动上报与配额对账289"
+
+      # 上报链路存在但不成功（令牌错误/日期被拒）：授权服务侧能看见失败计数。
+      - alert: MedassistLicenseUsageIngestRejected
+        expr: increase(medassist_license_usage_ingest_total{result!="ok"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: warning
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 收到非法的 AI 用量上报（result={{ $labels.result }}）"
+          description: "常见原因：内部令牌不一致、按 UTC 日切上报了过期日期、计数超出合理范围。查看 license 日志中的 usage 相关 WARN。"

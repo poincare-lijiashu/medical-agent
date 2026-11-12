@@ -25,6 +25,8 @@ GENERIC = {
     "agent_skill_metrics": "id",
     "agent_skill_advices": "id",
     "agent_sleep_reports": "reportId",
+    # §289：AI 日调用量台账
+    "agent_usage_daily": "id",
 }
 
 

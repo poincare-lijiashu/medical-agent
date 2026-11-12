@@ -285,7 +285,9 @@ python scripts/license/gen_keypair.py --out-dir secrets/license
 - 私钥（PKCS#8 Base64）只配在**厂商签发构建**的 `LICENSE_SIGNING_KEY`，绝不能进院；
 - 公钥（SPKI Base64）配到每个实例的 `LICENSE_VERIFY_KEY`，用于离线验签；
 - `keyId`（公钥 SHA-256 前 16 位）写进交付单，便于核对"这份授权是谁签的"；
-- 院内生产必须 `LICENSE_ISSUANCE_ENABLED=false`，否则等于把"给自己发证"交给院方。
+- 交付形态（§289）：`LICENSE_DEPLOYMENT_MODE=vendor|hospital`，**默认 hospital**；
+  院方构建若把 `LICENSE_ISSUANCE_ENABLED` 打开，服务**拒绝启动**（不是静默降级）；
+  厂商构建必须显式 `LICENSE_DEPLOYMENT_MODE=vendor` 才能签发。
 
 ### 11.2 签发与交付前复核（厂商侧）
 
@@ -330,3 +332,58 @@ python scripts/license/verify_license.py artifacts/license/LIC-2026-0001.json \
 - 指标：`medassist_license_phase / days_left / module_entitled / quota_utilization / quota_exceeded`；
 - 抓取：Prometheus `medassist-license` job（8095 `/actuator/prometheus`）；
 - 配额超限只告警不阻断（临床连续性优先），由运营扩容或修正用量上报。
+
+## 12. AI 用量自动上报与配额对账（§289）
+
+### 12.1 链路
+
+```
+AI 中台（8001） --POST /internal/license/usage/ai--> 授权服务（8095）
+                  X-Internal-Token: <INTERNAL_API_TOKEN>
+```
+
+- 直连 8095，**不经网关**（网关对 `/internal/**` 返回 404，这是有意的边界）；
+- AI 中台配置 `PLATFORM_LICENSE_BASE_URL=http://127.0.0.1:8095` + `INTERNAL_API_TOKEN=<同值>`；
+  任一为空即关闭上报（离线/单机形态），问答不受影响；
+- 每 `AI_USAGE_FLUSH_SECONDS`（默认 60 秒）落盘并推送；计数无变化时不写授权库，
+  另有 15 分钟心跳刷新 `captured_at`（让"用量陈旧"告警有判断依据）；
+- 授权服务只接受**当日/前一日**（UTC），同一天重复上报幂等（最后值生效）。
+
+### 12.2 计费口径（写进合同的唯一口径）
+
+- 一次**成功**统一问答（同步或流式）= 1 次 AI 调用；
+- 前置闲聊（prefilter）不调用模型、不计费；失败/中止不计费；
+- 同一天重启或多 worker：AI 中台按 `日期#进程实例` 分行记账，合计=所有行之和，
+  **不丢也不重**（`agent_usage_daily`，PG 真源 + JSON 镜像）；
+- 床位/账号**不由 AI 中台上报**：AI 上报只更新 `ai_calls`，避免把院方台账的床位/账号覆盖成 0。
+
+### 12.3 核对方法
+
+```bash
+# AI 中台视角（需要 METRICS_TOKEN 或 admin 登录态）
+curl -H "Authorization: Bearer <METRICS_TOKEN>" http://127.0.0.1:8001/metrics \
+  | findstr medassist_agent_ai_calls_today
+# 授权服务视角
+curl -H "X-Permissions: license:read" http://127.0.0.1:8095/license/status
+```
+
+- `usage.aiCalls` 应等于 AI 中台当日计数；`usage.source` 首次写入为 `AI_CORE`；
+- 指标：`medassist_license_usage_ai_calls`、`medassist_license_usage_age_seconds`、
+  `medassist_license_usage_ingest_total{result}`；
+- 告警：`MedassistLicenseUsageStale`（>26 小时未更新）、
+  `MedassistLicenseUsageIngestRejected`（令牌/日期/口径非法）。
+
+### 12.4 常见问题
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 授权页 AI 用量一直为 0 | 地址或内部令牌未配 | 看 AI 中台启动日志：`ai_usage_disabled` / `ai_usage_started` |
+| 日志出现 `ai_usage.report_failed` | 8095 不可达或被网关挡 | 确认直连 8095；不要走 8080 |
+| 上报返回 `54411` | 日期早于前一日、计数为负或明显超限 | 校准容器时钟/NTP；历史补数走人工 `POST /license/usage` |
+| 授权侧计数小于 AI 中台指标 | 多 worker 计数分散且未按行求和 | 台账按进程行求和；建议固定单 worker，以授权侧日快照为准 |
+| 审计出现 `USAGE_AI_DECREASE` | 重启丢增量或上报口径变化 | 立即排查；该条审计不可改写，用于商务对账 |
+
+### 12.5 授权超限时的行为
+
+超过 `maxAiCallsPerDay` **只告警不阻断**（与床位/账号一致，临床连续性优先）。
+首次跨越上限会写一条 `USAGE_AI_QUOTA_EXCEEDED` 审计；运营据此扩容或与院方结算。

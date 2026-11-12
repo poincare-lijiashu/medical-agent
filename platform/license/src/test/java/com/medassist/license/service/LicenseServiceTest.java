@@ -8,6 +8,7 @@ import com.medassist.license.domain.LicenseModel.License;
 import com.medassist.license.domain.LicenseModel.ModuleEntitlement;
 import com.medassist.license.domain.LicenseModel.Phase;
 import com.medassist.license.domain.LicenseModel.Quota;
+import com.medassist.license.domain.LicenseModel.Usage;
 import com.medassist.license.repo.LicenseRepository;
 import com.medassist.license.web.LicenseDtos.IssueReq;
 import com.medassist.license.web.LicenseDtos.Issued;
@@ -68,7 +69,7 @@ class LicenseServiceTest {
         when(repo.listAudit(anyInt())).thenReturn(List.of());
 
         LicenseProperties props = new LicenseProperties(
-                "MEDASSIST-TEST-0001", null, null, keyDir.toString(), true, 30, false);
+                "MEDASSIST-TEST-0001", null, null, keyDir.toString(), "vendor", true, 30, false);
         service = new LicenseService(repo, props, new ObjectMapper(), Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
@@ -216,7 +217,7 @@ class LicenseServiceTest {
     @Test
     void issuance_can_be_disabled_for_hospital_builds() {
         LicenseProperties props = new LicenseProperties(
-                "MEDASSIST-TEST-0001", null, null, keyDir.toString(), false, 30, false);
+                "MEDASSIST-TEST-0001", null, null, keyDir.toString(), "hospital", false, 30, false);
         LicenseService hospitalSide = new LicenseService(repo, props, new ObjectMapper(),
                 Clock.fixed(NOW, ZoneOffset.UTC));
 
@@ -247,6 +248,86 @@ class LicenseServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.LICENSE_DUPLICATE);
+    }
+
+    /* ------------------------------------------------------------------ §289 AI 用量上报 */
+
+    @Test
+    void ai_usage_first_report_is_audited_and_does_not_touch_beds() {
+        Usage usage = service.ingestAiUsage(
+                new com.medassist.license.web.LicenseDtos.AiUsageReq(
+                        "2026-11-12", 42, "AI_CORE", "w-abc", 1));
+
+        assertThat(usage.aiCalls()).isEqualTo(42);
+        assertThat(usage.activeBeds()).isZero();
+        assertThat(usage.activeUsers()).isZero();
+        Mockito.verify(repo).upsertAiCalls("MEDASSIST-TEST-0001",
+                java.time.LocalDate.parse("2026-11-12"), 42, "AI_CORE");
+        Mockito.verify(repo).audit(org.mockito.ArgumentMatchers.eq("ai-core"),
+                org.mockito.ArgumentMatchers.eq("USAGE_AI_FIRST"),
+                org.mockito.ArgumentMatchers.eq("MEDASSIST-TEST-0001"),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void ai_usage_decrease_is_accepted_but_audited() {
+        when(repo.findUsage(anyString(), any())).thenReturn(Optional.of(
+                new com.medassist.license.domain.LicenseModel.Usage(
+                        java.time.LocalDate.parse("2026-11-12"), 500, 90, 120, "MANUAL", NOW)));
+
+        Usage usage = service.ingestAiUsage(new com.medassist.license.web.LicenseDtos.AiUsageReq(
+                "2026-11-12", 100, null, null, null));
+
+        assertThat(usage.aiCalls()).isEqualTo(100);
+        assertThat(usage.activeBeds()).isEqualTo(500);
+        assertThat(usage.activeUsers()).isEqualTo(90);
+        Mockito.verify(repo).audit(org.mockito.ArgumentMatchers.eq("ai-core"),
+                org.mockito.ArgumentMatchers.eq("USAGE_AI_DECREASE"),
+                anyString(), anyString(), org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void ai_usage_reports_the_first_crossing_of_the_license_quota() {
+        when(repo.findUsage(anyString(), any())).thenReturn(Optional.of(
+                new com.medassist.license.domain.LicenseModel.Usage(
+                        java.time.LocalDate.parse("2026-11-12"), 0, 0, 19990, "AI_CORE", NOW)));
+        when(repo.findActive("MEDASSIST-TEST-0001")).thenReturn(Optional.of(sample()));
+
+        service.ingestAiUsage(new com.medassist.license.web.LicenseDtos.AiUsageReq(
+                "2026-11-12", 20010, null, null, null));
+
+        Mockito.verify(repo).audit(org.mockito.ArgumentMatchers.eq("ai-core"),
+                org.mockito.ArgumentMatchers.eq("USAGE_AI_QUOTA_EXCEEDED"),
+                anyString(), anyString(), org.mockito.ArgumentMatchers.isNull());
+    }
+
+    @Test
+    void status_warns_when_usage_snapshot_is_stale() {
+        when(repo.findActive("MEDASSIST-TEST-0001")).thenReturn(Optional.of(sample()));
+        when(repo.latestUsage("MEDASSIST-TEST-0001")).thenReturn(Optional.of(
+                new com.medassist.license.domain.LicenseModel.Usage(
+                        java.time.LocalDate.parse("2026-11-10"), 100, 50, 3, "AI_CORE", NOW)));
+
+        assertThat(service.status().warnings())
+                .anyMatch(w -> w.contains("用量快照停留在 2026-11-10"));
+    }
+
+    @Test
+    void ai_usage_rejects_backfill_and_negative_counts() {
+        assertThatThrownBy(() -> service.ingestAiUsage(
+                new com.medassist.license.web.LicenseDtos.AiUsageReq(
+                        "2026-11-09", 1, null, null, null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.LICENSE_USAGE_INVALID);
+
+        assertThatThrownBy(() -> service.ingestAiUsage(
+                new com.medassist.license.web.LicenseDtos.AiUsageReq(
+                        "2026-11-12", -1, null, null, null)))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.LICENSE_USAGE_INVALID);
     }
 
     /* ------------------------------------------------------------------ fixtures */

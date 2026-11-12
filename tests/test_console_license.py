@@ -78,11 +78,41 @@ def test_import_verifies_signature_before_storing():
 
 
 def test_issuance_is_opt_in_for_vendor_builds():
-    assert "issuance-enabled: ${LICENSE_ISSUANCE_ENABLED:true}" in _read(APP_YML)
+    # §289：默认院方形态（fail-closed）——忘记配置的院内部署不能给自己发证
+    assert "deployment-mode: ${LICENSE_DEPLOYMENT_MODE:hospital}" in _read(APP_YML)
+    assert "issuance-enabled: ${LICENSE_ISSUANCE_ENABLED:false}" in _read(APP_YML)
     assert "enforce: ${LICENSE_ENFORCE:false}" in _read(APP_YML), "门禁默认必须是观察模式"
+    dev = _read(LICENSE_DIR / "resources/application-dev.yml")
+    assert "deployment-mode: vendor" in dev, "开发演示必须显式选择厂商构建"
     src = _read(SERVICE)
     assert "props.issuanceEnabled()" in src
     assert "LICENSE_ISSUANCE_DISABLED" in src
+
+
+def test_hospital_build_with_issuance_enabled_refuses_to_start():
+    """§289：院方构建 + 开启签发 = 误配，必须在启动期失败而不是静默降级。"""
+    guard = _read(LICENSE_DIR / "java/com/medassist/license/config/LicenseDeploymentGuard.java")
+    assert "LICENSE_DEPLOYMENT_MODE 只能是 vendor 或 hospital" in guard
+    assert "禁止开启签发能力" in guard
+    assert "throw new IllegalStateException" in guard
+
+
+def test_ai_usage_ingest_is_internal_token_guarded_and_only_updates_calls():
+    """§289：AI 中台日报走内部端点；只写 ai_calls，不能覆盖床位/账号。"""
+    internal = _read(LICENSE_DIR / "java/com/medassist/license/web/InternalLicenseController.java")
+    assert '"/usage/ai"' in internal
+    assert "X-Internal-Token" in internal
+    assert "ingestAiUsage" in internal
+
+    repo = _read(LICENSE_DIR / "java/com/medassist/license/repo/LicenseRepository.java")
+    upsert = repo.split("public void upsertAiCalls", 1)[1].split("/* ---", 1)[0]
+    assert "SET ai_calls = EXCLUDED.ai_calls" in upsert
+    assert "active_beds = EXCLUDED.active_beds" not in upsert, "AI 上报不能整行覆盖床位"
+    assert "active_users = EXCLUDED.active_users" not in upsert, "AI 上报不能整行覆盖账号"
+
+    service = _read(SERVICE)
+    assert "只接受当日或前一日" in service
+    assert "USAGE_AI_FIRST" in service and "USAGE_AI_DECREASE" in service
 
 
 def test_permissions_are_admin_only_for_manage():

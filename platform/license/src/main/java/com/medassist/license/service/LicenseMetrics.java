@@ -35,6 +35,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *   <li>{@code medassist_license_module_entitled{instance,module}} 模块是否已授权；</li>
  *   <li>{@code medassist_license_quota_utilization{instance,quota}} 配额使用率；</li>
  *   <li>{@code medassist_license_quota_exceeded{instance,quota}} 是否超限；</li>
+ *   <li>{@code medassist_license_usage_ai_calls{instance}} 最新用量快照的 AI 日调用；</li>
+ *   <li>{@code medassist_license_usage_age_seconds{instance}} 用量快照距今天数（秒，无快照 -1）；</li>
+ *   <li>{@code medassist_license_usage_ingest_total{result}} AI 用量上报结果；</li>
  *   <li>{@code medassist_license_refresh_timestamp_seconds} / {@code ..._errors_total}。</li>
  * </ul>
  */
@@ -44,12 +47,15 @@ public class LicenseMetrics {
     private static final Logger log = LoggerFactory.getLogger(LicenseMetrics.class);
 
     private final LicenseService service;
+    private final MeterRegistry registry;
 
     private final MultiGauge phase;
     private final MultiGauge daysLeft;
     private final MultiGauge modules;
     private final MultiGauge quotaUtilization;
     private final MultiGauge quotaExceeded;
+    private final MultiGauge usageAiCalls;
+    private final MultiGauge usageAge;
     private final Gauge refreshTimestamp;
     private final Counter refreshErrors;
 
@@ -58,6 +64,7 @@ public class LicenseMetrics {
 
     public LicenseMetrics(LicenseService service, MeterRegistry registry) {
         this.service = service;
+        this.registry = registry;
         this.phase = MultiGauge.builder("medassist.license.phase")
                 .description("授权阶段（ACTIVE/PENDING/GRACE/EXPIRED/REVOKED/NONE，每个实例一条为 1）")
                 .register(registry);
@@ -72,6 +79,12 @@ public class LicenseMetrics {
                 .register(registry);
         this.quotaExceeded = MultiGauge.builder("medassist.license.quota.exceeded")
                 .description("配额是否超限（1/0）")
+                .register(registry);
+        this.usageAiCalls = MultiGauge.builder("medassist.license.usage.ai.calls")
+                .description("最新用量快照中的 AI 日调用数（§289 自动上报）")
+                .register(registry);
+        this.usageAge = MultiGauge.builder("medassist.license.usage.age.seconds")
+                .description("用量快照距当前时间的秒数；无快照为 -1")
                 .register(registry);
         this.refreshTimestamp = Gauge.builder("medassist.license.refresh.timestamp.seconds",
                         lastRefresh, AtomicLong::get)
@@ -129,5 +142,29 @@ public class LicenseMetrics {
         }
         quotaUtilization.register(utilization, true);
         quotaExceeded.register(exceeded, true);
+
+        // §289：用量新鲜度是"自动上报是否真的在工作"的唯一外部证据。
+        // 没有快照时给 -1（而不是 0），告警规则才能用 > 阈值 判断"陈旧"而不误伤"尚未启用"。
+        com.medassist.license.domain.LicenseModel.Usage usage = status.usage();
+        int calls = usage == null ? 0 : usage.aiCalls();
+        double age = usage == null || usage.capturedAt() == null
+                ? -1.0
+                : Math.max(0, Instant.now().getEpochSecond() - usage.capturedAt().getEpochSecond());
+        usageAiCalls.register(List.of(MultiGauge.Row.of(Tags.of("instance", instance), calls)), true);
+        usageAge.register(List.of(MultiGauge.Row.of(Tags.of("instance", instance), age)), true);
+    }
+
+    /**
+     * 记录一次 AI 用量上报结果（§289）：ok / rejected（日期或计数不合法）/ error。
+     *
+     * <p>计数只按结果打标签、不带上报方 IP/workerId：那会把指标基数交给外部输入。
+     */
+    public void recordIngest(String result) {
+        String tag = (result == null || result.isBlank()) ? "error" : result.trim();
+        Counter.builder("medassist.license.usage.ingest")
+                .description("AI 用量上报次数（按结果）")
+                .tag("result", tag)
+                .register(registry)
+                .increment();
     }
 }

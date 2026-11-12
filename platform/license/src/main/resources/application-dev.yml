@@ -6,7 +6,8 @@
 
 medassist:
   license:
-    # 开发环境允许签发样本授权书，方便演示"导入 → 验签 → 生效"全链路
+    # 开发环境按厂商构建运行，允许签发样本授权书，方便演示"导入 → 验签 → 生效"全链路
+    deployment-mode: vendor
     issuance-enabled: true
 
 logging:

@@ -150,6 +150,36 @@ public class LicenseRepository {
                 """, USAGE, instanceCode).stream().findFirst();
     }
 
+    public Optional<Usage> findUsage(String instanceCode, LocalDate date) {
+        return jdbc.query("""
+                SELECT usage_date, active_beds, active_users, ai_calls, source, captured_at
+                  FROM license_svc.lic_usage
+                 WHERE instance_code = ? AND usage_date = ?
+                """, USAGE, instanceCode, date).stream().findFirst();
+    }
+
+    /**
+     * AI 中台上报的日调用量（§289）：<b>只更新 ai_calls</b>。
+     *
+     * <p>为什么不复用 {@link #upsertUsage}：用量快照一行混着三类事实（床位/账号/AI 调用），
+     * 它们来自不同系统、更新节奏也不同。AI 中台每次上报若整行覆盖，会把人工/网关上报的
+     * 床位、账号数写成 0——配额页会显示"零床位在用"，比没有数据更误导。
+     *
+     * <p>`source` 只在**首次插入**时写入：已有行保留原始来源（MANUAL/GATEWAY），
+     * 审计里能查到是哪个系统在写 AI 计数。
+     */
+    public void upsertAiCalls(String instanceCode, LocalDate date, int aiCalls, String source) {
+        jdbc.update("""
+                INSERT INTO license_svc.lic_usage
+                    (instance_code, usage_date, active_beds, active_users, ai_calls, source, captured_at)
+                VALUES (?, ?, 0, 0, ?, ?, now())
+                ON CONFLICT (instance_code, usage_date) DO UPDATE
+                   SET ai_calls = EXCLUDED.ai_calls,
+                       captured_at = now()
+                """, instanceCode, date, aiCalls, source);
+    }
+
+
     /* ------------------------------------------------------------------ 审计 */
 
     public void audit(String actor, String action, String target, String detailJson, String traceId) {

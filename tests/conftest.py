@@ -37,6 +37,8 @@ _PG_ORIGINALS = {
     "cas_update_skill_item": _pg_store.cas_update_skill_item,
     "insert_json_item": _pg_store.insert_json_item,
     "cas_update_json_item": _pg_store.cas_update_json_item,
+    # §289：AI 用量台账走行级 upsert；测试进程同样锁到 JSON，避免污染 medagent_test
+    "upsert_json_item": _pg_store.upsert_json_item,
 }
 
 
@@ -121,8 +123,8 @@ def _isolate_agent_stores(tmp_path, monkeypatch):
     ``medagent_test`` 里残留的行，导致"单跑通过、全量跑冲突"。这里把域存储锁定到
     tmp_path 的 JSON 文件，杜绝跨测试污染。
     """
-    from backend.agents import (bot_memory, bot_teams, bots, skill_advice, skill_library,
-                                skill_trends, skills, sleep_memory)
+    from backend.agents import (ai_usage, bot_memory, bot_teams, bots, skill_advice,
+                                skill_library, skill_trends, skills, sleep_memory)
     from backend.core import pg_store
 
     monkeypatch.setattr(skills, "SKILLS_FILE", str(tmp_path / "agent_skills.json"))
@@ -137,6 +139,8 @@ def _isolate_agent_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_trends, "SNAPSHOT_FILE",
                         str(tmp_path / "skill_metrics_snapshots.json"))
     monkeypatch.setattr(skill_advice, "ADVICE_FILE", str(tmp_path / "skill_advices.json"))
+    # §289：AI 日调用量台账同样禁止写真实 data/
+    monkeypatch.setattr(ai_usage, "LEDGER_FILE", str(tmp_path / "ai_usage_daily.json"))
 
     def _json_only(json_loader, default):
         return json_loader() if json_loader else default
@@ -161,6 +165,9 @@ def _isolate_agent_stores(tmp_path, monkeypatch):
     monkeypatch.setattr(pg_store, "cas_update_json_item",
                         lambda table, path, item, expected: pg_store._json_cas_item(
                             path, pg_store._JSON_LIST_KEYS[table], item, expected))
+    monkeypatch.setattr(pg_store, "upsert_json_item",
+                        lambda table, path, item, ignore_existing=False: pg_store._json_upsert_item(
+                            path, pg_store._JSON_LIST_KEYS[table], item, ignore_existing))
     yield
 
 

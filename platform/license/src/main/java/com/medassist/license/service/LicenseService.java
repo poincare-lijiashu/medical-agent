@@ -92,7 +92,7 @@ public class LicenseService {
         }
         return new StatusView(props.instanceCode(), state.phase().name(), state, active,
                 usage.orElse(null), entitlements, quotas, warnings, editions,
-                props.issuanceEnabled(), props.enforce(), verifyKeyId);
+                props.issuanceEnabled(), props.enforce(), verifyKeyId, props.deploymentMode());
     }
 
     public List<ModuleEntitlement> entitlements() {
@@ -325,6 +325,69 @@ public class LicenseService {
         return usage;
     }
 
+    /**
+     * AI 中台日调用量上报（§289）：只写 ai_calls，不动床位/账号。
+     *
+     * <p>三条纪律：
+     * <ol>
+     *   <li><b>只收当日/前一日</b>：AI 中台按 UTC 日切上报；允许前一日是给午夜最后一次
+     *       落盘留窗口。更早的日期一律拒绝——历史补数必须走人工 {@code /license/usage}，
+     *       否则一次时钟错误就能把整月配额改掉；</li>
+     *   <li><b>下降必须留痕</b>：AI 中台的计数在一天内应单调不减，出现下降说明重启丢增量
+     *       或上报口径变了；接受上报（不能让临床等待对账），但写审计供商务核查；</li>
+     *   <li><b>首次上报与首次超限留痕</b>：审计是追加式的，别的表都不可改。</li>
+     * </ol>
+     */
+    public Usage ingestAiUsage(com.medassist.license.web.LicenseDtos.AiUsageReq req) {
+        int calls = nonNegative(req.aiCalls(), "aiCalls");
+        if (calls > 50_000_000) {
+            throw new BusinessException(ErrorCode.LICENSE_USAGE_INVALID,
+                    "aiCalls 明显超出单实例日调用规模（>5000 万），请核对上报口径");
+        }
+        LocalDate today = LocalDate.now(clock.withZone(ZoneOffset.UTC));
+        LocalDate date;
+        try {
+            date = req.date() == null || req.date().isBlank() ? today : LocalDate.parse(req.date());
+        } catch (RuntimeException e) {
+            throw new BusinessException(ErrorCode.LICENSE_USAGE_INVALID, "usage_date 需为 yyyy-MM-dd");
+        }
+        if (date.isAfter(today) || date.isBefore(today.minusDays(1))) {
+            throw new BusinessException(ErrorCode.LICENSE_USAGE_INVALID,
+                    "只接受当日或前一日（UTC）的 AI 调用量上报：" + date);
+        }
+
+        String source = req.source() == null || req.source().isBlank()
+                ? "AI_CORE" : req.source().trim().toUpperCase(Locale.ROOT);
+        Optional<Usage> previous = repo.findUsage(props.instanceCode(), date);
+        int before = previous.map(Usage::aiCalls).orElse(0);
+
+        repo.upsertAiCalls(props.instanceCode(), date, calls, source);
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("date", date.toString());
+        detail.put("before", before);
+        detail.put("after", calls);
+        detail.put("source", source);
+        if (req.workerId() != null && !req.workerId().isBlank()) {
+            detail.put("workerId", req.workerId().trim());
+        }
+        if (previous.isEmpty()) {
+            repo.audit("ai-core", "USAGE_AI_FIRST", props.instanceCode(), detail(detail), null);
+        } else if (calls < before) {
+            repo.audit("ai-core", "USAGE_AI_DECREASE", props.instanceCode(), detail(detail), null);
+        }
+        Integer limit = repo.findActive(props.instanceCode())
+                .map(License::maxAiCallsPerDay).orElse(null);
+        if (limit != null && before <= limit && calls > limit) {
+            detail.put("limit", limit);
+            repo.audit("ai-core", "USAGE_AI_QUOTA_EXCEEDED", props.instanceCode(), detail(detail), null);
+        }
+        return new Usage(date, previous.map(Usage::activeBeds).orElse(0),
+                previous.map(Usage::activeUsers).orElse(0), calls,
+                // 已有行保留原来源（MANUAL/GATEWAY），返回体必须与库内一致
+                previous.map(Usage::source).orElse(source), clock.instant());
+    }
+
     /* ------------------------------------------------------------------ 判定 */
 
     /** 阶段判定：ACTIVE 覆盖 not_before/expires_at，REVOKED 优先。 */
@@ -400,6 +463,14 @@ public class LicenseService {
         }
         if (usage == null && license != null) {
             out.add("尚无用量快照：配额使用率按 0 展示，建议配置每日用量上报");
+        }
+        if (usage != null && usage.activeBeds() == 0 && usage.activeUsers() == 0) {
+            // 只统计到 AI 调用、床位/账号还没有来源时，不要让 0 被读成"零床位在用"
+            out.add("床位/账号用量尚未上报（当前仅有 AI 调用计数），配额口径请以院方台账为准");
+        }
+        LocalDate today = LocalDate.now(clock.withZone(ZoneOffset.UTC));
+        if (usage != null && usage.date() != null && usage.date().isBefore(today)) {
+            out.add("用量快照停留在 " + usage.date() + "，今日尚无上报：确认 AI 中台是否在运行且配置了上报");
         }
         quotas.stream().filter(Quota::exceeded)
                 .forEach(q -> out.add("配额超限：" + q.name() + " 已用 " + q.used() + " / 上限 " + q.limit()));

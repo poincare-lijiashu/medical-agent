@@ -3,9 +3,14 @@ package com.medassist.license.web;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
+import com.medassist.license.domain.LicenseModel.Usage;
+import com.medassist.license.service.LicenseMetrics;
 import com.medassist.license.service.LicenseService;
+import com.medassist.license.web.LicenseDtos.AiUsageReq;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -15,12 +20,13 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 
 /**
- * 授权摘要内部接口（§284 开通编排专用）。
+ * 授权摘要与用量上报的内部接口（§284 开通编排 / §289 AI 用量对账）。
  *
  * <p>为什么单独开在 {@code /internal/**}：
  * <ul>
  *   <li>网关默认拒绝 {@code /internal/**}（既不下发也不转发），院方与外部无法访问；</li>
  *   <li>控制面（auth）在开通时只读一次"该实例有没有可用授权"，不需要转发授权书；</li>
+ *   <li>AI 中台把当日成功问答次数推给授权服务，供配额对照与告警——同样不能走公网网关；</li>
  *   <li>即使 internal-auth 滤镜在本地被关闭，这里仍显式校验共享内部令牌——fail-closed。</li>
  * </ul>
  */
@@ -29,12 +35,15 @@ import java.security.MessageDigest;
 public class InternalLicenseController {
 
     private final LicenseService service;
+    private final LicenseMetrics metrics;
     private final String internalToken;
 
     public InternalLicenseController(
             LicenseService service,
+            LicenseMetrics metrics,
             @Value("${INTERNAL_API_TOKEN:}") String internalToken) {
         this.service = service;
+        this.metrics = metrics;
         this.internalToken = internalToken;
     }
 
@@ -44,6 +53,30 @@ public class InternalLicenseController {
             @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
         requireInternalToken(provided);
         return ApiResponse.ok(service.summaryOf(instanceCode));
+    }
+
+    /**
+     * AI 中台日调用量上报（§289）。
+     *
+     * <p>幂等：同一天重复上报以最后一次为准（AI 中台每 60 秒上报一次累计值）。
+     * 拒绝历史回填（只收当日/前一日），避免一次时钟错误改掉整月配额。
+     */
+    @PostMapping("/usage/ai")
+    public ApiResponse<Usage> ingestAiUsage(
+            @RequestBody AiUsageReq req,
+            @RequestHeader(value = "X-Internal-Token", required = false) String provided) {
+        requireInternalToken(provided);
+        try {
+            Usage usage = service.ingestAiUsage(req);
+            metrics.recordIngest("ok");
+            return ApiResponse.ok(usage);
+        } catch (BusinessException e) {
+            metrics.recordIngest("rejected");
+            throw e;
+        } catch (RuntimeException e) {
+            metrics.recordIngest("error");
+            throw e;
+        }
     }
 
     private void requireInternalToken(String provided) {

@@ -37,6 +37,12 @@ ISSUE = SCRIPTS / "issue_license.py"
 LICENSE_VIEW = REPO / "frontend-console/src/views/LicenseView.vue"
 RUNBOOK = REPO / "docs/PROVISIONING-RUNBOOK.md"
 
+# §289：AI 用量上报与院方构建守卫
+AI_USAGE = REPO / "backend/agents/ai_usage.py"
+INTERNAL_CONTROLLER = LICENSE_MAIN / "java/com/medassist/license/web/InternalLicenseController.java"
+DEPLOY_GUARD = LICENSE_MAIN / "java/com/medassist/license/config/LicenseDeploymentGuard.java"
+CONSOLE_API = REPO / "frontend-console/src/api/license.ts"
+
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -144,3 +150,47 @@ def test_runbook_documents_license_lifecycle():
     doc = _read(RUNBOOK)
     for text in ("授权书", "签发", "导入", "宽限", "verify_license"):
         assert text in doc, f"运维手册缺少：{text}"
+
+
+# ---------------------------------------------------------------- §289 AI 用量对账
+
+
+def test_ai_usage_reporting_is_wired_end_to_end():
+    """§289：AI 中台 → 内部端点 → 授权台账 → 指标/告警，链路缺一不可。"""
+    py = _read(AI_USAGE)
+    assert "platform_license_base_url" in py
+    assert "/internal/license/usage/ai" in py
+    assert "X-Internal-Token" in py
+    assert "agent_usage_daily" in py, "日台账必须落 PG 真源（重启不丢、多 worker 可求和）"
+    assert "prefilter" in py, "前置闲聊不消耗模型，不能计费"
+
+    internal = _read(INTERNAL_CONTROLLER)
+    assert '"/usage/ai"' in internal and "X-Internal-Token" in internal
+
+    metrics = _read(LICENSE_METRICS)
+    for name in ("medassist.license.usage.ai.calls", "medassist.license.usage.age.seconds",
+                 "medassist.license.usage.ingest"):
+        assert name in metrics, f"缺少用量指标 {name}"
+
+    rules = _read(RULES)
+    for alert in ("MedassistLicenseUsageStale", "MedassistLicenseUsageIngestRejected"):
+        assert f"alert: {alert}" in rules, f"缺少告警 {alert}"
+    assert "medassist_license_usage_age_seconds > 93600" in rules
+
+    doc = _read(RUNBOOK)
+    for text in ("AI 用量自动上报与配额对账", "PLATFORM_LICENSE_BASE_URL",
+                 "USAGE_AI_DECREASE", "agent_usage_daily"):
+        assert text in doc, f"运维手册缺少 §289 内容：{text}"
+
+
+def test_hospital_deployment_mode_is_fail_closed():
+    """§289：默认院方形态；院方构建打开签发会在启动期被拒绝（不是静默降级）。"""
+    yml = _read(LICENSE_MAIN / "resources/application.yml")
+    assert "deployment-mode: ${LICENSE_DEPLOYMENT_MODE:hospital}" in yml
+    assert "issuance-enabled: ${LICENSE_ISSUANCE_ENABLED:false}" in yml
+    guard = _read(DEPLOY_GUARD)
+    assert "vendor" in guard and "hospital" in guard
+    assert "throw new IllegalStateException" in guard
+    # 状态视图要能把交付形态透出给控制台（运营可见"院方/厂商"）
+    assert "deploymentMode" in _read(SUMMARY_DTO)
+    assert "deploymentMode" in _read(CONSOLE_API)

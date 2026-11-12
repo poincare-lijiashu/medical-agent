@@ -13148,9 +13148,81 @@ Java：license 16 passed（LicenseService +2、LicenseMetrics 3）
 - 模块门禁的**强制执行**仍由网关按 `LICENSE_ENFORCE` 控制（默认观察模式），
   本批只保证"授权事实与开通/告警联动"；
 - 配额中的"存储"不随授权约束（合同维度为模块/床位/账号/AI 调用）；
-- 用量快照仍需人工或外部任务上报（`/license/usage`），尚未与 AI 中台调用计数自动对账；
-- 院方侧签发必须关闭（`LICENSE_ISSUANCE_ENABLED=false`），本批未做构建期强制校验。
+- 用量快照仍需人工或外部任务上报（`/license/usage`），尚未与 AI 中台调用计数自动对账
+  （§289 已补齐 AI 调用自动上报）；
+- 院方侧签发必须关闭（`LICENSE_ISSUANCE_ENABLED=false`），本批未做构建期强制校验
+  （§289 已加 `LICENSE_DEPLOYMENT_MODE` 启动守卫）。
 
 **下一批建议（§289）**
 
 AI 日调用量自动上报并与配额对账；模块门禁在网关的灰度强制；单院恢复演练纳入发布门禁。
+
+---
+
+## 289. 2026-11-12 AI 日调用量自动上报与配额对账（第 289 批 / 计划书 W9.2）
+
+**为什么"授权里写了 AI 上限"仍然不可对账**
+
+§288 把版本/床位/账号/AI 调用写进授权并联动开通，但用量快照只能人工 `POST /license/usage`。
+合同签了 6000 次/日、实际用了多少没人知道，`MedassistLicenseQuotaExceeded` 永远不会触发；
+院方构建与厂商构建也没有强制的形态区分——把 `LICENSE_ISSUANCE_ENABLED` 留在 true，
+等于把"给自己发证"交给院方。
+
+**本批做了什么**
+
+1. **AI 中台日台账（`backend/agents/ai_usage.py`）**
+   - 计费口径唯一：一次**成功**统一问答（同步/流式）= 1 次；前置闲聊（prefilter，不调模型）
+     与失败/中止不计；
+   - 按 `日期#进程实例` 成行落在 `agent_usage_daily`（PG 真源 + JSON 镜像）：
+     同一天重启或换 worker 只是多一行，**合计=所有行之和**，不丢也不重；
+   - 台账保留 30 天，幂等清理，不删授权侧历史。
+2. **自动上报（AI 中台 → 授权服务）**
+   - `POST {PLATFORM_LICENSE_BASE_URL}/internal/license/usage/ai`，带 `X-Internal-Token`，
+     直连 8095、不经网关；每 `AI_USAGE_FLUSH_SECONDS`（默认 60s）落盘+推送；
+   - 计数没变化不写授权库，另有 15 分钟心跳刷新 `captured_at`；
+   - 授权服务不可达不阻断问答：计数留在本地台账，下一轮重试；未配置即关闭（离线形态）。
+3. **授权侧对账（只写 ai_calls）**
+   - `upsertAiCalls` 只更新 `ai_calls`/`captured_at`，**不覆盖**床位/账号（它们来自院方台账）；
+   - 只接受当日/前一日（UTC），防止一次时钟错误改掉整月配额；
+   - 首次上报、计数下降（重启丢增量/口径变化）、首次跨越授权上限三类事件写**追加式审计**；
+   - 新指标：`medassist_license_usage_ai_calls`、`medassist_license_usage_age_seconds`、
+     `medassist_license_usage_ingest_total{result}`；新增告警 `MedassistLicenseUsageStale`
+     （>26h 未更新）与 `MedassistLicenseUsageIngestRejected`。
+4. **院方构建签发守卫（fail-closed）**
+   - 新增 `LICENSE_DEPLOYMENT_MODE=vendor|hospital`，**默认 hospital**；
+   - `hospital` 且 `LICENSE_ISSUANCE_ENABLED=true` → **拒绝启动**（不是静默降级）：
+     误配必须在发布窗口暴露，而不是在审计时暴露；
+   - `application-dev.yml` 显式按 vendor 运行，开发演示链路不受影响；
+   - `/license/status` 增加 `deploymentMode`，控制台展示"厂商构建（可签发）/院方构建（禁止签发）"。
+
+**验证**
+
+```
+Java：license 27 passed（LicenseService 18：+4 条上报语义、+1 条报表陈旧提示；
+      LicenseMetrics 5：+2 条用量指标；LicenseDeploymentGuard 4 条启动校验）；
+      auth 模块同批构建/测试通过
+Python：全量 2042 passed / 1 skipped（含新增 tests/test_ai_usage_ledger.py 9 条、consult 集成 1 条）
+前端：typecheck 通过；build 通过（入口 gzip 99.22 KB < 110 KB）
+真实栈（8095 MEDASSIST-DEV-0001，dev/vendor，启动日志 mode=vendor issuance=true）：
+  院方守卫        deployment-mode=hospital + issuance=true → 启动失败：
+                  「院方构建…禁止开启签发能力：请设置 LICENSE_ISSUANCE_ENABLED=false」
+  内部端点无令牌   POST /internal/license/usage/ai → 403
+  回填历史        date=2026-11-01 → 54411「只接受当日或前一日（UTC）」
+  正常上报        200；返回保留床位 820 / 账号 1260 / 原来源 gateway-daily，只改 aiCalls=11
+  配额联动        quotas.aiCalls used=11 / limit=6000，utilization=0.002
+  指标            usage_age_seconds=23；usage_ingest_total{result="ok"}=2、{result="rejected"}=1
+  AI 中台链路     ai_usage.report_once() → True（真实 HTTP，日志 ai_usage.reported ai_calls=9）
+```
+
+**已知边界（下一批处理）**
+
+- 计费单元目前是"成功统一问答"；影像/结构化/审方等非 `/agent/consult` 的模型调用暂不计入，
+  若合同按"模型调用次数"计费，需要把计量点下沉到 provider 调用层；
+- 授权侧指标按 5 分钟刷新，用量变化到指标可见有最多 5 分钟延迟（台账/状态接口是实时的）；
+- 模块门禁的**强制执行**仍由网关按 `LICENSE_ENFORCE` 控制（默认观察模式）。
+
+**下一批建议（§290）**
+
+网关侧模块门禁灰度强制（先按科室/白名单观察再收紧）；单院恢复演练纳入发布门禁；
+计费口径扩展到非问答模型调用（provider 层统一埋点）。
+
