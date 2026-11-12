@@ -13094,3 +13094,63 @@ Java：TenantHealthMetricsTest 2 passed（按院标签、失败可观测）
 **下一批建议（§288）**
 
 授权书签发/导入与开通联动；单院恢复演练纳入发布门禁；跨院汇总仓单独立项（ADR §10）。
+
+---
+
+## 288. 2026-11-12 授权签发/导入与开通联动（第 288 批 / 计划书 W9.2）
+
+**为什么"有授权页"不等于"授权生效"**
+
+§279 已有 Ed25519 签发、导入验签与授权页，但开通流程只问"有没有记录"：
+版本、床位、AI 调用量这些**商务上限**没有进入开通判断，也没有进入监控。
+结果是合同签了 500 床、系统照样能开 800 床；授权 30 天后到期，没人会知道。
+
+**本批做了什么**
+
+1. **授权摘要补齐商务事实**（`LicenseDtos.Summary`）：`phase`（时间事实）、模块清单、
+   `maxBeds / maxUsers / maxAiCallsPerDay`、宽限期与剩余天数；开通不再只看"present"。
+2. **开通联动（不许超卖 + 按授权规划）**：
+   - `requireLicense=true` 时，无授权 / 未生效 / 已过期 / 已吊销都在 `LICENSE` 步骤失败；
+   - 时间事实优先于库内状态：库里 ACTIVE 但已过期，同样按过期处理；
+   - 版本必须一致（授权 STANDARD 不能按 ENTERPRISE 开通）；
+   - 申请床位/账号/AI 调用超过授权上限 → 失败，错误给出"申请 vs 上限"；
+   - 未填配额时按授权上限补全租户配额，避免"先开小、后超限"；
+   - 配额写回租户台账走版本 CAS，并发修改明确失败。
+3. **授权指标与告警**（`LicenseMetrics` + `medassist-license.rules.yml`）：
+   阶段、剩余天数、模块权益、配额使用率/超限，按 `instance` 打标签；
+   规则覆盖过期（critical）、宽限、30 天内到期、未导入、配额超限。
+4. **工具链**：
+   - `scripts/license/gen_keypair.py`：生成 Ed25519 密钥对（PKCS#8/SPKI Base64 + keyId）；
+   - `scripts/license/issue_license.py`：调用厂商签发接口生成授权文件；
+   - `scripts/license/verify_license.py`：**离线**验签 + payload 与签名原文逐字段比对。
+5. **修复一个真实换签缺陷**：`ux_lic_active_instance` 是"每实例仅一条 ACTIVE"的部分唯一索引，
+   旧实现"先插入新授权、再置旧授权 SUPERSEDED"，换签必然撞索引并被误报为"授权编号重复"。
+   现改为**先让位再插入**并加事务：插入失败会回滚，不会出现"旧的失效、新的没进来"。
+
+**验证**
+
+```
+Java：license 16 passed（LicenseService +2、LicenseMetrics 3）
+      auth 14 passed（ProvisioningService 新增 4 条授权联动用例）
+契约：tests/test_license_lifecycle_contract.py 7 passed
+真实栈（8095 / MEDASSIST-DEV-0001）：
+  签发            issue_license.py 生成 LIC-QA-20261112（600 床 / 900 账号 / 6000 AI）
+  离线复核        verify_license.py PASS（签名、payload 一致、ACTIVE）
+  换签导入        200 ACTIVE；旧授权自动转 SUPERSEDED（修复后第一次成功）
+  摘要            phase=ACTIVE · beds=600 · users=900 · ai=6000 · daysLeft=413
+  实例绑定        别的实例授权导入被拒：54403「授权实例为 …，当前部署实例为 …」
+  指标抓取        medassist-license target up；medassist_license_module_entitled{clinical}=1
+  告警规则        5 条全部加载（inactive，符合当前 ACTIVE 状态）
+```
+
+**已知边界（下一批处理）**
+
+- 模块门禁的**强制执行**仍由网关按 `LICENSE_ENFORCE` 控制（默认观察模式），
+  本批只保证"授权事实与开通/告警联动"；
+- 配额中的"存储"不随授权约束（合同维度为模块/床位/账号/AI 调用）；
+- 用量快照仍需人工或外部任务上报（`/license/usage`），尚未与 AI 中台调用计数自动对账；
+- 院方侧签发必须关闭（`LICENSE_ISSUANCE_ENABLED=false`），本批未做构建期强制校验。
+
+**下一批建议（§289）**
+
+AI 日调用量自动上报并与配额对账；模块门禁在网关的灰度强制；单院恢复演练纳入发布门禁。

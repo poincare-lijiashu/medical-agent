@@ -67,12 +67,18 @@ public final class LicenseDtos {
     }
 
     /**
-     * 实例授权摘要（§284 开通编排用）。
+     * 实例授权摘要（§284 开通编排 / §288 权益联动用）。
      *
-     * <p>只暴露"是否已授权 + 状态/版本/到期时间/模块数"，不返回授权书正文与签名：
-     * 控制面只需要判断"能不能开通"，不需要拿到可转发的授权材料。
+     * <p>只暴露"能不能用 + 可用到什么规模"，不返回授权书正文与签名：
+     * 控制面不需要拿到可转发的授权材料。
      *
-     * @param present 该实例是否存在任何授权记录（含已吊销）
+     * @param present      该实例是否存在授权记录（含已吊销）
+     * @param phase        时间事实：ACTIVE / PENDING / GRACE / EXPIRED / REVOKED / NONE
+     * @param modules      已授权模块编码（用于开通时核对版本能力）
+     * @param maxBeds      床位上限；null 表示不限
+     * @param maxUsers     账号上限；null 表示不限
+     * @param maxAiCallsPerDay AI 日调用上限；null 表示不限
+     * @param daysLeft     距离到期（或宽限结束）的天数；无授权为 null
      */
     public record Summary(
             boolean present,
@@ -80,7 +86,13 @@ public final class LicenseDtos {
             String status,
             String editionCode,
             java.time.Instant expiresAt,
-            int modules) {
+            java.util.List<String> modules,
+            String phase,
+            Integer maxBeds,
+            Integer maxUsers,
+            Integer maxAiCallsPerDay,
+            int graceDays,
+            Long daysLeft) {
     }
 
     public record AuditList(List<ChangeLog> items, int total) {

@@ -273,3 +273,60 @@ amtool config routes test --config.file=/etc/alertmanager/alertmanager.yml \
 - Grafana：`MedAssist · 租户 SLO`（`deploy/observability/grafana/dashboards/medassist-tenant-slo.json`）；
 - 顶部 `tenant` 变量支持多选/全选；面板含状态、需关注数、备份未就绪数、刷新年龄、
   各院结论、探测耗时、活跃账号、WAL 归档年龄。
+
+## 11. 授权签发、导入与到期（§288）
+
+### 11.1 密钥纪律
+
+```bash
+python scripts/license/gen_keypair.py --out-dir secrets/license
+```
+
+- 私钥（PKCS#8 Base64）只配在**厂商签发构建**的 `LICENSE_SIGNING_KEY`，绝不能进院；
+- 公钥（SPKI Base64）配到每个实例的 `LICENSE_VERIFY_KEY`，用于离线验签；
+- `keyId`（公钥 SHA-256 前 16 位）写进交付单，便于核对"这份授权是谁签的"；
+- 院内生产必须 `LICENSE_ISSUANCE_ENABLED=false`，否则等于把"给自己发证"交给院方。
+
+### 11.2 签发与交付前复核（厂商侧）
+
+```bash
+python scripts/license/issue_license.py \
+    --base-url http://127.0.0.1:8095 --permissions license:manage --actor vendor-ops \
+    --license-no LIC-2026-0001 --instance MEDASSIST-HOSP-C-0001 \
+    --hospital "某某市第三人民医院" --edition ENTERPRISE \
+    --modules clinical,pharmacy,emr,tech,ai \
+    --max-beds 800 --max-users 2500 --max-ai 20000 \
+    --expires-at 2027-11-11T00:00:00Z --out artifacts/license/LIC-2026-0001.json
+
+# 离线复核（不启动服务）：签名、payload 一致性、有效期
+python scripts/license/verify_license.py artifacts/license/LIC-2026-0001.json \
+    --public-key-file secrets/license/ed25519-public.b64 --require-active
+```
+
+### 11.3 院方导入（实例绑定）
+
+- 控制台「授权与许可 → 导入授权书」，或 `POST /api/v2/license/import`（`license:manage`）；
+- 导入即验签 + 逐字段比对签名原文 + 校验实例码；**实例不匹配直接拒绝**（一证一院）；
+- 新授权导入后旧授权自动转「已替代」，历史不删除；吊销必须填写原因。
+
+### 11.4 与开通联动
+
+- `requireLicense=true` 时：无授权、未生效、已过期、已吊销都会在 `LICENSE` 步骤失败；
+  `false` 时降级为 SKIPPED（离线交付先开通后补授权）；
+- 版本必须与授权一致：授权 `STANDARD` 而申请 `ENTERPRISE` → 失败；
+- 规模不许超卖：申请床位/账号/AI 调用超过授权上限 → 失败，错误文案给出"申请 vs 上限"；
+- 未填配额时按授权上限补全租户配额，避免"先开小、后超限"。
+
+### 11.5 到期与告警
+
+| 阶段 | 含义 | 处理 |
+| --- | --- | --- |
+| `PENDING` | 未到生效日 | 核对合同起租日 |
+| `ACTIVE` | 有效 | 剩余 ≤30 天触发 `MedassistLicenseExpiringSoon` |
+| `GRACE` | 已到期但仍在宽限期 | `MedassistLicenseGrace`，窗口内完成续期 |
+| `EXPIRED` | 超出宽限期 | `MedassistLicenseExpired`（critical），模块门禁按策略拦截 |
+| `NONE` / `REVOKED` | 未导入 / 已吊销 | `MedassistLicenseMissing`（24h）或立即排查 |
+
+- 指标：`medassist_license_phase / days_left / module_entitled / quota_utilization / quota_exceeded`；
+- 抓取：Prometheus `medassist-license` job（8095 `/actuator/prometheus`）；
+- 配额超限只告警不阻断（临床连续性优先），由运营扩容或修正用量上报。

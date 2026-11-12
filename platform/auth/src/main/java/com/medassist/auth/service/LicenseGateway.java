@@ -1,6 +1,7 @@
 package com.medassist.auth.service;
 
 import java.time.Instant;
+import java.util.List;
 
 /**
  * 授权检查端口（§284）。
@@ -24,7 +25,17 @@ public interface LicenseGateway {
         UNREACHABLE
     }
 
-    record Result(State state, String licenseNo, String status, String editionCode,
-                  Instant expiresAt, int modules, String error) {
+    /**
+     * 授权摘要（§288）。
+     *
+     * @param status      数据库状态：ACTIVE / REVOKED / SUPERSEDED（人工动作）
+     * @param licensePhase 时间事实：ACTIVE / PENDING / GRACE / EXPIRED / REVOKED / NONE
+     * @param modules     已授权模块编码（开通时用于核对版本能力）
+     * @param maxBeds / maxUsers / maxAiCallsPerDay 合同上限；null 表示不限
+     */
+    record Result(State state, String licenseNo, String status, String licensePhase,
+                  String editionCode, Instant expiresAt, List<String> modules,
+                  Integer maxBeds, Integer maxUsers, Integer maxAiCallsPerDay, int graceDays,
+                  String error) {
     }
 }

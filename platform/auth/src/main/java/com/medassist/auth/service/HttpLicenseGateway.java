@@ -13,6 +13,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -50,7 +51,7 @@ public class HttpLicenseGateway implements LicenseGateway {
     @Override
     public Result check(String instanceCode) {
         if (baseUrl.isEmpty()) {
-            return new Result(State.DISABLED, null, null, null, null, 0, null);
+            return empty(State.DISABLED);
         }
         String url = baseUrl.replaceAll("/+$", "")
                 + "/internal/license/summary?instanceCode="
@@ -71,16 +72,19 @@ public class HttpLicenseGateway implements LicenseGateway {
             Map<String, Object> body = read(response.body());
             Object data = body.get("data");
             if (!(data instanceof Map<?, ?> map)) {
-                return new Result(State.NOT_FOUND, null, null, null, null, 0, null);
+                return empty(State.NOT_FOUND);
             }
             boolean present = Boolean.TRUE.equals(map.get("present"));
             if (!present) {
-                return new Result(State.NOT_FOUND, null, null, null, null, 0, null);
+                return empty(State.NOT_FOUND);
             }
             return new Result(State.FOUND,
-                    str(map.get("licenseNo")), str(map.get("status")), str(map.get("editionCode")),
-                    instant(str(map.get("expiresAt"))),
-                    map.get("modules") instanceof Number n ? n.intValue() : 0,
+                    str(map.get("licenseNo")), str(map.get("status")), str(map.get("phase")),
+                    str(map.get("editionCode")), instant(str(map.get("expiresAt"))),
+                    strings(map.get("modules")),
+                    integer(map.get("maxBeds")), integer(map.get("maxUsers")),
+                    integer(map.get("maxAiCallsPerDay")),
+                    integer(map.get("graceDays")) == null ? 0 : integer(map.get("graceDays")),
                     null);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -91,8 +95,24 @@ public class HttpLicenseGateway implements LicenseGateway {
         }
     }
 
+    private static Result empty(State state) {
+        return new Result(state, null, null, null, null, null, List.of(), null, null, null, 0, null);
+    }
+
     private static Result unreachable(String reason) {
-        return new Result(State.UNREACHABLE, null, null, null, null, 0, reason);
+        return new Result(State.UNREACHABLE, null, null, null, null, null, List.of(),
+                null, null, null, 0, reason);
+    }
+
+    private static List<String> strings(Object value) {
+        if (!(value instanceof List<?> list)) {
+            return List.of();
+        }
+        return list.stream().filter(java.util.Objects::nonNull).map(String::valueOf).toList();
+    }
+
+    private static Integer integer(Object value) {
+        return value instanceof Number number ? number.intValue() : null;
     }
 
     @SuppressWarnings("unchecked")

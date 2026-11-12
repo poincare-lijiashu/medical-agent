@@ -137,7 +137,7 @@ class ProvisioningServiceTest {
     @DisplayName("要求授权但实例无授权：失败在 LICENSE，不激活")
     void licenseRequiredBlocksActivation() {
         license.result = new LicenseGateway.Result(LicenseGateway.State.NOT_FOUND,
-                null, null, null, null, 0, null);
+                null, null, null, null, null, List.of(), null, null, null, 0, null);
 
         ProvisioningDtos.ProvisionReq req = new ProvisioningDtos.ProvisionReq(
                 "tenant-003", "MEDASSIST-HOSP-C-0001", "演示三院", "ENTERPRISE",
@@ -229,6 +229,79 @@ class ProvisioningServiceTest {
         assertThat(tenants.byCode.get("tenant-003").status()).isEqualTo(Tenant.PENDING);
     }
 
+    @Test
+    @DisplayName("授权生效：未填配额时按授权上限规划 Cell（§288）")
+    void licenseEntitlementsFillQuotas() {
+        license.result = new LicenseGateway.Result(LicenseGateway.State.FOUND,
+                "LIC-2026-001", "ACTIVE", "ACTIVE", "ENTERPRISE",
+                Instant.now().plusSeconds(86_400 * 300), List.of("clinical", "pharmacy"),
+                600, 900, 6000, 30, null);
+
+        ProvisioningDtos.JobView view = service.start(reqNoQuotas("tenant-003"), "ops01");
+
+        assertThat(view.status()).isEqualTo(Provisioning.SUCCEEDED);
+        Tenant saved = tenants.byCode.get("tenant-003");
+        assertThat(saved.quotas().maxBeds()).isEqualTo(600);
+        assertThat(saved.quotas().maxUsers()).isEqualTo(900);
+        assertThat(saved.quotas().maxAiCallsPerDay()).isEqualTo(6000);
+        assertThat(view.steps()).filteredOn(s -> "LICENSE".equals(s.code()))
+                .extracting(ProvisioningDtos.StepView::status)
+                .containsExactly(Provisioning.STEP_SUCCEEDED);
+    }
+
+    @Test
+    @DisplayName("申请规模超过授权上限：失败在 LICENSE，不激活（不许超卖）")
+    void licenseQuotaExceededBlocks() {
+        license.result = new LicenseGateway.Result(LicenseGateway.State.FOUND,
+                "LIC-2026-001", "ACTIVE", "ACTIVE", "ENTERPRISE",
+                Instant.now().plusSeconds(86_400 * 300), List.of("clinical"),
+                400, 900, 6000, 30, null);
+
+        ProvisioningDtos.JobView view = service.start(req("tenant-003"), "ops01");
+
+        assertThat(view.status()).isEqualTo(Provisioning.FAILED);
+        assertThat(view.steps()).filteredOn(s -> "LICENSE".equals(s.code()))
+                .singleElement()
+                .satisfies(step -> {
+                    assertThat(step.status()).isEqualTo(Provisioning.STEP_FAILED);
+                    assertThat(step.error()).contains("超过授权上限");
+                });
+        assertThat(tenants.byCode.get("tenant-003").status()).isEqualTo(Tenant.PENDING);
+    }
+
+    @Test
+    @DisplayName("申请版本与授权版本不一致：失败在 LICENSE")
+    void licenseEditionMismatchBlocks() {
+        license.result = new LicenseGateway.Result(LicenseGateway.State.FOUND,
+                "LIC-2026-001", "ACTIVE", "ACTIVE", "STANDARD",
+                Instant.now().plusSeconds(86_400 * 300), List.of("clinical"),
+                500, 900, 6000, 30, null);
+
+        ProvisioningDtos.JobView view = service.start(req("tenant-003"), "ops01");
+
+        assertThat(view.status()).isEqualTo(Provisioning.FAILED);
+        assertThat(view.steps()).filteredOn(s -> "LICENSE".equals(s.code()))
+                .extracting(ProvisioningDtos.StepView::error)
+                .allMatch(error -> error.contains("授权版本"));
+    }
+
+    @Test
+    @DisplayName("授权已过期（库内 ACTIVE）：步骤 SKIPPED，不套用配额")
+    void expiredLicenseIsSkippedAndNotApplied() {
+        license.result = new LicenseGateway.Result(LicenseGateway.State.FOUND,
+                "LIC-2026-001", "ACTIVE", "EXPIRED", "ENTERPRISE",
+                Instant.now().minusSeconds(86_400), List.of("clinical"),
+                500, 900, 6000, 30, null);
+
+        ProvisioningDtos.JobView view = service.start(reqNoQuotas("tenant-003"), "ops01");
+
+        assertThat(view.status()).isEqualTo(Provisioning.SUCCEEDED);
+        assertThat(view.steps()).filteredOn(s -> "LICENSE".equals(s.code()))
+                .extracting(ProvisioningDtos.StepView::status)
+                .containsExactly(Provisioning.STEP_SKIPPED);
+        assertThat(tenants.byCode.get("tenant-003").quotas().maxBeds()).isNull();
+    }
+
     // ---------------------------------------------------------------- 夹具
 
     private static ProvisioningDtos.ProvisionReq req(String tenantCode) {
@@ -237,6 +310,16 @@ class ProvisioningServiceTest {
                 "127.0.0.1:5435", "medagent", "http://127.0.0.1:8184", "local",
                 new TenantQuotas(500, 800, 200, 5000),
                 "王主任", "13700000000", "ADR-001 P3 开通演练",
+                new ProvisioningDtos.InitialAdmin("admin01", "三院管理员", "E0001"),
+                null, false);
+    }
+
+    /** 不带配额：用于验证"按授权上限补全"的分支。 */
+    private static ProvisioningDtos.ProvisionReq reqNoQuotas(String tenantCode) {
+        return new ProvisioningDtos.ProvisionReq(
+                tenantCode, "MEDASSIST-HOSP-C-0001", "演示三院", "ENTERPRISE",
+                "127.0.0.1:5435", "medagent", "http://127.0.0.1:8184", "local",
+                null, "王主任", "13700000000", null,
                 new ProvisioningDtos.InitialAdmin("admin01", "三院管理员", "E0001"),
                 null, false);
     }
@@ -457,7 +540,8 @@ class ProvisioningServiceTest {
     }
 
     private static class FakeLicense implements LicenseGateway {
-        private Result result = new Result(State.DISABLED, null, null, null, null, 0, null);
+        private Result result = new Result(State.DISABLED, null, null, null, null, null,
+                List.of(), null, null, null, 0, null);
 
         @Override
         public Result check(String instanceCode) {

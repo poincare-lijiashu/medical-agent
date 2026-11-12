@@ -1,0 +1,59 @@
+# ============================================================================
+# 授权到期与配额告警（第 288 批）
+#
+# 数据来源：license 服务 /actuator/prometheus（medassist_license_*，按 instance 标签）。
+# 为什么必须有：授权到期后模块门禁会拦截业务，不能等临床发现"系统不能用了"才处理。
+# ============================================================================
+groups:
+  - name: medassist-license
+    rules:
+      - alert: MedassistLicenseExpired
+        expr: medassist_license_phase{phase="EXPIRED"} == 1
+        for: 5m
+        labels:
+          severity: critical
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 的授权已过期且超出宽限期"
+          description: "模块门禁将拦截业务访问。立即导入续期授权书；未续期前按合同进入停服流程。"
+          runbook: "docs/PROVISIONING-RUNBOOK.md#11-授权签发导入与到期288"
+
+      - alert: MedassistLicenseGrace
+        expr: medassist_license_phase{phase="GRACE"} == 1
+        for: 1h
+        labels:
+          severity: warning
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 的授权已到期，处于宽限期"
+          description: "宽限期内只告警不阻断，结束前必须完成续期：剩余 {{ $value }} 天（见 medassist_license_days_left）。"
+
+      - alert: MedassistLicenseExpiringSoon
+        expr: medassist_license_days_left >= 0 and medassist_license_days_left < 30
+        for: 6h
+        labels:
+          severity: warning
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 的授权将在 30 天内到期"
+          description: "剩余 {{ $value }} 天，请启动续签流程（合同、用印、签发至少预留两周）。"
+
+      - alert: MedassistLicenseMissing
+        expr: medassist_license_phase{phase="NONE"} == 1
+        for: 24h
+        labels:
+          severity: warning
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 尚未导入授权书"
+          description: "观察模式下不拦截业务，但商业交付必须完成授权导入与验收。"
+
+      - alert: MedassistLicenseQuotaExceeded
+        expr: medassist_license_quota_exceeded == 1
+        for: 2h
+        labels:
+          severity: warning
+          component: license
+        annotations:
+          summary: "实例 {{ $labels.instance }} 配额超限：{{ $labels.quota }}"
+          description: "配额对照按每日用量快照计算；持续超限需要扩容或修正上报口径。临床连续性优先，不自动阻断。"

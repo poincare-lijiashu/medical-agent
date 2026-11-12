@@ -16,6 +16,7 @@ import com.medassist.license.web.LicenseDtos.UsageReq;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.InOrder;
 import org.mockito.Mockito;
 import tools.jackson.databind.ObjectMapper;
 
@@ -223,6 +224,29 @@ class LicenseServiceTest {
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.LICENSE_ISSUANCE_DISABLED);
+    }
+
+    @Test
+    void import_supersedes_active_before_inserting_new_license() {
+        Issued issued = service.issue(req("LIC-2026-0010", "2027-11-11T00:00:00Z"), "vendor", "t");
+
+        service.importLicense(issued.document(), "admin01", "t");
+
+        // 部分唯一索引 ux_lic_active_instance 只允许一条 ACTIVE：必须先让位再插入
+        InOrder order = Mockito.inOrder(repo);
+        order.verify(repo).supersedeActive(anyString(), any());
+        order.verify(repo).insert(any());
+    }
+
+    @Test
+    void import_failure_throws_so_transaction_rolls_back() {
+        Issued issued = service.issue(req("LIC-2026-0011", "2027-11-11T00:00:00Z"), "vendor", "t");
+        when(repo.insert(any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.importLicense(issued.document(), "admin01", "t"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.LICENSE_DUPLICATE);
     }
 
     /* ------------------------------------------------------------------ fixtures */

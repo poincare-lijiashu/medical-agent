@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 授权与许可服务（§279 / 计划书 W9.2）。
@@ -25,6 +26,7 @@ import org.springframework.context.annotation.Bean;
  */
 @SpringBootApplication
 @EnableConfigurationProperties(LicenseProperties.class)
+@EnableScheduling
 public class LicenseApplication {
 
     public static void main(String[] args) {

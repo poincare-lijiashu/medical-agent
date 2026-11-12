@@ -401,6 +401,12 @@ public class ProvisioningService {
         if (check.status() != null) {
             detail.put("status", check.status());
         }
+        if (check.licensePhase() != null) {
+            detail.put("phase", check.licensePhase());
+        }
+        if (check.editionCode() != null) {
+            detail.put("editionCode", check.editionCode());
+        }
         if (check.expiresAt() != null) {
             detail.put("expiresAt", check.expiresAt().toString());
         }
@@ -423,19 +429,96 @@ public class ProvisioningService {
                 yield Outcome.skip(detail, "授权服务不可达（requireLicense=false，不阻塞开通）");
             }
             case FOUND -> {
-                boolean active = "ACTIVE".equalsIgnoreCase(check.status());
+                // 时间事实优先于库内状态：ACTIVE 也可能已经过期
+                String phase = check.licensePhase() == null ? check.status() : check.licensePhase();
+                boolean usable = "ACTIVE".equalsIgnoreCase(phase);
                 boolean expired = check.expiresAt() != null
                         && check.expiresAt().isBefore(Instant.now());
-                if (active && !expired) {
-                    yield Outcome.ok(detail);
+                if (!usable || expired) {
+                    String reason = expired ? "授权已过期" : "授权状态为 " + phase;
+                    if (spec.requireLicense()) {
+                        throw new StepFailure(reason + "，不能开通", detail);
+                    }
+                    yield Outcome.skip(detail, reason + "（requireLicense=false，不阻塞开通）");
                 }
-                String reason = expired ? "授权已过期" : "授权状态为 " + check.status();
-                if (spec.requireLicense()) {
-                    throw new StepFailure(reason + "，不能开通", detail);
-                }
-                yield Outcome.skip(detail, reason + "（requireLicense=false，不阻塞开通）");
+                yield applyEntitlements(spec, check, detail);
             }
         };
+    }
+
+    /**
+     * 把授权书的商务上限落到 Cell 规划配额（§288）。
+     *
+     * <p>两个方向都要处理，缺一不可：
+     * <ul>
+     *   <li><b>不许超卖</b>：申请 800 床但授权只有 500 床，必须失败并说明差在哪；</li>
+     *   <li><b>补全默认值</b>：开通参数没填床位数时，按授权上限规划 Cell，避免"开着开着超限"。</li>
+     * </ul>
+     *
+     * <p>版本必须与授权一致：授权书绑定版本（模块集合随版本），请求里换版本等于绕过商务条款。
+     */
+    private Outcome applyEntitlements(Spec spec, LicenseGateway.Result check,
+                                      Map<String, Object> detail) {
+        if (check.editionCode() != null && !check.editionCode().isBlank()
+                && !check.editionCode().equalsIgnoreCase(spec.editionCode())) {
+            throw new StepFailure("授权版本为 " + check.editionCode()
+                    + "，与申请版本 " + spec.editionCode() + " 不一致：请按授权版本开通或重新签发",
+                    detail);
+        }
+        requireWithinCap(spec.quotas().maxBeds(), check.maxBeds(), "床位", detail);
+        requireWithinCap(spec.quotas().maxUsers(), check.maxUsers(), "账号", detail);
+        requireWithinCap(spec.quotas().maxAiCallsPerDay(), check.maxAiCallsPerDay(), "AI 日调用", detail);
+
+        Integer beds = firstNonNull(spec.quotas().maxBeds(), check.maxBeds());
+        Integer users = firstNonNull(spec.quotas().maxUsers(), check.maxUsers());
+        Integer aiCalls = firstNonNull(spec.quotas().maxAiCallsPerDay(), check.maxAiCallsPerDay());
+        requirePositive(beds, "床位", detail);
+        requirePositive(users, "账号", detail);
+        requirePositive(aiCalls, "AI 日调用", detail);
+
+        TenantQuotas effective = new TenantQuotas(beds, users,
+                spec.quotas().maxStorageGb(), aiCalls);
+        detail.put("appliedQuotas", Map.of(
+                "maxBeds", beds == null ? "" : beds,
+                "maxUsers", users == null ? "" : users,
+                "maxAiCallsPerDay", aiCalls == null ? "" : aiCalls));
+        syncTenantQuotas(spec, effective, detail);
+        return Outcome.ok(detail);
+    }
+
+    private static void requireWithinCap(Integer requested, Integer cap, String label,
+                                         Map<String, Object> detail) {
+        if (requested != null && cap != null && requested > cap) {
+            throw new StepFailure("申请" + label + "数 " + requested + " 超过授权上限 " + cap,
+                    detail);
+        }
+    }
+
+    private static void requirePositive(Integer value, String label, Map<String, Object> detail) {
+        if (value != null && value <= 0) {
+            throw new StepFailure("授权" + label + "上限为 " + value + "，不能按该规模开通", detail);
+        }
+    }
+
+    private static Integer firstNonNull(Integer preferred, Integer fallback) {
+        return preferred != null ? preferred : fallback;
+    }
+
+    /** 把生效配额写回租户目录；并发修改时明确失败，不做静默覆盖。 */
+    private void syncTenantQuotas(Spec spec, TenantQuotas effective, Map<String, Object> detail) {
+        Tenant current = tenants.findByCode(spec.tenantCode()).orElse(null);
+        if (current == null || effective.equals(current.quotas())) {
+            return;
+        }
+        Tenant updated = new Tenant(current.code(), current.instanceCode(), current.name(),
+                current.editionCode(), current.status(), current.cellEndpoint(), current.dbHost(),
+                current.dbName(), current.region(), effective, current.contactName(),
+                current.contactPhone(), current.notes(), current.closedAt(), current.closedReason(),
+                current.retentionUntil(), current.version(), current.createdBy(),
+                current.createdAt(), current.updatedAt());
+        if (!tenants.update(updated, current.version())) {
+            throw new StepFailure("租户配额被其他管理员并发修改，请刷新后 resume", detail);
+        }
     }
 
     private Outcome activate(Spec spec, String actor) {

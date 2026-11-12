@@ -128,14 +128,24 @@ public class LicenseService {
     public com.medassist.license.web.LicenseDtos.Summary summaryOf(String instanceCode) {
         String instance = instanceCode == null ? "" : instanceCode.trim();
         if (instance.isEmpty()) {
-            return new com.medassist.license.web.LicenseDtos.Summary(false, null, null, null, null, 0);
+            return emptySummary();
         }
-        return repo.findLatest(instance)
-                .map(l -> new com.medassist.license.web.LicenseDtos.Summary(true, l.licenseNo(),
-                        l.status(), l.editionCode(), l.expiresAt(),
-                        l.modules() == null ? 0 : l.modules().size()))
-                .orElseGet(() -> new com.medassist.license.web.LicenseDtos.Summary(
-                        false, null, null, null, null, 0));
+        Optional<License> found = repo.findLatest(instance);
+        if (found.isEmpty()) {
+            return emptySummary();
+        }
+        License license = found.get();
+        State state = stateOf(license, clock.instant());
+        return new com.medassist.license.web.LicenseDtos.Summary(true, license.licenseNo(),
+                license.status(), license.editionCode(), license.expiresAt(),
+                license.modules(), state.phase().name(),
+                license.maxBeds(), license.maxUsers(), license.maxAiCallsPerDay(),
+                license.graceDays(), state.daysLeft());
+    }
+
+    private static com.medassist.license.web.LicenseDtos.Summary emptySummary() {
+        return new com.medassist.license.web.LicenseDtos.Summary(false, null, null, null, null,
+                List.of(), "NONE", null, null, null, 0, null);
     }
 
     public List<Edition> editions() {
@@ -190,6 +200,17 @@ public class LicenseService {
 
     /* ------------------------------------------------------------------ 导入 / 吊销 */
 
+    /**
+     * 导入授权书。
+     *
+     * <p>顺序很重要：库里对"同一实例只能有一条 ACTIVE"有部分唯一索引
+     * （{@code ux_lic_active_instance}）。因此必须**先把旧 ACTIVE 置为 SUPERSEDED，
+     * 再插入新授权**；反过来会直接撞唯一索引，把"换签"误报成"授权编号重复"。
+     *
+     * <p>整个过程在事务里：插入失败会抛业务异常并回滚，旧授权恢复 ACTIVE，
+     * 不会出现"旧的失效、新的没进来"的空窗。
+     */
+    @org.springframework.transaction.annotation.Transactional
     public License importLicense(String document, String actor, String traceId) {
         requireActor(actor);
         if (document == null || document.isBlank()) {
@@ -248,10 +269,12 @@ public class LicenseService {
                 canonical, LicenseCrypto.sha256Hex(LicensePayloads.bytes(canonical)),
                 signature, keyId.isEmpty() ? LicenseCrypto.keyId(pub) : keyId, actor, clock.instant(),
                 candidate.issuedAt(), null, null, null);
+        // 先让位再插入：部分唯一索引只允许一条 ACTIVE，顺序反了必然撞索引
+        int superseded = repo.supersedeActive(stored.instanceCode(), id);
         if (!repo.insert(stored)) {
+            // 抛出去让事务回滚：旧授权的 SUPERSEDED 一并撤销，避免"旧的失效、新的没进来"
             throw new BusinessException(ErrorCode.LICENSE_DUPLICATE);
         }
-        int superseded = repo.supersedeActive(stored.instanceCode(), id);
         repo.audit(actor, "LICENSE_IMPORT", stored.licenseNo(),
                 detail(Map.of("instanceCode", stored.instanceCode(), "edition", stored.editionCode(),
                         "expiresAt", stored.expiresAt().toString(), "superseded", superseded,

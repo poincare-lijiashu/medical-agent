@@ -61,3 +61,13 @@ scrape_configs:
       - targets: ["host.docker.internal:8081"]
         labels:
           component: auth
+
+  # 第 288 批：授权阶段/剩余天数/配额/模块权益（medassist_license_*）。
+  # 每 5 分钟刷新一次，抓取只读缓存值。
+  - job_name: medassist-license
+    metrics_path: /actuator/prometheus
+    scheme: http
+    static_configs:
+      - targets: ["host.docker.internal:8095"]
+        labels:
+          component: license
