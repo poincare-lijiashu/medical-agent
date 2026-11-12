@@ -1,0 +1,76 @@
+server:
+  # 网关会把完整权限点列表注入 X-Permissions，管理员令牌可超过 Tomcat 默认 8KB 头上限
+  max-http-request-header-size: 32KB
+  port: 8095
+  shutdown: graceful
+
+spring:
+  application:
+    name: platform-license
+
+  datasource:
+    # 授权服务只读写自己的 license_svc：授权书是"厂商对该院的承诺"，
+    # 与业务数据完全隔离，避免运维/业务账号能改授权。
+    url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
+    username: ${PG_USER:medagent}
+    password: ${PG_PASSWORD:medagent123}
+    hikari:
+      pool-name: license-pool
+      maximum-pool-size: 6
+      minimum-idle: 1
+      connection-timeout: 5000
+      max-lifetime: 1800000
+
+  flyway:
+    enabled: true
+    schemas: license_svc
+    default-schema: license_svc
+    locations: classpath:db/migration/license
+    baseline-on-migrate: ${FLYWAY_BASELINE_ON_MIGRATE:true}
+    validate-on-migrate: true
+    out-of-order: false
+
+  cloud:
+    nacos:
+      discovery:
+        enabled: ${NACOS_DISCOVERY_ENABLED:false}
+        server-addr: ${NACOS_SERVER_ADDR:127.0.0.1:8848}
+        username: ${NACOS_USERNAME:nacos}
+        password: ${NACOS_PASSWORD:nacos}
+        namespace: ${NACOS_NAMESPACE:public}
+
+medassist:
+  license:
+    # 部署实例码：授权书按实例绑定，换机/换院必须重新签发（防止一证多院）
+    instance-code: ${LICENSE_INSTANCE_CODE:MEDASSIST-DEV-0001}
+    # 厂商签名私钥（PKCS#8 Base64，Ed25519）。留空时在 data/license/ 下自动生成并落盘（仅开发）
+    signing-key: ${LICENSE_SIGNING_KEY:}
+    # 验签公钥（X.509/SPKI Base64，Ed25519）。留空时由私钥推导；生产必须显式配置
+    verify-key: ${LICENSE_VERIFY_KEY:}
+    # 私钥落盘目录（仅开发自动生成时使用；生产用 KMS/HSM 或环境变量注入）
+    key-dir: ${LICENSE_KEY_DIR:data/license}
+    # 是否允许本服务签发授权书（厂商侧能力）。生产环境默认关闭，只有厂商构建才开启
+    issuance-enabled: ${LICENSE_ISSUANCE_ENABLED:true}
+    # 到期宽限期（天）：宽限期内只告警不阻断，超过则视为 EXPIRED
+    grace-days: ${LICENSE_GRACE_DAYS:30}
+    # 模块门禁（网关侧执行）：关闭时只展示授权状态，不拦截业务请求
+    enforce: ${LICENSE_ENFORCE:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState,db
+
+logging:
+  level:
+    root: INFO
+    com.medassist: INFO

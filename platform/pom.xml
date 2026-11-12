@@ -65,6 +65,7 @@
     <module>migration</module>
     <module>ops</module>
     <module>release</module>
+    <module>license</module>
   </modules>
 
   <dependencyManagement>

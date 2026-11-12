@@ -299,6 +299,12 @@ const router = createRouter({
           name: 'ai-llm',
           component: () => import('@/views/AiLlmView.vue'),
         },
+        {
+          // 第 279 批：授权与许可（仅 license:read；管理动作需 license:manage）
+          path: 'license',
+          name: 'license',
+          component: () => import('@/views/LicenseView.vue'),
+        },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },

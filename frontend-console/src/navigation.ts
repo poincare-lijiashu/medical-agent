@@ -530,6 +530,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['auth:user:read', 'audit:log:read'],
   },
   {
+    // 第 279 批：授权与许可（版本矩阵 / 模块权益 / 配额 / 授权书验签与吊销）
+    name: 'license',
+    path: '/license',
+    title: '授权与许可',
+    hint: '版本与模块权益 · 配额使用 · 授权书导入验签 · 续期与吊销',
+    icon: 'key',
+    group: '系统管理',
+    permissions: ['license:read'],
+  },
+  {
     // 第 231 批：打印留痕（按单号核查补打次数与打印人；按院区收敛）
     name: 'print-history',
     path: '/print-events',

@@ -564,7 +564,19 @@ public enum ErrorCode {
     REL_WINDOW_INVALID(53421, "变更窗口不合法（结束时间必须晚于开始时间）"),
     REL_CI_SOURCE_NOT_FOUND(53422, "未找到该 CI 接入源，或该接入源已停用"),
     REL_CI_PAYLOAD_INVALID(53424, "CI 事件格式不合法（kind/component/version/result 有误）"),
-    REL_CI_TOKEN_INVALID(40131, "CI 接入令牌无效或已轮换，请更新流水线密钥");
+    REL_CI_TOKEN_INVALID(40131, "CI 接入令牌无效或已轮换，请更新流水线密钥"),
+
+    // ---- 授权与许可（54xxx，§279）----
+    LICENSE_NOT_FOUND(54401, "未找到该授权书"),
+    LICENSE_SIGNATURE_INVALID(54402, "授权书签名校验失败：内容可能被篡改或签发密钥不匹配"),
+    LICENSE_INSTANCE_MISMATCH(54403, "授权书与当前部署实例不匹配，请在目标院区重新签发"),
+    LICENSE_PAYLOAD_INVALID(54404, "授权书内容不合法（版本号/模块/期限/配额有误）"),
+    LICENSE_DUPLICATE(54409, "该授权编号已导入过，请核对后使用新编号签发"),
+    LICENSE_STATUS_INVALID(54405, "当前授权状态不允许该操作"),
+    LICENSE_ISSUANCE_DISABLED(54406, "本部署未开启签发能力，请由厂商签发后在目标院区导入"),
+    LICENSE_ACTOR_REQUIRED(54410, "授权变更必须带真实操作人，禁止匿名写入"),
+    LICENSE_KEY_UNAVAILABLE(54408, "授权验签密钥不可用，请检查 LICENSE_VERIFY_KEY 配置"),
+    LICENSE_USAGE_INVALID(54411, "用量快照不合法（日期/计数不能为负）");
 
     private final int code;
     private final String defaultMessage;

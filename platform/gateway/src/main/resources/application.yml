@@ -199,6 +199,16 @@ spring:
               metadata:
                 connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
                 response-timeout: ${GATEWAY_RELEASE_RESPONSE_TIMEOUT_MS:30000}
+            # 授权与许可（版本矩阵/授权书验签/模块权益/配额）：控制器自带 /license 前缀
+            - id: platform-license-v2
+              uri: ${PLATFORM_LICENSE_URI:http://127.0.0.1:8095}
+              predicates:
+                - Path=/api/v2/license/**
+              filters:
+                - StripPrefix=2
+              metadata:
+                connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+                response-timeout: ${GATEWAY_LICENSE_RESPONSE_TIMEOUT_MS:15000}
             # 审计汇聚（跨 auth/empi 的 change_log 统一查询）：由 auth 服务的 AuditController 提供，
             # 路径 /api/v2/audit/events → /events；权限点 audit:log:read 在 auth 内校验
             - id: platform-audit-v2
@@ -341,6 +351,10 @@ medassist:
           qps: ${SENTINEL_QPS_OPS:100}
         - path: /api/v2/release
           qps: ${SENTINEL_QPS_RELEASE:100}
+        # 授权查询会被前端各页轮询（状态/权益），单独限流避免与业务桶互相影响；
+        # 导入/签发是低频管理动作，同样落在这个桶里足够。
+        - path: /api/v2/license
+          qps: ${SENTINEL_QPS_LICENSE:60}
       # 熔断规则（慢调用比例）：慢下游不要靠排队硬扛，直接快速失败并给下游恢复窗口。
       # slow-rt-ms 必须明显小于网关 response-timeout（30s），否则永远等不到熔断就 504 了。
       degrade-rules:

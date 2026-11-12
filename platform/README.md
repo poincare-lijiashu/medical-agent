@@ -38,6 +38,7 @@
 | `platform-migration` | 8092 | 历史数据迁移：目标/字段字典、可复用映射档案、预检校验、分批应用、版本反向回滚、迁移对账 | 已交付（§270） |
 | `platform-ops` | 8093 | 运营支撑：服务目录、SLA 策略与营业日历、工单全生命周期、值班与事件复盘 | 已交付（§271/§272） |
 | `platform-release` | 8094 | 版本与补丁：组件版本、发布列车、兼容矩阵、补丁分级审批、冻结窗口、部署与回滚记录 | 已交付（§273） |
+| `platform-license` | 8095 | 授权与许可：版本矩阵、Ed25519 签名授权书、实例绑定、模块权益、配额用量、吊销与变更审计 | 已交付（§279） |
 
 ## 网关双轨路由（迁移第 1 步：接口兼容层）
 
@@ -54,6 +55,7 @@
 /api/v2/material/**     → http://127.0.0.1:8089   （StripPrefix=2，控制器自带 /material 前缀）
 /api/v2/fhir/**         → http://127.0.0.1:8090   （**不剥前缀**：Bundle 链接必须是对端可回查的路径）
 /api/v2/mdm/**          → http://127.0.0.1:8091   （StripPrefix=2，控制器自带 /mdm 前缀）
+/api/v2/license/**      → http://127.0.0.1:8095   （StripPrefix=2，控制器自带 /license 前缀，独立 60 QPS 桶）
 ```
 
 路由目标可用环境变量覆盖：`AI_CORE_URI` / `PLATFORM_AUTH_URI` / `PLATFORM_EMPI_URI` /
@@ -1087,3 +1089,70 @@ SkyWalking、AI 中台 Nacos 注册、Nacos 生产化。
 
 P1 已完成：权限点强制、刷新令牌与撤销、登录限速、入口限流、会话管理、审计跨域汇聚、
 Argo Rollouts 灰度（可选）、日志采集（Loki/Promtail）与告警规则、业务指标打点。
+
+## 授权与许可（§279 / 计划书 W9.2）
+
+商业交付绕不开一个问题：**这套系统卖给了谁、买了什么、用到什么时候**。
+以前它只存在于合同和 Excel 里，系统本身不知道，也就无法自证。本服务把它做成可验证的事实。
+
+### 授权书长什么样
+
+厂商签发物是一段 JSON（`schema = medassist-license/v1`）：
+
+```json
+{
+  "schema": "medassist-license/v1",
+  "keyId": "96af58a22cb3fe96",
+  "algorithm": "Ed25519",
+  "signature": "base64…",
+  "payloadCanonical": "{\"editionCode\":\"ENTERPRISE\",\"expiresAt\":\"2029-10-31T00:00:00Z\",…}",
+  "payload": { "licenseNo": "LIC-2026-ENTERPRISE-001", "instanceCode": "…", "modules": ["…"], … }
+}
+```
+
+- **签名落在 `payloadCanonical` 上**（固定键序、模块码排序、时间统一 ISO-8601 UTC）：
+  JSON 的键序/空白/数字格式都能被不同实现改写，只有逐字节稳定才能验签；
+- `payload` 是同一内容的可读视图；导入时会**重建规范化文本并与 `payloadCanonical` 比对**，
+  不一致即拒绝——防止"看到的内容"和"签过的内容"是两份东西；
+- 签名算法 Ed25519：院内只需公钥（`LICENSE_VERIFY_KEY`），私钥不进院。
+
+### 判定口径
+
+| 阶段 | 触发条件 | 业务含义 |
+| --- | --- | --- |
+| `NONE` | 没有 ACTIVE 且没有已吊销授权 | 未授权，门禁观察模式 |
+| `PENDING` | now < not_before | 已导入但未生效 |
+| `ACTIVE` | not_before ≤ now ≤ expires_at | 正常使用 |
+| `GRACE` | 过期但在宽限期内（默认 30 天） | 只告警，可继续用 |
+| `EXPIRED` | 过期且超出宽限期 | 门禁按策略拦截 |
+| `REVOKED` | 显式吊销（必须写原因） | 立即不可用，历史保留 |
+
+库里只存 `ACTIVE / SUPERSEDED / REVOKED`（人工动作）；`PENDING / GRACE / EXPIRED` 每次查询按时钟现算——
+落库就要定时扫全表，且停机后状态会停在旧值。
+
+### 配额与门禁
+
+- 配额三项：开放床位、活跃账号、AI 日调用；用量按日快照（`POST /license/usage`）；
+- **超限只告警不阻断**（临床连续性优先），由运营人工介入；
+- 模块门禁由网关执行，`LICENSE_ENFORCE` **默认 false（观察模式）**：先观察一个版本周期再收紧；
+- 权限：`license:read`（ADMIN/OPS_MANAGER/QC）与 `license:manage`（仅 ADMIN）——
+  运营可以看状态做续期提醒，但不能自己导入或吊销授权。
+
+### 接口
+
+| 方法 | 路径 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/license/status` | read | 授权总览（阶段/权益/配额/告警/版本矩阵） |
+| GET | `/license/entitlements` | read | 模块权益（供网关/前端判断模块是否可用） |
+| GET | `/license/licenses` `/license/audit` | read | 历史授权与变更审计 |
+| POST | `/license/import` | manage | 导入授权书（逐字节验签 + 实例校验） |
+| POST | `/license/{id}/revoke` | manage | 吊销（必填原因） |
+| POST | `/license/issue` | manage | 签发（仅 `LICENSE_ISSUANCE_ENABLED=true` 的厂商构建） |
+| POST | `/license/usage` | manage | 上报用量快照 |
+
+### 部署要点
+
+- 院内生产：`LICENSE_ISSUANCE_ENABLED=false`、`LICENSE_VERIFY_KEY=<厂商公钥>`、
+  `LICENSE_INSTANCE_CODE=<院区实例码>`；私钥不应出现在院内任何节点；
+- 开发/演示：未配置密钥时自动在 `data/license/` 生成密钥对（仅本地），
+  便于走通"签发 → 导入 → 生效 → 吊销"全链路。

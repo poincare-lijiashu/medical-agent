@@ -12487,3 +12487,61 @@ iframe 会递归加载控制台自身，URL 里的 token 也没有任何人消�
 - 滚动条仍是浏览器原生细条（`::-webkit-scrollbar` 全局样式），没有做主题化悬浮滚动条；
 - 打印走独立窗口（`utils/print.ts`），不受本次滚动模型变更影响；
 - 页面内嵌套表格滚动（如医嘱工作台 `max-height`）仍保留，滚到底会继续滚画布。
+
+## 279. 2026-11-12 授权与许可（第 279 批 / W9.2）
+
+**背景**
+
+前面 278 批把系统做成了能跑、能审计、能交付的形态，但"这套系统卖给了谁、买了什么、
+用到什么时候"一直只存在于合同和 Excel 里：系统自己不知道授权，也就无法自证。
+对商业交付来说这是硬缺口——续期靠人记、超卖靠人查、一张授权书可以被复制到任意院区。
+
+**本批做了什么（新增 `platform-license`，端口 8095）**
+
+1. **授权书 = 规范化文本 + Ed25519 签名**
+   - `LicensePayloads` 手写固定键序的规范化 JSON（模块码排序、时间统一 ISO-8601 UTC），
+     不依赖通用序列化器：键序/空白/数字格式的任何漂移都会让验签或哈希不可复现；
+   - `LicenseCrypto` 负责密钥装载（配置 > 落盘 > 开发自动生成）、签名、验签、keyId；
+   - 签发物同时含 `payloadCanonical`（签名对象）与 `payload`（可读视图），
+     导入时**重建规范化文本并与签名原文比对**，防止"看到的≠签过的"。
+2. **实例绑定**：授权书带 `instanceCode`，导入时与 `LICENSE_INSTANCE_CODE` 比对，
+   不一致直接 422（`LICENSE_INSTANCE_MISMATCH`）——一张授权书不能多院复用。
+3. **阶段判定现算**：库里只存 `ACTIVE/SUPERSEDED/REVOKED`（人工动作），
+   `PENDING/GRACE/EXPIRED` 每次按注入的 `Clock` 现算；已吊销实例仍展示"已吊销 + 原因"，
+   不退回"未授权"（后者会掩盖运维事实）。
+4. **配额与门禁**：床位/账号/AI 日调用三项配额 + 按日用量快照；
+   **超限只告警不阻断**（临床连续性优先）；网关模块门禁 `LICENSE_ENFORCE` 默认 false（观察模式）。
+5. **权限**（auth V93）：`license:read`（ADMIN/OPS_MANAGER/QC）、`license:manage`（仅 ADMIN）。
+   运营能看状态做续期提醒，但不能自己导入或吊销授权。
+6. **网关**：`/api/v2/license/**` → 8095（StripPrefix=2），独立 60 QPS 桶。
+7. **前端**：系统管理新增「授权与许可」——阶段横幅、4 KPI、14 个模块权益、
+   配额进度、授权历史（含吊销）、变更审计、导入弹窗、签发弹窗（仅厂商构建）。
+8. **契约锁**：`tests/test_console_license.py`（8 项）锁签名先于入库、实例绑定、
+   manage 仅 ADMIN、门禁默认观察、前后端接线与 i18n。
+
+**验证**
+
+```
+Java：mvn -pl license -am test → LicenseServiceTest 11 passed
+      mvn -pl license,auth,gateway -am -DskipTests package → 通过
+契约：tests/test_console_license.py → 8 passed
+前端：typecheck / build → 通过
+真实库 E2E（经网关 8080，admin01 / qc01）：
+  issue           200  keyId=96af58a22cb3fe96  payloadHash=d62556b9880e5280…
+  import(篡改)    422  54402「可读内容与签名原文不一致」
+  import          200  LIC-20261112-002 ACTIVE 14 模块 2027-11-11 到期
+  import(重复)    409  54409
+  status          200  ACTIVE / ENTERPRISE / 14 模块 / 剩余 363 天
+  usage(2100 床)  200  → 告警「配额超限：开放床位 已用 2100 / 上限 2000」，util=1.05
+  revoke          200  → status 200 phase=REVOKED，entitled=0
+  qc01 读         200  ；qc01 导入 403（权限切分生效）
+浏览器（127.0.0.1:5174/license）：生效中 · ENTERPRISE · 2029-10-31 到期（剩余 1083 天）·
+  14 模块全部已授权 · 配额 820/2000、1260/5000、3200/20000 · 3 条授权历史 · 零 console 错误
+```
+
+**遗留**
+
+- 模块门禁只在网关侧预留开关，尚未接入各路由的模块映射表（先观察一个版本周期再收紧）；
+- 用量快照靠上报（`POST /license/usage`），没有从各服务自动汇总；
+- 没有在线激活/心跳：授权完全离线自证（这是刻意选择，医院内网常无外网）；
+- 没有多租户（一实例一授权），集团多院区需要按实例分别签发。
