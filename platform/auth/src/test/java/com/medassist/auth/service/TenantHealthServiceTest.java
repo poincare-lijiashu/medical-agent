@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.domain.BackupPlan;
 import com.medassist.auth.domain.Provisioning;
 import com.medassist.auth.domain.Tenant;
 import com.medassist.auth.domain.TenantQuotas;
@@ -132,6 +133,22 @@ class TenantHealthServiceTest {
         assertThat(view.issues()).anyMatch(i -> i.contains("未登记"));
     }
 
+    @Test
+    @DisplayName("备份/PITR 未就绪：整体 DEGRADED，且问题项点名备份")
+    void backupDegradedIsSurfaced() {
+        cell.backup = new CellDatabaseGateway.BackupStatus(true, "DEGRADED",
+                "medassist-backup-tenant-001", "tenant-001", 7, "off", "replica", 0, null, 0,
+                null, List.of("archive_mode=off：未开启 WAL 归档，无法按时间点恢复（PITR）"));
+        when(tenants.findByCode("tenant-001")).thenReturn(
+                Optional.of(tenant("tenant-001", Tenant.ACTIVE, "127.0.0.1:5433")));
+
+        TenantHealthDtos.HealthView view = service.one("tenant-001");
+
+        assertThat(view.state()).isEqualTo("DEGRADED");
+        assertThat(view.backupState()).isEqualTo("DEGRADED");
+        assertThat(view.issues()).anyMatch(i -> i.contains("备份/PITR 未就绪"));
+    }
+
     private static Tenant tenant(String code, String status, String dbHost) {
         Instant now = Instant.now();
         return new Tenant(code, "MEDASSIST-" + code.toUpperCase(), "演示院", "ENTERPRISE", status,
@@ -141,6 +158,9 @@ class TenantHealthServiceTest {
 
     private static class FakeCell implements CellDatabaseGateway {
         private Probe probe = new Probe(true, true, 5, "98", null);
+        private BackupStatus backup = new BackupStatus(true, "READY",
+                "medassist-backup-tenant-001", "tenant-001", 7, "on", "replica", 3,
+                Instant.now(), 0, null, List.of());
         private int probeCalls;
 
         @Override
@@ -175,6 +195,16 @@ class TenantHealthServiceTest {
         @Override
         public void updateTenantStatus(String dbHost, String dbName, String tenantCode,
                                        String status, Instant closedAt, String closedReason) {
+        }
+
+        @Override
+        public BackupStatus initializeBackup(String dbHost, String dbName, BackupPlan plan) {
+            return backup;
+        }
+
+        @Override
+        public BackupStatus backupStatus(String dbHost, String dbName, String tenantCode) {
+            return backup;
         }
     }
 }

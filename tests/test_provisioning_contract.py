@@ -56,7 +56,7 @@ def test_provisioning_tables_and_constraints():
 
 def test_step_order_is_explicit_and_resumable():
     service = _read(PROVISION_SERVICE)
-    for step in ("SPEC", "TENANT", "CELL_CONNECT", "CELL_TENANT", "ADMIN",
+    for step in ("SPEC", "TENANT", "CELL_CONNECT", "CELL_TENANT", "ADMIN", "BACKUP",
                  "LICENSE", "ACTIVATE", "HEALTH"):
         assert f'"{step}"' in service, f"缺少步骤 {step}"
     # 失败不再往下跑；resume 复用同一 job 并置 RUNNING

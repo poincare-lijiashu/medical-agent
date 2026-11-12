@@ -120,9 +120,28 @@ export interface TenantHealth {
   activeUserCount: number
   lastProvisionStatus?: string | null
   lastProvisionAt?: string | null
+  /** §286 单院备份/PITR 状态。 */
+  backupState?: BackupState | null
+  backupBucket?: string | null
+  backupLastFullAt?: string | null
+  backupPitrDays?: number
+  backupArchivedCount?: number
+  backupLastArchivedAt?: string | null
   state: TenantHealthState
   issues: string[]
   checkedAt: string
+}
+
+/** 备份状态（§286）：NONE=未登记计划，UNKNOWN=读取失败。 */
+export type BackupState = 'READY' | 'PENDING' | 'DEGRADED' | 'FAILED' | 'NONE' | 'UNKNOWN'
+
+/** 单院备份规格（§286）：留空取平台默认，桶名按租户派生。 */
+export interface BackupInput {
+  endpoint?: string
+  bucket?: string
+  region?: string
+  pitrDays?: number
+  requireBackup?: boolean
 }
 
 export interface TenantHealthList {
@@ -172,6 +191,8 @@ export interface ProvisionInput {
   notes?: string
   initialAdmin: { username: string; displayName: string; employeeNo?: string }
   requireLicense?: boolean
+  /** §286：单院备份仓库；为空表示使用平台默认端点/桶名/保留天数。 */
+  backup?: BackupInput
 }
 
 export const tenantApi = {

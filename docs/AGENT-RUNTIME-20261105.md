@@ -12956,3 +12956,76 @@ scripts/e2e/password_lifecycle_suite.py → 17/17 PASS
 
 单院备份桶 + PITR 与恢复演练（§286）；租户健康度接入 Prometheus 告警路由（§287）；
 授权书签发/导入与开通联动。
+
+---
+
+## 286. 2026-11-12 单院备份桶、PITR 就绪与恢复演练（第 286 批 / ADR-001 P3 延伸）
+
+**为什么"有备份"必须由系统证明，而不是由交付文档承诺**
+
+ADR 要求"单院 PITR 只恢复该院"，但此前系统只有一份逻辑备份 CronJob 与模板：
+仓库是否真的建了、WAL 归档是否真的在跑、这份备份能不能恢复——全靠人记得。
+本批把这三件事变成开通编排、健康度与演练脚本里的**事实**。
+
+**本批做了什么**
+
+1. **备份台账落院**（auth V100 `auth_svc.tenant_backup`）：stanza、端点、桶、区域、
+   PITR 保留天数、`archive_mode/wal_level`、归档计数与失败次数、状态与问题列表。
+   台账在 Cell 内，恢复演练与巡检直连该院，控制面离线也能自救。
+2. **开通新增 BACKUP 步骤**（ADMIN 之后、LICENSE 之前）：
+   - 控制面用最小 **SigV4 客户端**（无 SDK 依赖）探桶/建桶：`HEAD /bucket` → 404 则 `PUT /bucket`；
+   - Cell 内登记计划并实测归档事实（`SHOW archive_mode`、`SHOW wal_level`、`pg_stat_archiver`）；
+   - 归档就绪 → `READY`；未开启 → 步骤 `SKIPPED` + 健康度 `DEGRADED`（默认不阻塞开通）；
+     `requireBackup=true`（合同要求）时直接阻塞激活；
+   - Cell 未迁移到 V100 → 步骤失败并提示"先迁移后 resume"（不再是裸 42P01）。
+3. **健康度**：返回 `backupState / backupBucket / backupLastFullAt / backupPitrDays /
+   backupArchivedCount / backupLastArchivedAt`；备份 `DEGRADED/FAILED` 时整体状态降为
+   `DEGRADED` 并写入可读问题项——没有可恢复备份的院不能显示"一切正常"。
+4. **控制台**：租户详情新增备份行（状态徽标、桶、PITR 天数、最近归档）；开通弹窗新增
+   「备份端点」「PITR 保留天数」「要求备份/PITR 就绪后才允许激活」。
+5. **可执行交付物**：
+   - `deploy/backup/pgbackrest-cell.conf.tmpl`：一院一桶/一密钥/一 stanza + AES-256 加密模板，
+     含 `stanza-create / check / backup / --type=time restore` 操作说明；
+   - `scripts/backup/cell_backup.ps1`：单院 pg_dump -Fc + 立即 `pg_restore --list` 校验 +
+     sha256 + 清单 + 轮转（UTF-8 BOM）；
+   - `scripts/e2e/backup_restore_drill.py`：导出 → 一次性库恢复 → **逐表比对行数** →
+     清理，报告落 `artifacts/backup/`，并如实标注 PITR 是否就绪。
+6. **运维手册**：PROVISIONING-RUNBOOK 新增「9. 备份与恢复」，步骤表更新为 9 步。
+
+**验证**
+
+```
+Java：auth + license 137 passed（新增 S3RequestSignerTest 3、ProvisioningServiceTest +2、
+      TenantHealthServiceTest +1）
+契约：tests/test_backup_pitr_contract.py 12 passed；开通契约同步为 9 步（合计 26 passed）
+全量：pytest -m "not e2e" → 2014 passed / 1 skipped
+前端：typecheck / build 通过（入口 gzip 99.21KB < 110KB）
+```
+
+真实栈（tenant-003 / PG 5435）：
+
+```
+Cell 迁移        V99、V100 已应用到 tenant-003（v100）
+BACKUP 步骤      SUCCEEDED · state=READY · bucket=medassist-backup-tenant-003
+                 archiveMode=on · walLevel=replica · latency 33ms
+MinIO            /minio_data 下已出现 medassist-backup-tenant-003（SigV4 建桶成功）
+健康度           tenant-003 state=OK · backupState=READY · 已归档 1 段
+恢复演练         17.0s PASS：6 张关键表行数一致；PITR=已就绪
+单院备份脚本     1.1MB、PITR=True、清单与 sha256 已生成
+浏览器（ops01）  详情显示「备份 已就绪 / medassist-backup-tenant-003 /
+                 PITR 保留 7 天 / 最近归档 22:47」，整体「正常」
+```
+
+**已知边界（下一批处理）**
+
+- 本机未安装 pgBackRest，**WAL 时间点回放未实际执行**：已验证归档生效（`archive_mode=on`、
+  `pg_stat_archiver` 有成功记录）与逻辑全量恢复；模板给出 `--type=time` 命令，
+  真实回放需在有 pgBackRest 的 Cell 演练，报告不会冒充"已 PITR 演练"；
+- 备份作业调度与失败告警仍由 Cell 侧 CronJob 负责，控制面暂不代跑；
+  接入 Prometheus/告警是 §287；
+- SigV4 只覆盖桶级 HEAD/PUT（无 STS/分块/查询串）；对接云 S3 + IRSA 时建议评估官方 SDK；
+- 逻辑备份脚本面向本地 Docker；K8s 生产走 pgBackRest。
+
+**下一批建议（§287）**
+
+租户健康度接入 Prometheus/Alertmanager 并按院路由告警；授权书签发/导入与开通联动。

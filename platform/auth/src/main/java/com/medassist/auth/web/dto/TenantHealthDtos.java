@@ -29,6 +29,13 @@ public final class TenantHealthDtos {
             long activeUserCount,
             String lastProvisionStatus,
             Instant lastProvisionAt,
+            /** §286：备份/PITR 状态 READY / PENDING / DEGRADED / FAILED / NONE / UNKNOWN。 */
+            String backupState,
+            String backupBucket,
+            Instant backupLastFullAt,
+            int backupPitrDays,
+            long backupArchivedCount,
+            Instant backupLastArchivedAt,
             String state,
             List<String> issues,
             Instant checkedAt

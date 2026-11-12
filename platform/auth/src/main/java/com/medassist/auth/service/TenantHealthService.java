@@ -111,6 +111,12 @@ public class TenantHealthService {
         String authVersion = null;
         long users = 0;
         long activeUsers = 0;
+        String backupState = "UNKNOWN";
+        String backupBucket = null;
+        Instant backupLastFullAt = null;
+        int backupPitrDays = 0;
+        long backupArchivedCount = 0;
+        Instant backupLastArchivedAt = null;
 
         if (Tenant.CLOSED.equals(tenant.status())) {
             issues.add("已注销（终态）：数据按合同保留至 "
@@ -136,6 +142,29 @@ public class TenantHealthService {
                 } catch (RuntimeException e) {
                     issues.add("账号统计失败：" + e.getMessage());
                 }
+                // §286：备份状态直接读 Cell——"有没有备份、能不能 PITR"是院自己的事实
+                try {
+                    CellDatabaseGateway.BackupStatus backup =
+                            cell.backupStatus(tenant.dbHost(), tenant.dbName(), tenant.code());
+                    if (!backup.present()) {
+                        backupState = "NONE";
+                        issues.add("尚未登记备份计划：该院没有独立备份仓库");
+                    } else {
+                        backupState = backup.status();
+                        backupBucket = backup.bucket();
+                        backupLastFullAt = backup.lastFullAt();
+                        backupPitrDays = backup.pitrDays();
+                        backupArchivedCount = backup.archivedCount();
+                        backupLastArchivedAt = backup.lastArchivedAt();
+                        if (!"READY".equals(backup.status())) {
+                            issues.add("备份/PITR 未就绪（" + backup.status() + "）："
+                                    + String.join("；", backup.issues()));
+                        }
+                    }
+                } catch (RuntimeException e) {
+                    backupState = "UNKNOWN";
+                    issues.add("备份状态读取失败：" + e.getMessage());
+                }
             }
         }
 
@@ -154,16 +183,20 @@ public class TenantHealthService {
             issues.add("已停用：登录与续期被拒绝，数据完整保留，可恢复");
         }
 
-        String state = resolveState(tenant, reachable, authReady, migrationFailure, lastJob);
+        String state = resolveState(tenant, reachable, authReady, migrationFailure, lastJob,
+                backupState);
         return new TenantHealthDtos.HealthView(tenant.code(), tenant.name(), tenant.status(),
                 tenant.instanceCode(), reachable, latency, authVersion, authReady,
                 migrationFailure, latest.size(), lastMigrationAt, users,
                 activeUsers, lastJob == null ? null : lastJob.status(),
-                lastJob == null ? null : lastJob.startedAt(), state, issues, Instant.now());
+                lastJob == null ? null : lastJob.startedAt(),
+                backupState, backupBucket, backupLastFullAt, backupPitrDays,
+                backupArchivedCount, backupLastArchivedAt, state, issues, Instant.now());
     }
 
     private static String resolveState(Tenant tenant, boolean reachable, boolean authReady,
-                                       boolean migrationFailure, Provisioning.Job lastJob) {
+                                       boolean migrationFailure, Provisioning.Job lastJob,
+                                       String backupState) {
         if (Tenant.CLOSED.equals(tenant.status())) {
             return "CLOSED";
         }
@@ -183,13 +216,17 @@ public class TenantHealthService {
                 || (lastJob != null && Provisioning.FAILED.equals(lastJob.status()))) {
             return "DEGRADED";
         }
+        // §286：备份退化也要进"需关注"——没有可恢复备份的院，不能显示为"一切正常"
+        if ("DEGRADED".equals(backupState) || "FAILED".equals(backupState)) {
+            return "DEGRADED";
+        }
         return "OK";
     }
 
     private TenantHealthDtos.HealthView timeoutView(Tenant tenant) {
         return new TenantHealthDtos.HealthView(tenant.code(), tenant.name(), tenant.status(),
                 tenant.instanceCode(), false, null, null, false, false, 0, null, 0, 0,
-                null, null, "DOWN",
+                null, null, "UNKNOWN", null, null, 0, 0, null, "DOWN",
                 List.of("健康检查超时（>" + PER_TENANT_TIMEOUT_SECONDS + " 秒）：该院 Cell 可能离线"),
                 Instant.now());
     }
@@ -197,7 +234,7 @@ public class TenantHealthService {
     private TenantHealthDtos.HealthView failedView(Tenant tenant) {
         return new TenantHealthDtos.HealthView(tenant.code(), tenant.name(), tenant.status(),
                 tenant.instanceCode(), false, null, null, false, false, 0, null, 0, 0,
-                null, null, "DEGRADED",
+                null, null, "UNKNOWN", null, null, 0, 0, null, "DEGRADED",
                 List.of("健康检查异常：不影响其他院，请查看控制面日志"), Instant.now());
     }
 

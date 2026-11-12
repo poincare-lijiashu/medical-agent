@@ -1,5 +1,10 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.domain.BackupPlan;
+
+import java.time.Instant;
+import java.util.List;
+
 /**
  * Cell 数据库操作端口（§284）。
  *
@@ -38,6 +43,17 @@ public interface CellDatabaseGateway {
                             java.time.Instant closedAt, String closedReason);
 
     /**
+     * 在 Cell 内登记备份计划，并用该库的 WAL 归档事实判定 PITR 是否就绪（§286）。
+     *
+     * <p>为什么把判定放在 Cell：{@code archive_mode}/{@code wal_level}/{@code pg_stat_archiver}
+     * 是这家医院自己的数据库事实，控制面台账只能记录"我们以为"，不能替代实测。
+     */
+    BackupStatus initializeBackup(String dbHost, String dbName, BackupPlan plan);
+
+    /** 读取该院备份状态；未登记时返回 {@code present=false}（不是错误）。 */
+    BackupStatus backupStatus(String dbHost, String dbName, String tenantCode);
+
+    /**
      * 探测结果。
      *
      * @param reachable  能否建立连接并执行查询
@@ -55,5 +71,26 @@ public interface CellDatabaseGateway {
 
     record AdminSpec(String dbHost, String dbName, String tenantCode, String username,
                      String displayName, String employeeNo, String passwordHash) {
+    }
+
+    /**
+     * 备份状态（§286）。
+     *
+     * @param present        是否已登记备份计划
+     * @param status         PENDING / READY / DEGRADED / FAILED；未登记为 NONE
+     * @param archiveMode    PostgreSQL {@code archive_mode}
+     * @param walLevel       PostgreSQL {@code wal_level}
+     * @param lastArchivedAt 最近一次成功归档时间（PITR 新鲜度的直接证据）
+     * @param issues         可读问题列表（未开启归档、归档失败、wal_level 不足等）
+     */
+    record BackupStatus(boolean present, String status, String bucket, String stanza, int pitrDays,
+                        String archiveMode, String walLevel, long archivedCount,
+                        Instant lastArchivedAt, long failedCount, Instant lastFullAt,
+                        List<String> issues) {
+
+        public static BackupStatus none() {
+            return new BackupStatus(false, "NONE", null, null, 0, null, null, 0, null, 0, null,
+                    List.of());
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.domain.BackupPlan;
 import com.medassist.auth.domain.Provisioning;
 import com.medassist.auth.domain.Tenant;
 import com.medassist.auth.domain.TenantQuotas;
@@ -42,6 +43,7 @@ class ProvisioningServiceTest {
     private FakeTenants tenants;
     private FakeCell cell;
     private FakeLicense license;
+    private FakeBackup backupRepo;
     private ProvisioningService service;
 
     @BeforeEach
@@ -50,12 +52,14 @@ class ProvisioningServiceTest {
         tenants = new FakeTenants();
         cell = new FakeCell();
         license = new FakeLicense();
-        service = new ProvisioningService(jobs, tenants, cell, license, new PasswordHasher(),
-                new PasswordPolicy(), JsonMapper.builder().build(), CONTROL_URL, false);
+        backupRepo = new FakeBackup();
+        service = new ProvisioningService(jobs, tenants, cell, license, backupRepo,
+                new PasswordHasher(), new PasswordPolicy(), JsonMapper.builder().build(),
+                CONTROL_URL, false, "http://127.0.0.1:9000", "us-east-1", 7, false);
     }
 
     @Test
-    @DisplayName("开通成功：8 个步骤全部有结果，管理员口令只返回一次")
+    @DisplayName("开通成功：9 个步骤全部有结果，管理员口令只返回一次")
     void provisionHappyPath() {
         ProvisioningDtos.JobView view = service.start(req("tenant-003"), "ops01");
 
@@ -64,6 +68,10 @@ class ProvisioningServiceTest {
         assertThat(view.steps()).allMatch(step -> !Provisioning.STEP_FAILED.equals(step.status()));
         assertThat(view.oneTimeAdminPassword()).isNotNull();
         assertThat(view.oneTimeAdminPassword().length()).isGreaterThanOrEqualTo(20);
+        // §286：开通即建桶并登记备份计划
+        assertThat(backupRepo.calls).isEqualTo(1);
+        assertThat(backupRepo.lastBucket).isEqualTo("medassist-backup-tenant-003");
+        assertThat(cell.backupInitialized).isTrue();
 
         Tenant saved = tenants.byCode.get("tenant-003");
         assertThat(saved.status()).isEqualTo(Tenant.ACTIVE);
@@ -83,7 +91,7 @@ class ProvisioningServiceTest {
         ProvisioningDtos.ProvisionReq sameDb = new ProvisioningDtos.ProvisionReq(
                 req.tenantCode(), req.instanceCode(), req.name(), req.editionCode(),
                 "127.0.0.1:5433", "medagent", req.cellEndpoint(), req.region(), req.quotas(),
-                req.contactName(), req.contactPhone(), req.notes(), req.initialAdmin(), false);
+                req.contactName(), req.contactPhone(), req.notes(), req.initialAdmin(), null, false);
 
         assertThatThrownBy(() -> service.start(sameDb, "ops01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
@@ -135,7 +143,7 @@ class ProvisioningServiceTest {
                 "tenant-003", "MEDASSIST-HOSP-C-0001", "演示三院", "ENTERPRISE",
                 "127.0.0.1:5435", "medagent", "http://127.0.0.1:8184", "local", null,
                 "王主任", "13700000000", null,
-                new ProvisioningDtos.InitialAdmin("admin01", "三院管理员", null), true);
+                new ProvisioningDtos.InitialAdmin("admin01", "三院管理员", null), null, true);
 
         ProvisioningDtos.JobView view = service.start(req, "ops01");
 
@@ -182,6 +190,45 @@ class ProvisioningServiceTest {
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TENANT_INVALID));
     }
 
+    @Test
+    @DisplayName("WAL 归档未开启：备份步骤 SKIPPED，不阻塞开通但健康度会报 DEGRADED")
+    void backupDegradedDoesNotBlock() {
+        cell.backup = new CellDatabaseGateway.BackupStatus(true, "DEGRADED",
+                "medassist-backup-tenant-003", "tenant-003", 7, "off", "replica", 0, null, 0,
+                null, List.of("archive_mode=off：未开启 WAL 归档，无法按时间点恢复（PITR）"));
+
+        ProvisioningDtos.JobView view = service.start(req("tenant-003"), "ops01");
+
+        assertThat(view.status()).isEqualTo(Provisioning.SUCCEEDED);
+        assertThat(view.steps()).filteredOn(s -> "BACKUP".equals(s.code()))
+                .extracting(ProvisioningDtos.StepView::status)
+                .containsExactly(Provisioning.STEP_SKIPPED);
+        assertThat(tenants.byCode.get("tenant-003").status()).isEqualTo(Tenant.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("requireBackup=true 且归档未就绪：失败在 BACKUP，不激活")
+    void backupRequiredBlocksActivation() {
+        cell.backup = new CellDatabaseGateway.BackupStatus(true, "DEGRADED",
+                "medassist-backup-tenant-003", "tenant-003", 7, "off", "replica", 0, null, 0,
+                null, List.of("archive_mode=off"));
+        ProvisioningDtos.ProvisionReq strict = new ProvisioningDtos.ProvisionReq(
+                "tenant-003", "MEDASSIST-HOSP-C-0001", "演示三院", "ENTERPRISE",
+                "127.0.0.1:5435", "medagent", "http://127.0.0.1:8184", "local",
+                new TenantQuotas(500, 800, 200, 5000),
+                "王主任", "13700000000", null,
+                new ProvisioningDtos.InitialAdmin("admin01", "三院管理员", null),
+                new ProvisioningDtos.BackupReq(null, null, null, null, true), false);
+
+        ProvisioningDtos.JobView view = service.start(strict, "ops01");
+
+        assertThat(view.status()).isEqualTo(Provisioning.FAILED);
+        assertThat(view.steps()).filteredOn(s -> "BACKUP".equals(s.code()))
+                .extracting(ProvisioningDtos.StepView::status)
+                .containsExactly(Provisioning.STEP_FAILED);
+        assertThat(tenants.byCode.get("tenant-003").status()).isEqualTo(Tenant.PENDING);
+    }
+
     // ---------------------------------------------------------------- 夹具
 
     private static ProvisioningDtos.ProvisionReq req(String tenantCode) {
@@ -191,7 +238,7 @@ class ProvisioningServiceTest {
                 new TenantQuotas(500, 800, 200, 5000),
                 "王主任", "13700000000", "ADR-001 P3 开通演练",
                 new ProvisioningDtos.InitialAdmin("admin01", "三院管理员", "E0001"),
-                false);
+                null, false);
     }
 
     private static Tenant tenant(String code, String instance, String status) {
@@ -326,6 +373,10 @@ class ProvisioningServiceTest {
     private static class FakeCell implements CellDatabaseGateway {
         private CellDatabaseGateway.Probe probe =
                 new CellDatabaseGateway.Probe(true, true, 4, "98", null);
+        private CellDatabaseGateway.BackupStatus backup = new CellDatabaseGateway.BackupStatus(
+                true, "READY", "medassist-backup-tenant-003", "tenant-003", 7,
+                "on", "replica", 12, Instant.now(), 0, null, List.of());
+        private boolean backupInitialized;
         private boolean adminExists;
         private boolean adminCreated;
         private String adminPasswordHash;
@@ -367,6 +418,41 @@ class ProvisioningServiceTest {
         public void updateTenantStatus(String dbHost, String dbName, String tenantCode,
                                        String status, Instant closedAt, String closedReason) {
             // 开通流程不修改 Cell 状态；状态同步由 TenantService 覆盖
+        }
+
+        @Override
+        public BackupStatus initializeBackup(String dbHost, String dbName, BackupPlan plan) {
+            backupInitialized = true;
+            return new BackupStatus(true, backup.status(), plan.bucket(), plan.stanza(),
+                    plan.pitrDays(), backup.archiveMode(), backup.walLevel(),
+                    backup.archivedCount(), backup.lastArchivedAt(), backup.failedCount(),
+                    backup.lastFullAt(), backup.issues());
+        }
+
+        @Override
+        public BackupStatus backupStatus(String dbHost, String dbName, String tenantCode) {
+            return backup;
+        }
+    }
+
+    private static class FakeBackup implements BackupRepositoryGateway {
+        private int calls;
+        private String lastBucket;
+        private final boolean existed;
+
+        FakeBackup() {
+            this(false);
+        }
+
+        FakeBackup(boolean existed) {
+            this.existed = existed;
+        }
+
+        @Override
+        public Result ensureBucket(String endpoint, String region, String bucket) {
+            calls++;
+            lastBucket = bucket;
+            return new Result(existed, !existed, 3);
         }
     }
 

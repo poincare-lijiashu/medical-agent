@@ -70,9 +70,10 @@ curl -sS -X POST https://console.example/api/v2/auth/tenants/provisions \
 | 3 | `CELL_CONNECT` | 网络不通、PG 未就绪、auth 域未迁移 |
 | 4 | `CELL_TENANT` | Cell 内已有同编码不同实例码、Cell 内已注销 |
 | 5 | `ADMIN` | 用户名已存在（会跳过并提示）、库权限不足 |
-| 6 | `LICENSE` | 未导入授权/已吊销/已过期（`requireLicense=true` 时阻塞） |
-| 7 | `ACTIVATE` | 目录被并发修改（版本冲突） |
-| 8 | `HEALTH` | 开通后探测失败（通常与 3 相同） |
+| 6 | `BACKUP` | 对象存储不可达/无建桶权限、Cell 未迁移到 V100、WAL 归档未开启（默认降级不阻塞） |
+| 7 | `LICENSE` | 未导入授权/已吊销/已过期（`requireLicense=true` 时阻塞） |
+| 8 | `ACTIVATE` | 目录被并发修改（版本冲突） |
+| 9 | `HEALTH` | 开通后探测失败（通常与 3 相同） |
 
 ### 2.4 交付首个管理员（首登强制改密）
 
@@ -158,3 +159,58 @@ curl -sS -X POST https://console.example/api/v2/auth/tenants/provisions/<jobId>/
 - 口令策略在所有入口统一执行（长度、字母数字、不得包含用户名、弱口令黑名单）；
 - `/internal/license/summary` 仅内网可达（网关拒绝 `/internal/**`），并强制 `X-Internal-Token`；
 - 所有开通/状态变更写 `auth_svc.change_log`，记录 actor、job、步骤与失败原因。
+
+## 9. 备份与恢复（§286）
+
+### 9.1 交付即建仓（BACKUP 步骤）
+
+开通第 6 步会：
+
+1. 在该院独立对象存储上确保桶存在（默认 `medassist-backup-<tenant>`，一院一桶）；
+2. 在 Cell 的 `auth_svc.tenant_backup` 登记 stanza / 端点 / 区域 / PITR 保留天数；
+3. 读取该库的 `archive_mode`、`wal_level`、`pg_stat_archiver`，判定 PITR 是否真的可用。
+
+判定口径（不猜、不看配置文件的"应该"）：
+
+| 事实 | 结论 |
+| --- | --- |
+| `archive_mode=on` + `wal_level=replica/logical` + 归档失败 0 次 | `READY`（PITR 生效） |
+| `archive_mode=off` 或 `wal_level=minimal` 或归档有失败 | `DEGRADED`：步骤 SKIPPED、健康度「需关注」，问题项写明原因 |
+| Cell 未迁移到 V100（缺表） | 步骤 FAILED，提示先在该 Cell 执行迁移后 resume |
+
+- 默认 `requireBackup=false`：先开通、后由 DBA 在窗口期开启归档；
+- 合同要求"必须可 PITR"时传 `backup.requireBackup=true`：归档不就绪直接阻塞激活；
+- 控制台开通弹窗可填写备份端点与 PITR 保留天数（1–35 天），桶名自动派生。
+
+### 9.2 Cell 侧 pgBackRest（生产）
+
+- 配置模板：[deploy/backup/pgbackrest-cell.conf.tmpl](../deploy/backup/pgbackrest-cell.conf.tmpl)
+  （一院一桶、一院一密钥、一院一 stanza、AES-256 加密）；
+- PostgreSQL 需 `wal_level=replica`、`archive_mode=on`、
+  `archive_command='pgbackrest --stanza=<tenant> archive-push %p'`（修改后必须重启）；
+- 初始化：`pgbackrest --stanza=<tenant> stanza-create` → `check` → 首次 `--type=full backup`；
+- 保留窗口与台账 `pitr_days` 保持一致（`repo1-retention-full`）。
+
+### 9.3 恢复演练（每季度 / 交付前）
+
+```bash
+# 逻辑全量恢复演练：在独立实例/一次性库中恢复并逐表比对行数
+python scripts/e2e/backup_restore_drill.py \
+    --source-container medagent_pg_tenant003 --database medagent
+```
+
+- 演练不会触碰源库：导出、恢复到一次性库、比对关键表行数、最后删除演练库；
+- 报告落 `artifacts/backup/restore-drill-*.json`，包含归档事实、耗时、逐表行数；
+- `PITR 已就绪` 表示归档生效；"未就绪"时报告会明确写"仅全量恢复已演练"，不冒充 PITR；
+- WAL 回放到时间点按模板注释执行 `pgbackrest --type=time --target=... restore`，
+  **必须在演练实例**进行，禁止覆盖生产数据目录。
+
+### 9.4 单院全量备份（无 pgBackRest 环境的兜底）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\backup\cell_backup.ps1 `
+    -Container medagent_pg_tenant003 -Database medagent -BackupDir D:\backups\tenant-003
+```
+
+产物：`.dump`（自定义格式，支持选择性/并行恢复）、`.sha256`、`.json` 清单（含归档事实），
+默认保留 14 份。归档未开启时会打印警告：只能恢复到本次全备，RPO≈备份间隔。

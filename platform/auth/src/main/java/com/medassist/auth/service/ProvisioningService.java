@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.domain.BackupPlan;
 import com.medassist.auth.domain.Provisioning;
 import com.medassist.auth.domain.Tenant;
 import com.medassist.auth.domain.TenantQuotas;
@@ -58,34 +59,64 @@ public class ProvisioningService {
     private static final Pattern JDBC_URL = Pattern.compile(
             "jdbc:postgresql://([^/:\\[]+|\\[[^]]+]+)(?::(\\d+))?/([^?]+).*");
 
+    /** S3 桶名（§286）：小写字母/数字/点/短横线，3–63 位，首尾为字母或数字。 */
+    private static final Pattern BUCKET = Pattern.compile("[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]");
+
+    /** pgBackRest stanza：默认等于租户编码；只允许小写字母/数字/短横线。 */
+    private static final Pattern STANZA = Pattern.compile("[a-z0-9][a-z0-9-]{1,31}");
+
+    private static final int MIN_PITR_DAYS = 1;
+    private static final int MAX_PITR_DAYS = 35;
+
     private static final int MAX_LIST = 50;
 
     private final ProvisionRepository jobs;
     private final TenantRepository tenants;
     private final CellDatabaseGateway cell;
     private final LicenseGateway license;
+    private final BackupRepositoryGateway backup;
     private final PasswordHasher hasher;
     private final PasswordPolicy passwordPolicy;
     private final ObjectMapper json;
     private final String controlPlaneJdbcUrl;
     private final boolean requireLicenseByDefault;
+    private final String defaultBackupEndpoint;
+    private final String defaultBackupRegion;
+    private final int defaultPitrDays;
+    private final boolean requireBackupByDefault;
 
     public ProvisioningService(ProvisionRepository jobs, TenantRepository tenants,
                                CellDatabaseGateway cell, LicenseGateway license,
+                               BackupRepositoryGateway backup,
                                PasswordHasher hasher, PasswordPolicy passwordPolicy,
                                ObjectMapper json,
                                @Value("${spring.datasource.url:}") String controlPlaneJdbcUrl,
                                @Value("${medassist.provisioning.require-license:false}")
-                               boolean requireLicenseByDefault) {
+                               boolean requireLicenseByDefault,
+                               @Value("${medassist.backup.endpoint:http://127.0.0.1:9000}")
+                               String defaultBackupEndpoint,
+                               @Value("${medassist.backup.region:us-east-1}")
+                               String defaultBackupRegion,
+                               @Value("${medassist.backup.pitr-days:7}")
+                               int defaultPitrDays,
+                               @Value("${medassist.provisioning.require-backup:false}")
+                               boolean requireBackupByDefault) {
         this.jobs = jobs;
         this.tenants = tenants;
         this.cell = cell;
         this.license = license;
+        this.backup = backup;
         this.hasher = hasher;
         this.passwordPolicy = passwordPolicy;
         this.json = json;
         this.controlPlaneJdbcUrl = controlPlaneJdbcUrl;
         this.requireLicenseByDefault = requireLicenseByDefault;
+        this.defaultBackupEndpoint = defaultBackupEndpoint == null
+                ? "http://127.0.0.1:9000" : defaultBackupEndpoint.trim();
+        this.defaultBackupRegion = defaultBackupRegion == null || defaultBackupRegion.isBlank()
+                ? "us-east-1" : defaultBackupRegion.trim();
+        this.defaultPitrDays = Math.min(Math.max(defaultPitrDays, MIN_PITR_DAYS), MAX_PITR_DAYS);
+        this.requireBackupByDefault = requireBackupByDefault;
     }
 
     // ---------------------------------------------------------------- 对外入口
@@ -98,7 +129,7 @@ public class ProvisioningService {
      * 让运维看到"哪一步失败、为什么失败"，并可 resume。
      */
     public ProvisioningDtos.JobView start(ProvisioningDtos.ProvisionReq req, String actor) {
-        Spec spec = Spec.from(req, requireLicenseByDefault);
+        Spec spec = specOf(req);
         preflight(spec, false);
 
         Instant now = Instant.now();
@@ -122,7 +153,7 @@ public class ProvisioningService {
         if (Provisioning.RUNNING.equals(job.status())) {
             throw new BusinessException(ErrorCode.CONFLICT, "该开通任务仍在执行，请稍后再试");
         }
-        Spec spec = Spec.fromRequest(job.request(), requireLicenseByDefault);
+        Spec spec = specOf(job.request());
         preflight(spec, true);
         jobs.markRunning(jobId);
         return execute(jobId, spec, actor, false);
@@ -206,6 +237,7 @@ public class ProvisioningService {
                 yield Outcome.ok(Map.of("tenant", spec.tenantCode(), "instanceCode", spec.instanceCode()));
             }
             case "ADMIN" -> bootstrapAdmin(spec, result);
+            case "BACKUP" -> initializeBackup(spec, result);
             case "LICENSE" -> checkLicense(spec, result);
             case "ACTIVATE" -> activate(spec, actor);
             case "HEALTH" -> healthSnapshot(spec, result);
@@ -292,6 +324,73 @@ public class ProvisioningService {
                 "roles", List.of("ADMIN"), "mustChangePassword", true), password);
     }
 
+    /**
+     * 备份仓库与 PITR 就绪（§286）。
+     *
+     * <p>两步都要做，缺一不可：
+     * <ol>
+     *   <li>对象存储：不存在则建桶（一院一桶，互不共享）；</li>
+     *   <li>Cell 库：登记备份计划，并用 {@code archive_mode}/{@code wal_level}/
+     *       {@code pg_stat_archiver} 实测"是否真的能按时间点恢复"。</li>
+     * </ol>
+     *
+     * <p>为什么 WAL 归档未开启时不直接失败：很多医院先要"能开起来"，归档由 DBA 在窗口期
+     * 打开；此时备份桶与计划已就绪，健康度会持续报 DEGRADED，直到归档打开。
+     * {@code requireBackup=true} 的合同（如集团客户）则可强制阻塞。
+     */
+    private Outcome initializeBackup(Spec spec, Map<String, Object> result) {
+        BackupPlan plan = spec.backupPlan();
+        BackupRepositoryGateway.Result repo;
+        try {
+            repo = backup.ensureBucket(plan.endpoint(), plan.region(), plan.bucket());
+        } catch (RuntimeException e) {
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("bucket", plan.bucket());
+            detail.put("endpoint", plan.endpoint());
+            detail.put("error", e.getMessage());
+            if (spec.requireBackup()) {
+                throw new StepFailure("备份仓库不可用：" + e.getMessage(), detail);
+            }
+            return Outcome.skip(detail,
+                    "备份仓库不可用（requireBackup=false，不阻塞开通）：" + e.getMessage());
+        }
+
+        CellDatabaseGateway.BackupStatus status;
+        try {
+            status = cell.initializeBackup(spec.dbHost(), spec.dbName(), plan);
+        } catch (RuntimeException e) {
+            // 把 Cell 侧异常转成"可 resume 的步骤失败"，而不是未预期异常
+            throw new StepFailure("在 Cell 登记备份计划失败：" + e.getMessage(),
+                    Map.of("bucket", plan.bucket(), "stanza", plan.stanza()));
+        }
+        result.put("backupBucket", plan.bucket());
+        result.put("backupState", status.status());
+
+        Map<String, Object> detail = new LinkedHashMap<>();
+        detail.put("bucket", plan.bucket());
+        detail.put("bucketExisted", repo.existed());
+        detail.put("bucketCreated", repo.created());
+        detail.put("endpoint", plan.endpoint());
+        detail.put("stanza", plan.stanza());
+        detail.put("pitrDays", plan.pitrDays());
+        detail.put("state", status.status());
+        detail.put("archiveMode", status.archiveMode());
+        detail.put("walLevel", status.walLevel());
+        detail.put("latencyMs", repo.latencyMs());
+        if (!status.issues().isEmpty()) {
+            detail.put("issues", status.issues());
+        }
+
+        if ("READY".equals(status.status())) {
+            return Outcome.ok(detail);
+        }
+        String reason = "WAL 归档未满足 PITR：" + String.join("；", status.issues());
+        if (spec.requireBackup()) {
+            throw new StepFailure(reason, detail);
+        }
+        return Outcome.skip(detail, reason + "（requireBackup=false，不阻塞开通）");
+    }
+
     private Outcome checkLicense(Spec spec, Map<String, Object> result) {
         LicenseGateway.Result check = license.check(spec.instanceCode());
         Map<String, Object> detail = new LinkedHashMap<>();
@@ -364,8 +463,13 @@ public class ProvisioningService {
         long users = cell.countUsers(spec.dbHost(), spec.dbName(), spec.tenantCode());
         result.put("cellUsers", users);
         result.put("authVersion", probe.authVersion());
+        // §286：开通快照里带上备份状态，交付单能直接看到"有没有备份/PITR"
+        CellDatabaseGateway.BackupStatus backupStatus =
+                cell.backupStatus(spec.dbHost(), spec.dbName(), spec.tenantCode());
+        result.put("backupState", backupStatus.status());
         return Outcome.ok(Map.of("users", users, "latencyMs", probe.latencyMs(),
-                "authVersion", probe.authVersion() == null ? "" : probe.authVersion()));
+                "authVersion", probe.authVersion() == null ? "" : probe.authVersion(),
+                "backupState", backupStatus.status()));
     }
 
     // ---------------------------------------------------------------- 前置校验
@@ -420,6 +524,18 @@ public class ProvisioningService {
     }
 
     // ---------------------------------------------------------------- 辅助
+
+    /** HTTP 入参 → 归一化规格（默认值来自部署配置，不散落在 DTO 里）。 */
+    private Spec specOf(ProvisioningDtos.ProvisionReq req) {
+        return Spec.from(req, requireLicenseByDefault, requireBackupByDefault,
+                defaultBackupEndpoint, defaultBackupRegion, defaultPitrDays);
+    }
+
+    /** resume 时从任务里保存的 request 重建同一份规格（默认值也已固化在 request 中）。 */
+    private Spec specOf(Map<String, Object> request) {
+        return Spec.fromRequest(request, requireLicenseByDefault, requireBackupByDefault,
+                defaultBackupEndpoint, defaultBackupRegion, defaultPitrDays);
+    }
 
     private Provisioning.Job requireJob(UUID jobId) {
         return jobs.findJob(jobId)
@@ -541,14 +657,36 @@ public class ProvisioningService {
             String dbHost, String dbName, String cellEndpoint, String region,
             TenantQuotas quotas, String contactName, String contactPhone, String notes,
             String adminUsername, String adminDisplayName, String adminEmployeeNo,
-            boolean requireLicense) {
+            boolean requireLicense,
+            String backupEndpoint, String backupBucket, String backupRegion, int backupPitrDays,
+            String backupStanza, String backupEncryption, boolean requireBackup) {
 
-        static Spec from(ProvisioningDtos.ProvisionReq req, boolean requireByDefault) {
+        BackupPlan backupPlan() {
+            return new BackupPlan(tenantCode, backupEndpoint, backupBucket, backupRegion,
+                    backupStanza, backupPitrDays, backupEncryption);
+        }
+
+        static Spec from(ProvisioningDtos.ProvisionReq req, boolean requireLicenseByDefault,
+                         boolean requireBackupByDefault, String defaultEndpoint,
+                         String defaultRegion, int defaultPitrDays) {
             String edition = req.editionCode() == null || req.editionCode().isBlank()
                     ? "ENTERPRISE" : req.editionCode().trim().toUpperCase(Locale.ROOT);
             String dbName = req.dbName() == null || req.dbName().isBlank()
                     ? "medagent" : req.dbName().trim();
-            return new Spec(req.tenantCode().trim().toLowerCase(Locale.ROOT),
+            String tenant = req.tenantCode().trim().toLowerCase(Locale.ROOT);
+            ProvisioningDtos.BackupReq backup = req.backup();
+            String endpoint = backup == null || backup.endpoint() == null
+                    || backup.endpoint().isBlank() ? defaultEndpoint : backup.endpoint().trim();
+            String region = backup == null || backup.region() == null || backup.region().isBlank()
+                    ? defaultRegion : backup.region().trim();
+            String bucket = backup == null || backup.bucket() == null || backup.bucket().isBlank()
+                    ? "medassist-backup-" + tenant : backup.bucket().trim().toLowerCase(Locale.ROOT);
+            int pitrDays = backup == null || backup.pitrDays() == null
+                    ? defaultPitrDays : backup.pitrDays();
+            boolean requireBackup = backup == null || backup.requireBackup() == null
+                    ? requireBackupByDefault : backup.requireBackup();
+            validateBackup(endpoint, bucket, tenant, pitrDays);
+            return new Spec(tenant,
                     req.instanceCode().trim().toUpperCase(Locale.ROOT),
                     req.name().trim(), edition,
                     req.dbHost().trim(), dbName,
@@ -559,17 +697,34 @@ public class ProvisioningService {
                     req.initialAdmin().username().trim(),
                     req.initialAdmin().displayName().trim(),
                     blankToNull(req.initialAdmin().employeeNo()),
-                    req.requireLicense() == null ? requireByDefault : req.requireLicense());
+                    req.requireLicense() == null ? requireLicenseByDefault : req.requireLicense(),
+                    endpoint, bucket, region, pitrDays, tenant, "AES-256-CBC", requireBackup);
         }
 
         @SuppressWarnings("unchecked")
-        static Spec fromRequest(Map<String, Object> map, boolean requireByDefault) {
+        static Spec fromRequest(Map<String, Object> map, boolean requireLicenseByDefault,
+                                boolean requireBackupByDefault, String defaultEndpoint,
+                                String defaultRegion, int defaultPitrDays) {
             Map<String, Object> admin = map.get("initialAdmin") instanceof Map<?, ?> m
                     ? (Map<String, Object>) m : Map.of();
             Map<String, Object> quotas = map.get("quotas") instanceof Map<?, ?> m
                     ? (Map<String, Object>) m : Map.of();
+            Map<String, Object> backup = map.get("backup") instanceof Map<?, ?> m
+                    ? (Map<String, Object>) m : Map.of();
+            String tenant = str(map.get("tenantCode"));
+            String endpoint = blankToNull(str(backup.get("endpoint"))) == null
+                    ? defaultEndpoint : str(backup.get("endpoint")).trim();
+            String region = blankToNull(str(backup.get("region"))) == null
+                    ? defaultRegion : str(backup.get("region")).trim();
+            String bucket = blankToNull(str(backup.get("bucket"))) == null
+                    ? "medassist-backup-" + tenant : str(backup.get("bucket")).trim();
+            Integer storedPitr = intOrNull(backup.get("pitrDays"));
+            int pitrDays = storedPitr == null ? defaultPitrDays : storedPitr;
+            String encryption = blankToNull(str(backup.get("encryption"))) == null
+                    ? "AES-256-CBC" : str(backup.get("encryption")).trim();
+            validateBackup(endpoint, bucket, tenant, pitrDays);
             return new Spec(
-                    str(map.get("tenantCode")), str(map.get("instanceCode")),
+                    tenant, str(map.get("instanceCode")),
                     str(map.get("name")), str(map.get("editionCode")),
                     str(map.get("dbHost")), str(map.get("dbName")),
                     str(map.get("cellEndpoint")), str(map.get("region")),
@@ -583,7 +738,37 @@ public class ProvisioningService {
                     str(admin.get("employeeNo")),
                     map.containsKey("requireLicense")
                             ? Boolean.TRUE.equals(map.get("requireLicense"))
-                            : requireByDefault);
+                            : requireLicenseByDefault,
+                    endpoint, bucket, region, pitrDays, tenant, encryption,
+                    map.containsKey("requireBackup")
+                            ? Boolean.TRUE.equals(map.get("requireBackup"))
+                            : requireBackupByDefault);
+        }
+
+        /**
+         * 备份规格前置校验。
+         *
+         * <p>放在 Spec 归一化阶段而不是 BACKUP 步骤里：桶名/区域/保留天数是**合同项**，
+         * 填错应在提交开通前 422，而不是跑完前 5 步再失败。
+         */
+        private static void validateBackup(String endpoint, String bucket, String stanza,
+                                           int pitrDays) {
+            if (endpoint == null || !(endpoint.startsWith("http://") || endpoint.startsWith("https://"))) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "备份端点必须是 http(s) URL：" + (endpoint == null ? "" : endpoint));
+            }
+            if (bucket == null || !BUCKET.matcher(bucket).matches()) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "备份桶名不符合 S3 规范（小写字母/数字/点/短横线，3-63 位）：" + bucket);
+            }
+            if (stanza == null || !STANZA.matcher(stanza).matches()) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "备份 stanza 不符合 pgBackRest 规范（小写字母/数字/短横线）：" + stanza);
+            }
+            if (pitrDays < MIN_PITR_DAYS || pitrDays > MAX_PITR_DAYS) {
+                throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                        "PITR 保留天数需在 " + MIN_PITR_DAYS + "-" + MAX_PITR_DAYS + " 天之间");
+            }
         }
 
         Map<String, Object> toRequestMap() {
@@ -596,6 +781,12 @@ public class ProvisioningService {
             quotaMap.put("maxUsers", quotas.maxUsers());
             quotaMap.put("maxStorageGb", quotas.maxStorageGb());
             quotaMap.put("maxAiCallsPerDay", quotas.maxAiCallsPerDay());
+            Map<String, Object> backupMap = new LinkedHashMap<>();
+            backupMap.put("endpoint", backupEndpoint);
+            backupMap.put("bucket", backupBucket);
+            backupMap.put("region", backupRegion);
+            backupMap.put("pitrDays", backupPitrDays);
+            backupMap.put("encryption", backupEncryption);
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("tenantCode", tenantCode);
             map.put("instanceCode", instanceCode);
@@ -610,7 +801,9 @@ public class ProvisioningService {
             map.put("contactPhone", contactPhone);
             map.put("notes", notes);
             map.put("initialAdmin", admin);
+            map.put("backup", backupMap);
             map.put("requireLicense", requireLicense);
+            map.put("requireBackup", requireBackup);
             return map;
         }
 

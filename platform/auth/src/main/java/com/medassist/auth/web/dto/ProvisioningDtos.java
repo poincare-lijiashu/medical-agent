@@ -2,6 +2,8 @@ package com.medassist.auth.web.dto;
 
 import com.medassist.auth.domain.TenantQuotas;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -26,6 +28,22 @@ public final class ProvisioningDtos {
             String username,
             @NotBlank @Size(max = 64, message = "姓名长度不能超过 64") String displayName,
             @Size(max = 64, message = "工号长度不能超过 64") String employeeNo
+    ) {
+    }
+
+    /** 单院备份规格（§286）：留空取平台默认（端点/区域/保留天数），桶名按租户派生。 */
+    public record BackupReq(
+            @Size(max = 200, message = "备份端点长度不能超过 200") String endpoint,
+            @Pattern(regexp = "[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]",
+                    message = "备份桶名需符合 S3 规范：小写字母/数字/点/短横线，3-63 位")
+            String bucket,
+            @Size(max = 32, message = "备份区域长度不能超过 32") String region,
+            @Min(value = 1, message = "PITR 保留天数至少 1 天")
+            @Max(value = 35, message = "PITR 保留天数最多 35 天")
+            Integer pitrDays,
+
+            /** 是否要求备份/PITR 就绪才允许激活；为空取平台默认（默认不阻塞）。 */
+            Boolean requireBackup
     ) {
     }
 
@@ -60,6 +78,9 @@ public final class ProvisioningDtos {
             @Size(max = 500) String notes,
 
             @NotNull @Valid InitialAdmin initialAdmin,
+
+            /** §286：单院备份仓库规格；为空表示完全使用平台默认。 */
+            @Valid BackupReq backup,
 
             /** 是否要求实例已有可用授权；为空时取服务端默认（本地/离线默认不阻塞）。 */
             Boolean requireLicense

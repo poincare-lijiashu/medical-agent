@@ -39,6 +39,7 @@ public final class Provisioning {
             "CELL_CONNECT",  // 连 Cell 库并确认迁移已就绪
             "CELL_TENANT",   // Cell 库内登记本租户（账号外键依赖）
             "ADMIN",         // 首个管理员（一次性口令）
+            "BACKUP",        // 独立备份桶 + 备份计划 + WAL 归档就绪校验（§286）
             "LICENSE",       // 授权检查（可配置、可降级）
             "ACTIVATE",      // 控制面激活
             "HEALTH"         // 开通后健康快照

@@ -1,15 +1,24 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.domain.BackupPlan;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import java.sql.Array;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -220,6 +229,173 @@ public class JdbcCellDatabaseGateway implements CellDatabaseGateway {
         } catch (SQLException e) {
             throw new CellDatabaseException("同步租户状态到 Cell 失败：" + safeMessage(e), e);
         }
+    }
+
+    // ---------------------------------------------------------------- 备份（§286）
+
+    @Override
+    public BackupStatus initializeBackup(String dbHost, String dbName, BackupPlan plan) {
+        try (Connection connection = open(dbHost, dbName, WRITE_CONNECT_TIMEOUT, WRITE_SOCKET_TIMEOUT)) {
+            ArchiveFacts facts = archiveFacts(connection);
+            List<String> issues = archiveIssues(facts);
+            String status = issues.isEmpty() ? "READY" : "DEGRADED";
+            try (PreparedStatement ps = connection.prepareStatement("""
+                    INSERT INTO auth_svc.tenant_backup
+                        (tenant_code, stanza, endpoint, bucket, region, pitr_days, encryption,
+                         archive_mode, wal_level, archived_count, last_archived_at, failed_count,
+                         status, issues, last_verified_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now())
+                    ON CONFLICT (tenant_code) DO UPDATE
+                       SET stanza = EXCLUDED.stanza,
+                           endpoint = EXCLUDED.endpoint,
+                           bucket = EXCLUDED.bucket,
+                           region = EXCLUDED.region,
+                           pitr_days = EXCLUDED.pitr_days,
+                           encryption = EXCLUDED.encryption,
+                           archive_mode = EXCLUDED.archive_mode,
+                           wal_level = EXCLUDED.wal_level,
+                           archived_count = EXCLUDED.archived_count,
+                           last_archived_at = EXCLUDED.last_archived_at,
+                           failed_count = EXCLUDED.failed_count,
+                           status = EXCLUDED.status,
+                           issues = EXCLUDED.issues,
+                           last_verified_at = now(),
+                           updated_at = now()
+                    """)) {
+                ps.setString(1, plan.tenantCode());
+                ps.setString(2, plan.stanza());
+                ps.setString(3, plan.endpoint());
+                ps.setString(4, plan.bucket());
+                ps.setString(5, plan.region());
+                ps.setInt(6, plan.pitrDays());
+                ps.setString(7, plan.encryption());
+                ps.setString(8, facts.archiveMode());
+                ps.setString(9, facts.walLevel());
+                ps.setLong(10, facts.archivedCount());
+                ps.setTimestamp(11, facts.lastArchivedAt() == null
+                        ? null : Timestamp.from(facts.lastArchivedAt()));
+                ps.setLong(12, facts.failedCount());
+                ps.setString(13, status);
+                Array array = connection.createArrayOf("text", issues.toArray());
+                ps.setArray(14, array);
+                ps.executeUpdate();
+            }
+            return new BackupStatus(true, status, plan.bucket(), plan.stanza(), plan.pitrDays(),
+                    facts.archiveMode(), facts.walLevel(), facts.archivedCount(),
+                    facts.lastArchivedAt(), facts.failedCount(), null, issues);
+        } catch (SQLException e) {
+            // 42P01 = undefined_table：Cell 还没跑到 V100。这是"迁移未完成"，不是备份逻辑错误，
+            // 必须给出可执行指令（否则运维只能看到一句 relation does not exist）。
+            if ("42P01".equals(e.getSQLState())) {
+                throw new CellDatabaseException(
+                        "Cell 尚未迁移到 V100（缺 auth_svc.tenant_backup）：请先在该 Cell 执行迁移后 resume", e);
+            }
+            throw new CellDatabaseException("登记备份计划失败：" + safeMessage(e), e);
+        }
+    }
+
+    @Override
+    public BackupStatus backupStatus(String dbHost, String dbName, String tenantCode) {
+        try (Connection connection = open(dbHost, dbName, PROBE_CONNECT_TIMEOUT, PROBE_SOCKET_TIMEOUT);
+             PreparedStatement ps = connection.prepareStatement("""
+                     SELECT bucket, stanza, pitr_days, status, archive_mode, wal_level,
+                            archived_count, last_archived_at, failed_count, last_full_at, issues
+                       FROM auth_svc.tenant_backup
+                      WHERE tenant_code = ?
+                     """)) {
+            ps.setString(1, tenantCode);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (!rs.next()) {
+                    return BackupStatus.none();
+                }
+                return new BackupStatus(true, rs.getString("status"), rs.getString("bucket"),
+                        rs.getString("stanza"), rs.getInt("pitr_days"),
+                        rs.getString("archive_mode"), rs.getString("wal_level"),
+                        rs.getLong("archived_count"), instant(rs, "last_archived_at"),
+                        rs.getLong("failed_count"), instant(rs, "last_full_at"),
+                        textArray(rs, "issues"));
+            }
+        } catch (SQLException e) {
+            throw new CellDatabaseException("读取备份状态失败：" + safeMessage(e), e);
+        }
+    }
+
+    /**
+     * 读取 WAL 归档事实。
+     *
+     * <p>{@code SHOW} 的参数是编译期常量，不来自请求；{@code pg_stat_archiver} 在 PG10+
+     * 恒存在（只有累计值，不含任何业务数据）。
+     */
+    private static ArchiveFacts archiveFacts(Connection connection) throws SQLException {
+        String archiveMode = show(connection, "archive_mode");
+        String walLevel = show(connection, "wal_level");
+        long archived = 0;
+        long failed = 0;
+        Instant lastArchived = null;
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery(
+                     "SELECT archived_count, last_archived_time, failed_count FROM pg_stat_archiver")) {
+            if (rs.next()) {
+                archived = rs.getLong("archived_count");
+                failed = rs.getLong("failed_count");
+                lastArchived = instant(rs, "last_archived_time");
+            }
+        }
+        return new ArchiveFacts(archiveMode, walLevel, archived, lastArchived, failed);
+    }
+
+    private static String show(Connection connection, String parameter) throws SQLException {
+        try (Statement statement = connection.createStatement();
+             ResultSet rs = statement.executeQuery("SHOW " + parameter)) {
+            return rs.next() ? rs.getString(1) : null;
+        }
+    }
+
+    /**
+     * 把归档事实翻译成可执行的问题清单。
+     *
+     * <p>这里不做"悄悄放过"：没有 archive_mode 就没有 PITR，恢复只能回到最近一次全备，
+     * RPO 从分钟级退化到一天级——必须在开通步骤与健康度上同时可见。
+     */
+    private static List<String> archiveIssues(ArchiveFacts facts) {
+        List<String> issues = new ArrayList<>();
+        if (facts.archiveMode() == null || !"on".equalsIgnoreCase(facts.archiveMode().trim())) {
+            issues.add("archive_mode=" + value(facts.archiveMode())
+                    + "：未开启 WAL 归档，无法按时间点恢复（PITR）");
+        }
+        String level = facts.walLevel() == null ? "" : facts.walLevel().trim().toLowerCase(Locale.ROOT);
+        if (!Set.of("replica", "logical").contains(level)) {
+            issues.add("wal_level=" + value(facts.walLevel()) + "：不足以支撑 PITR（要求 replica/logical）");
+        }
+        if (facts.failedCount() > 0) {
+            issues.add("WAL 归档失败 " + facts.failedCount() + " 次：检查 archive_command 与仓库权限");
+        }
+        return issues;
+    }
+
+    private static String value(String raw) {
+        return raw == null || raw.isBlank() ? "(未知)" : raw.trim();
+    }
+
+    private static Instant instant(ResultSet rs, String column) throws SQLException {
+        Timestamp ts = rs.getTimestamp(column);
+        return ts == null ? null : ts.toInstant();
+    }
+
+    private static List<String> textArray(ResultSet rs, String column) throws SQLException {
+        Array array = rs.getArray(column);
+        if (array == null) {
+            return List.of();
+        }
+        Object value = array.getArray();
+        if (value instanceof String[] items) {
+            return List.of(items);
+        }
+        return List.of();
+    }
+
+    private record ArchiveFacts(String archiveMode, String walLevel, long archivedCount,
+                                Instant lastArchivedAt, long failedCount) {
     }
 
     // ---------------------------------------------------------------- 内部方法

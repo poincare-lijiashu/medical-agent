@@ -208,6 +208,17 @@
                 <span class="spacer" />
                 <span class="sub">检查于 {{ dateTime(selectedHealth.checkedAt) }}</span>
               </div>
+              <div class="health-backup">
+                <span class="badge" :class="backupBadge(selectedHealth.backupState)">
+                  备份 {{ backupText(selectedHealth.backupState) }}
+                </span>
+                <span class="sub">
+                  备份桶 <span class="mono">{{ selectedHealth.backupBucket || '未登记' }}</span>
+                  · PITR 保留 {{ selectedHealth.backupPitrDays || 0 }} 天
+                  · 最近归档
+                  {{ selectedHealth.backupLastArchivedAt ? dateTime(selectedHealth.backupLastArchivedAt) : '—' }}
+                </span>
+              </div>
               <ul v-if="selectedHealth.issues.length" class="health-issues">
                 <li v-for="(issue, i) in selectedHealth.issues" :key="i">{{ issue }}</li>
               </ul>
@@ -444,7 +455,8 @@
       <div class="form">
         <p class="hint">
           开通会依次执行：登记租户目录 → 探测 Cell 数据库结构 → 在 Cell 内登记租户 →
-          创建首个管理员 → 授权检查 → 激活 → 健康快照。失败可按原任务从失败步骤继续。
+          创建首个管理员 → 建独立备份桶并校验 WAL 归档 → 授权检查 → 激活 → 健康快照。
+          失败可按原任务从失败步骤继续。
         </p>
         <div class="form-grid">
           <label class="form-row">
@@ -481,6 +493,15 @@
             <input v-model="provisionForm.region" class="input" type="text" placeholder="cn-east" />
           </label>
           <label class="form-row">
+            <span class="label">备份端点</span>
+            <input v-model="provisionForm.backupEndpoint" class="input mono" type="text" placeholder="留空使用平台默认" />
+            <span class="hint">一院一桶；桶名默认 medassist-backup-&lt;租户编码&gt;</span>
+          </label>
+          <label class="form-row">
+            <span class="label">PITR 保留天数</span>
+            <input v-model.number="provisionForm.backupPitrDays" class="input" type="number" min="1" max="35" />
+          </label>
+          <label class="form-row">
             <span class="label">首个管理员登录名 <span class="req">*</span></span>
             <input v-model="provisionForm.adminUsername" class="input mono" type="text" placeholder="admin01" />
           </label>
@@ -500,6 +521,10 @@
         <label class="checkbox-row">
           <input v-model="provisionForm.requireLicense" type="checkbox" />
           <span>要求该实例已有可用授权（生产建议开启；本地/离线交付可关闭）</span>
+        </label>
+        <label class="checkbox-row">
+          <input v-model="provisionForm.requireBackup" type="checkbox" />
+          <span>要求备份/PITR 就绪后才允许激活（合规合同建议开启；本地 PG 未开归档时先关闭）</span>
         </label>
         <p class="hint">管理员口令由服务端生成，只在开通成功时显示一次，请当场转交并督促改密。</p>
         <p v-if="provisionError" class="form-error">{{ provisionError }}</p>
@@ -666,6 +691,7 @@ import { releaseApi, type CellComponentStatus, type CellReleaseStatus } from '@/
 import {
   TENANT_STATUS_TEXT,
   tenantApi,
+  type BackupState,
   type CellMigrationView,
   type ProvisionJob,
   type ProvisionStepStatus,
@@ -852,6 +878,27 @@ function healthBadge(state?: TenantHealthState): string {
   return 'badge--neutral'
 }
 
+/** 备份状态文案（§286）：未登记/读取失败不伪装成"正常"。 */
+function backupText(state?: BackupState | null): string {
+  if (!state) return '—'
+  const map: Record<BackupState, string> = {
+    READY: '已就绪',
+    PENDING: '待首次全备',
+    DEGRADED: '未就绪',
+    FAILED: '失败',
+    NONE: '未登记',
+    UNKNOWN: '未知',
+  }
+  return map[state]
+}
+
+function backupBadge(state?: BackupState | null): string {
+  if (state === 'READY') return 'badge--ok'
+  if (state === 'DEGRADED' || state === 'FAILED') return 'badge--danger'
+  if (state === 'PENDING') return 'badge--warn'
+  return 'badge--neutral'
+}
+
 function releaseText(status?: CellReleaseStatus): string {
   if (!status) return '—'
   if (status.state === 'FAILED') return `部署失败 ${status.failedComponents}`
@@ -968,11 +1015,14 @@ const provisionForm = reactive({
   dbName: 'medagent',
   cellEndpoint: '',
   region: 'local',
+  backupEndpoint: '',
+  backupPitrDays: 7,
   adminUsername: 'admin01',
   adminDisplayName: '',
   maxBeds: undefined as number | undefined,
   maxUsers: undefined as number | undefined,
   requireLicense: false,
+  requireBackup: false,
 })
 
 const provisionStatusText = computed(() => {
@@ -1002,11 +1052,14 @@ function openProvision() {
   provisionForm.dbName = 'medagent'
   provisionForm.cellEndpoint = ''
   provisionForm.region = 'local'
+  provisionForm.backupEndpoint = ''
+  provisionForm.backupPitrDays = 7
   provisionForm.adminUsername = 'admin01'
   provisionForm.adminDisplayName = ''
   provisionForm.maxBeds = undefined
   provisionForm.maxUsers = undefined
   provisionForm.requireLicense = false
+  provisionForm.requireBackup = false
   provisionOpen.value = true
 }
 
@@ -1038,6 +1091,11 @@ async function doProvision() {
         displayName: provisionForm.adminDisplayName.trim(),
       },
       requireLicense: provisionForm.requireLicense,
+      backup: {
+        endpoint: provisionForm.backupEndpoint.trim() || undefined,
+        pitrDays: provisionForm.backupPitrDays || undefined,
+        requireBackup: provisionForm.requireBackup,
+      },
     })
     if (provisionJob.value.status === 'SUCCEEDED') {
       toast.ok(`Cell 已开通：${provisionJob.value.tenantCode}`)
@@ -1401,6 +1459,15 @@ function suggestCode(): string {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+/* §286：备份/PITR 行与健康结论同一块展示，避免"正常"掩盖无备份 */
+.health-backup {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
 }
 .health-issues {
   margin: 0;
