@@ -23,7 +23,7 @@ import java.nio.charset.StandardCharsets;
  * 代价是令牌在 TTL 内无法即时撤销，见 README「已知边界」。
  */
 @Configuration
-@EnableConfigurationProperties(GatewayAuthProperties.class)
+@EnableConfigurationProperties({GatewayAuthProperties.class, GatewayTenantProperties.class})
 public class GatewayAuthConfig {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayAuthConfig.class);

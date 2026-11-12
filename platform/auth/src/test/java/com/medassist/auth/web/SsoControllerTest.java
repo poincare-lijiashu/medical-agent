@@ -58,20 +58,20 @@ class SsoControllerTest {
         request.setRemoteAddr("10.20.30.40");
         request.addHeader("User-Agent", "JUnit");
         LoginResp login = loginResp();
-        when(service.callback(any(CallbackReq.class), eq("10.20.30.40"), eq("JUnit")))
+        when(service.callback(any(CallbackReq.class), eq("10.20.30.40"), eq("JUnit"), eq("tenant-001")))
                 .thenReturn(login);
 
-        LoginResp result = controller.callback(new CallbackReq("code", "state"), request).data();
+        LoginResp result = controller.callback(new CallbackReq("code", "state"), "tenant-001", request).data();
 
         assertThat(result).isSameAs(login);
-        verify(service).callback(any(CallbackReq.class), eq("10.20.30.40"), eq("JUnit"));
+        verify(service).callback(any(CallbackReq.class), eq("10.20.30.40"), eq("JUnit"), eq("tenant-001"));
     }
 
     private static LoginResp loginResp() {
         Instant now = Instant.now();
         UUID id = UUID.randomUUID();
         MeResp me = new MeResp(id, "doctor01", "Doctor", "E001", "D001", List.of(),
-                List.of("DOCTOR"), List.of("emr:record:read"), now);
+                List.of("DOCTOR"), List.of("emr:record:read"), now, "tenant-001");
         return new LoginResp("access", "Bearer", 1800, now.plusSeconds(1800),
                 "refresh", now.plusSeconds(604800), me);
     }

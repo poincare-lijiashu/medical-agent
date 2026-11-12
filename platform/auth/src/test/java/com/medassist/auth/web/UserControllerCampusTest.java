@@ -36,12 +36,12 @@ class UserControllerCampusTest {
         AssignCampusesReq req = new AssignCampusesReq(campuses);
 
         assertThatThrownBy(() -> controller.assignCampuses(userId, req,
-                "auth:user:read", "admin01"))
+                "auth:user:read", "tenant-001", "admin01"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
 
-        controller.assignCampuses(userId, req, "auth:user:update", "admin01");
-        verify(service).assignCampuses(userId, campuses, "admin01");
+        controller.assignCampuses(userId, req, "auth:user:update", "tenant-001", "admin01");
+        verify(service).assignCampuses(userId, campuses, "admin01", "tenant-001");
     }
 }

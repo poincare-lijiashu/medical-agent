@@ -19,6 +19,8 @@ public record MeResp(
         List<UUID> deptIds,
         List<String> roles,
         List<String> permissions,
-        Instant lastLoginAt
+        Instant lastLoginAt,
+        /** 账号所属租户（ADR-001）；前端在页头展示"当前院区/实例"，避免在错误的入口操作。 */
+        String tenantCode
 ) {
 }

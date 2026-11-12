@@ -126,6 +126,20 @@ public class JwtTokenService {
      */
     public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
                              List<UUID> deptIds, List<UUID> campusIds, String deptName) {
+        return issue(user, roles, permissions, deptIds, campusIds, deptName, null, null);
+    }
+
+    /**
+     * 为账号签发访问令牌，并携带租户与实例声明（§281 / ADR-001）。
+     *
+     * <p>{@code tenant} 与 {@code instance} 是<b>入口校验</b>用的，不是业务过滤条件：
+     * 网关拿它与 Host 映射比对，防止"拿 A 院令牌打 B 院入口"；{@code instance} 让
+     * 令牌只在本 Cell 有效，跨 Cell 重放直接 403。两者缺失（旧令牌/内部调用）时不下发声明，
+     * 网关按配置决定是否放行（生产开启多租户路由后要求必须存在）。
+     */
+    public IssuedToken issue(UserAccount user, List<String> roles, List<String> permissions,
+                             List<UUID> deptIds, List<UUID> campusIds, String deptName,
+                             String tenantCode, String instanceCode) {
         Instant now = Instant.now().truncatedTo(ChronoUnit.SECONDS);
         Instant expiresAt = now.plus(props.ttl());
         String tokenId = UUID.randomUUID().toString();
@@ -151,6 +165,12 @@ public class JwtTokenService {
         }
         if (deptName != null && !deptName.isBlank()) {
             claims.claim("dept", deptName.trim());
+        }
+        if (tenantCode != null && !tenantCode.isBlank()) {
+            claims.claim("tenant", tenantCode.trim());
+        }
+        if (instanceCode != null && !instanceCode.isBlank()) {
+            claims.claim("instance", instanceCode.trim());
         }
 
         Jwt jwt = encoder.encode(JwtEncoderParameters.from(
@@ -212,6 +232,8 @@ public class JwtTokenService {
                     permissions == null ? List.of() : permissions,
                     deptIds == null ? List.of() : deptIds,
                     jwt.getClaimAsString("org"),
+                    jwt.getClaimAsString("tenant"),
+                    jwt.getClaimAsString("instance"),
                     jwt.getIssuedAt(),
                     jwt.getExpiresAt(),
                     jwt.getId()));
@@ -233,6 +255,7 @@ public class JwtTokenService {
     /** 校验结果（令牌声明快照）。 */
     public record TokenClaims(String userId, String username, String displayName, List<String> roles,
                               List<String> permissions, List<String> deptIds, String orgCode,
+                              String tenantCode, String instanceCode,
                               Instant issuedAt, Instant expiresAt, String tokenId) {
     }
 }

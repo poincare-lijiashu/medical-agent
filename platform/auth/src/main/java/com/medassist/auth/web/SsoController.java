@@ -13,6 +13,7 @@ import jakarta.validation.Valid;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -44,9 +45,11 @@ public class SsoController {
     }
 
     @PostMapping("/oidc/callback")
-    public ApiResponse<LoginResp> callback(@Valid @RequestBody CallbackReq req,
-                                           HttpServletRequest request) {
-        return ApiResponse.ok(service.callback(req, clientIp(request), userAgent(request)));
+    public ApiResponse<LoginResp> callback(
+            @Valid @RequestBody CallbackReq req,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
+            HttpServletRequest request) {
+        return ApiResponse.ok(service.callback(req, clientIp(request), userAgent(request), tenant));
     }
 
     private static String clientIp(HttpServletRequest request) {

@@ -5,6 +5,7 @@ import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.DataScope;
 import com.medassist.common.security.DataScopeResolver;
 import com.medassist.gateway.config.GatewayAuthProperties;
+import com.medassist.gateway.config.GatewayTenantProperties;
 import com.medassist.gateway.security.ClientIpResolver;
 import com.medassist.gateway.security.TokenRevocationCache;
 import com.medassist.gateway.web.GatewayResponses;
@@ -41,7 +42,9 @@ import java.util.UUID;
  *   <li>命中 {@code denyPaths}（如 {@code /api/v2/* /internal/**}）直接 404；</li>
  *   <li>命中白名单（登录/刷新/健康检查）放行；非受保护前缀（v1 兼容层）放行；</li>
  *   <li>受保护路径：校验 Bearer JWT → 检查 jti 是否在撤销名单 → 按令牌声明写入身份头
- *       （账号/角色/权限/令牌 ID/科室）。</li>
+ *       （账号/角色/权限/令牌 ID/科室）；</li>
+ *   <li>租户一致性（§281）：入口 Host 映射到租户后，令牌 {@code tenant} 必须与之一致、
+ *       {@code instance} 必须是本 Cell，否则 403 并注入校验通过的 {@code X-Tenant}。</li>
  * </ol>
  *
  * <p>过滤器顺序 -100：早于路由与转发过滤器，保证下游看不到未清洗的请求头。
@@ -54,6 +57,7 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     private static final String BEARER_PREFIX = "Bearer ";
 
     private final GatewayAuthProperties props;
+    private final GatewayTenantProperties tenantProps;
     private final JwtDecoder decoder;
     private final TokenRevocationCache revocations;
     private final ClientIpResolver clientIpResolver;
@@ -61,9 +65,11 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     private final List<PathPattern> protectedPaths;
     private final List<PathPattern> denyPaths;
 
-    public AuthGlobalFilter(GatewayAuthProperties props, JwtDecoder jwtDecoder,
-                            TokenRevocationCache revocations, ClientIpResolver clientIpResolver) {
+    public AuthGlobalFilter(GatewayAuthProperties props, GatewayTenantProperties tenantProps,
+                            JwtDecoder jwtDecoder, TokenRevocationCache revocations,
+                            ClientIpResolver clientIpResolver) {
         this.props = props;
+        this.tenantProps = tenantProps;
         this.decoder = jwtDecoder;
         this.revocations = revocations;
         this.clientIpResolver = clientIpResolver;
@@ -95,12 +101,24 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
             return GatewayResponses.reject(cleaned, HttpStatus.NOT_FOUND, ErrorCode.NOT_FOUND,
                     ErrorCode.NOT_FOUND.defaultMessage(), traceId);
         }
+
+        // 租户解析（ADR-001）：入口 Host → 租户。先于鉴权开关，因为"入口没登记"比"没登录"更根本。
+        String hostTenant = tenantProps.resolveHost(cleaned.getRequest().getURI().getHost());
+        if (tenantProps.enabled() && hostTenant == null) {
+            log.info("gateway.tenant.unknown_host path={} traceId={} host={}",
+                    path.value(), traceId, cleaned.getRequest().getURI().getHost());
+            return GatewayResponses.reject(cleaned, HttpStatus.FORBIDDEN, ErrorCode.TENANT_MISMATCH,
+                    "当前访问入口未登记到任何院区，请联系平台运营", traceId);
+        }
+        // 未启用多租户或入口未映射时，落到默认租户（单院私有化 / 本地联调）
+        String entryTenant = hostTenant != null ? hostTenant : tenantProps.effectiveDefaultTenant();
+
         if (!props.enabled()) {
-            return chain.filter(cleaned);
+            return chain.filter(withTenant(cleaned, entryTenant));
         }
 
         if (matches(whitelist, path) || !matches(protectedPaths, path)) {
-            return chain.filter(cleaned);
+            return chain.filter(withTenant(cleaned, entryTenant));
         }
 
         String token = bearerToken(sanitized);
@@ -160,12 +178,42 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
         } else {
             campus = DataScope.DEFAULT_CAMPUS_ID.toString();
         }
+
+        // 租户与实例校验（ADR-001）：令牌必须属于当前 Cell，且与入口 Host 指向的租户一致。
+        // 这是"拿 A 院令牌打 B 院入口"的唯一拦截点——下游按 Cell 物理隔离，已经没有第二道防线。
+        String tokenTenant = jwt.getClaimAsString("tenant");
+        String tokenInstance = jwt.getClaimAsString("instance");
+        if (tenantProps.enabled()) {
+            if (tokenTenant == null || tokenTenant.isBlank()) {
+                log.info("gateway.tenant.claim.missing path={} traceId={}", path.value(), traceId);
+                return unauthorized(cleaned, traceId, "登录凭证缺少院区信息，请重新登录");
+            }
+            if (!tokenTenant.trim().equalsIgnoreCase(entryTenant)) {
+                log.warn("gateway.tenant.mismatch path={} traceId={} entry={} token={}",
+                        path.value(), traceId, entryTenant, tokenTenant);
+                return GatewayResponses.reject(cleaned, HttpStatus.FORBIDDEN, ErrorCode.TENANT_MISMATCH,
+                        ErrorCode.TENANT_MISMATCH.defaultMessage(), traceId);
+            }
+            String expectedInstance = tenantProps.effectiveInstanceCode();
+            if (expectedInstance != null
+                    && (tokenInstance == null || !expectedInstance.equalsIgnoreCase(tokenInstance.trim()))) {
+                log.warn("gateway.tenant.instance.mismatch path={} traceId={} expected={} actual={}",
+                        path.value(), traceId, expectedInstance, tokenInstance);
+                return GatewayResponses.reject(cleaned, HttpStatus.FORBIDDEN, ErrorCode.TENANT_INSTANCE_MISMATCH,
+                        ErrorCode.TENANT_INSTANCE_MISMATCH.defaultMessage(), traceId);
+            }
+        }
+        // 下游看到的租户：以令牌声明为准（身份归属），令牌缺失时才回退入口租户。
+        // 启用多租户时两者必然一致（上面已校验），因此不会出现"下游看到的租户与入口不同"。
+        String tenant = (tokenTenant != null && !tokenTenant.isBlank()) ? tokenTenant.trim() : entryTenant;
+
         ServerHttpRequest withIdentity = cleaned.getRequest().mutate()
                 .header(AuthHeaders.ACTOR, actor)
                 .header(AuthHeaders.USER_ID, subject)
                 .header(AuthHeaders.ROLES, roles == null ? "" : String.join(",", roles))
                 .header(AuthHeaders.PERMISSIONS, permissions == null ? "" : String.join(",", permissions))
                 .header(AuthHeaders.TOKEN_ID, tokenId == null ? "" : tokenId)
+                .header(AuthHeaders.TENANT, tenant)
                 .headers(h -> {
                     if (org != null && !org.isBlank()) {
                         h.set(AuthHeaders.ORG, org);
@@ -204,6 +252,14 @@ public class AuthGlobalFilter implements GlobalFilter, Ordered {
     private Mono<Void> unauthorized(ServerWebExchange exchange, String traceId, String message) {
         return GatewayResponses.reject(exchange, HttpStatus.UNAUTHORIZED, ErrorCode.UNAUTHORIZED,
                 message, traceId);
+    }
+
+    /** 未鉴权路径（登录/刷新/健康检查）也要带上租户：auth 按它决定"在哪家医院查账号"。 */
+    private static ServerWebExchange withTenant(ServerWebExchange exchange, String tenant) {
+        ServerHttpRequest request = exchange.getRequest().mutate()
+                .header(AuthHeaders.TENANT, tenant)
+                .build();
+        return exchange.mutate().request(request).build();
     }
 
     private static String bearerToken(ServerHttpRequest request) {

@@ -584,7 +584,21 @@ public enum ErrorCode {
     OAUTH_SCOPE_NOT_ALLOWED(55403, "申请的范围不在开放平台可授予目录内（第三方只允许只读范围）"),
     OAUTH_CLIENT_STATUS_INVALID(55404, "当前客户端状态不允许该操作"),
     OAUTH_SECRET_INVALID(40132, "客户端密钥不正确"),
-    OAUTH_CLIENT_DISABLED(40133, "客户端已停用或已过期，请联系平台管理员");
+    OAUTH_CLIENT_DISABLED(40133, "客户端已停用或已过期，请联系平台管理员"),
+
+    // ---- 租户与实例隔离（56xxx，§281 / ADR-001 全院级全栈隔离）----
+    /*
+     * 租户 = 一家医院（独立 Cell），院区 = 同一医院内的多院区。
+     * 台账只存元数据，不存患者数据；临床数据面按 Cell 物理隔离，不存在跨租户查询路径。
+     */
+    TENANT_NOT_FOUND(56401, "未找到该租户，或该租户尚未开通"),
+    TENANT_INVALID(56402, "租户参数不合法（编码/实例码/端点/配额有误）"),
+    TENANT_STATUS_INVALID(56403, "当前租户状态不允许该操作"),
+    TENANT_DUPLICATE(56409, "租户编码或实例码已存在，请核对后重试"),
+    /** 403 段：租户被停用后，全院禁止登录；已签发的令牌由网关按入口拦截。 */
+    TENANT_SUSPENDED(40320, "该院区已停用，请联系平台运营"),
+    TENANT_MISMATCH(40321, "访问入口与登录租户不一致，请从本院入口登录"),
+    TENANT_INSTANCE_MISMATCH(40322, "登录凭证不属于当前部署实例，请从本院入口重新登录");
 
     private final int code;
     private final String defaultMessage;

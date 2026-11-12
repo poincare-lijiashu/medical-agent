@@ -102,6 +102,8 @@ const messages: Record<MessageKey, string> = {
   'nav.ops-console.hint': 'SLA tickets · response/resolve countdown · on-call rotation · incidents & postmortems',
   'nav.license.title': 'License & Entitlements',
   'nav.license.hint': 'Editions and module entitlements · quota usage · signed license import · renewal and revocation',
+  'nav.tenant.title': 'Tenants',
+  'nav.tenant.hint': 'One hospital, one cell · instance and entry point · capacity quotas · suspend means offline · change history',
   'nav.open-platform.title': 'Open Platform',
   'nav.open-platform.hint': 'Third-party client_credentials · read-only scope catalog · secret rotation and disable · integration examples',
   'nav.release-console.title': 'Release Management',

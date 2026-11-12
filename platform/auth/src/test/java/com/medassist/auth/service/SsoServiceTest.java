@@ -1,6 +1,7 @@
 package com.medassist.auth.service;
 
 import com.medassist.auth.config.SsoProperties;
+import com.medassist.auth.config.TenantProperties;
 import com.medassist.auth.domain.SsoIdentity;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.SsoRepository;
@@ -54,7 +55,7 @@ class SsoServiceTest {
                 List.of("openid", "profile"), Duration.ofSeconds(2), "preferred_username",
                 "email", "name", autoProvision, List.of("DOCTOR"), "D001");
         return new SsoService(props, oidc, sso, users, provisioner, authService,
-                JsonMapper.builder().build());
+                JsonMapper.builder().build(), new TenantProperties("tenant-001", null, true));
     }
 
     @BeforeEach
@@ -164,7 +165,7 @@ class SsoServiceTest {
         when(oidc.decodeIdToken("id-token"))
                 .thenReturn(jwt("doctor01", "nonce-1", List.of("medassist-console")));
         when(sso.findIdentity("OIDC", "subject-1")).thenReturn(Optional.empty());
-        when(users.findByUsername("doctor01")).thenReturn(Optional.of(user));
+        when(users.findByUsername("tenant-001", "doctor01")).thenReturn(Optional.of(user));
         when(sso.findIdentityByUser("OIDC", user.id())).thenReturn(Optional.empty());
         when(authService.loginExternal(user, "OIDC", "subject-1", "ip", "ua")).thenReturn(expected);
 
@@ -183,14 +184,14 @@ class SsoServiceTest {
         when(oidc.decodeIdToken("id-token"))
                 .thenReturn(jwt("ghost01", "nonce-1", List.of("medassist-console")));
         when(sso.findIdentity("OIDC", "subject-1")).thenReturn(Optional.empty());
-        when(users.findByUsername("ghost01")).thenReturn(Optional.empty());
+        when(users.findByUsername("tenant-001", "ghost01")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.callback(new CallbackReq("code", "state-1"), "ip", "ua"))
                 .isInstanceOf(BusinessException.class)
                 .extracting(e -> ((BusinessException) e).errorCode())
                 .isEqualTo(ErrorCode.SSO_IDENTITY_NOT_LINKED);
         verify(provisioner, never()).provisionAndBind(any(), anyString(), anyString(), anyString(),
-                anyString(), anyString());
+                anyString(), anyString(), anyString());
     }
 
     @Test
@@ -227,16 +228,16 @@ class SsoServiceTest {
         when(oidc.decodeIdToken("id-token"))
                 .thenReturn(jwt("newdoc01", "nonce-1", List.of("medassist-console")));
         when(sso.findIdentity("OIDC", "subject-1")).thenReturn(Optional.empty());
-        when(users.findByUsername("newdoc01")).thenReturn(Optional.empty());
+        when(users.findByUsername("tenant-001", "newdoc01")).thenReturn(Optional.empty());
         when(provisioner.provisionAndBind(any(), eq("OIDC"), eq("subject-1"), eq("newdoc01"),
-                eq("Doctor One"), eq("doctor@example.com"))).thenReturn(user);
+                eq("Doctor One"), eq("doctor@example.com"), eq("tenant-001"))).thenReturn(user);
         when(authService.loginExternal(user, "OIDC", "subject-1", "ip", "ua")).thenReturn(expected);
 
         LoginResp result = service.callback(new CallbackReq("code", "state-1"), "ip", "ua");
 
         assertThat(result).isSameAs(expected);
         verify(provisioner).provisionAndBind(any(), eq("OIDC"), eq("subject-1"), eq("newdoc01"),
-                eq("Doctor One"), eq("doctor@example.com"));
+                eq("Doctor One"), eq("doctor@example.com"), eq("tenant-001"));
     }
 
     // ---------------------------------------------------------------- helpers
@@ -259,13 +260,14 @@ class SsoServiceTest {
     private UserAccount user(String username) {
         Instant now = Instant.now();
         return new UserAccount(userId, username, "hash", "Doctor One", "E001", "D001",
-                "ACTIVE", 1L, now, now, now);
+                "ACTIVE", 1L, now, now, now, "tenant-001");
     }
 
     private LoginResp loginResp(UserAccount user) {
         Instant now = Instant.now();
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), List.of(), List.of("DOCTOR"), List.of("emr:record:read"), now);
+                user.orgCode(), List.of(), List.of("DOCTOR"), List.of("emr:record:read"), now,
+                user.tenantCode());
         return new LoginResp("access", "Bearer", 1800, now.plusSeconds(1800),
                 "refresh", now.plusSeconds(604800), me);
     }

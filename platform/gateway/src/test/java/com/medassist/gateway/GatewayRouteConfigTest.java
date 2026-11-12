@@ -57,13 +57,27 @@ class GatewayRouteConfigTest {
         return (List<Map<String, Object>>) webflux.get("routes");
     }
 
+    /**
+     * 平台路由清单（契约）：新增微服务时必须同步声明路由，避免"服务上线但网关没入口"。
+     *
+     * <p>此前用 {@code hasSize(15)} 表达同一意图，结果每次加服务都要改数字、
+     * 却看不出到底少了哪一条；改成显式清单后，失败信息直接指出缺失的路由 id。
+     */
+    private static final List<String> REQUIRED_PLATFORM_ROUTES = List.of(
+            "platform-auth-v2", "platform-empi-v2", "platform-clinical-v2", "platform-pharmacy-v2",
+            "platform-material-v2", "platform-tech-v2", "platform-emr-v2", "platform-insurance-v2",
+            "platform-kb-v2", "platform-fhir-v2", "platform-masterdata-v2", "platform-migration-v2",
+            "platform-ops-v2", "platform-release-v2", "platform-license-v2", "platform-audit-v2");
+
     @Test
     @DisplayName("所有平台路由都必须配置下游超时（慢下游不能占满网关连接池）")
     void platformRoutesHaveTimeouts() {
         List<Map<String, Object>> platformRoutes = routes(loadConfig()).stream()
                 .filter(r -> String.valueOf(r.get("id")).startsWith("platform-"))
                 .toList();
-        assertThat(platformRoutes).hasSize(15);
+        assertThat(platformRoutes).extracting(r -> r.get("id"))
+                .as("平台路由清单（缺一条就意味着某个服务在网关没有入口）")
+                .containsExactlyInAnyOrderElementsOf(REQUIRED_PLATFORM_ROUTES);
 
         for (Map<String, Object> r : platformRoutes) {
             assertThat(r.get("metadata")).as("路由 %s 缺少 metadata", r.get("id")).isNotNull();

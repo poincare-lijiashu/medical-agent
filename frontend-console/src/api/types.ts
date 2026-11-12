@@ -25,6 +25,8 @@ export interface Me {
   roles: string[]
   permissions: string[]
   lastLoginAt: string | null
+  /** 所属租户（ADR-001）：页头展示"当前院区"，避免在错误的入口操作。 */
+  tenantCode?: string | null
 }
 
 export interface LoginResult {

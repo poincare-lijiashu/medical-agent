@@ -30,8 +30,8 @@ import java.util.UUID;
  * <p>actor 与权限来源：网关注入的 {@code X-Actor} / {@code X-Permissions}（P0-4 起由网关按
  * JWT 声明重写，客户端提交的同名头会被网关先行剥离，无法伪造）。
  *
- * <p>P1 授权矩阵：每个端点显式声明所需权限点，角色调整只需改 auth 域 role_permission，
- * 本类无需改动。
+ * <p>§281 起所有端点都带租户作用域：{@code X-Tenant} 决定"在维护哪家医院的账号"。
+ * 目标账号不属于该租户时返回 404（与"不存在"同码），不泄露别家账号是否存在。
  */
 @RestController
 @RequestMapping("/users")
@@ -57,26 +57,29 @@ public class UserController {
             @RequestParam(required = false) String status,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.list(orgCode, status, page, size));
+        return ApiResponse.ok(service.list(tenant, orgCode, status, page, size));
     }
 
     @GetMapping("/{id}")
     public ApiResponse<UserResp> detail(
             @PathVariable UUID id,
-            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant) {
         Permissions.require(permissions, READ);
-        return ApiResponse.ok(service.detail(id));
+        return ApiResponse.ok(service.detail(id, tenant));
     }
 
     @PostMapping
     public ApiResponse<UserResp> create(
             @Valid @RequestBody CreateUserReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, CREATE);
-        return ApiResponse.ok(service.create(req, actor));
+        return ApiResponse.ok(service.create(req, actor, tenant));
     }
 
     @PutMapping("/{id}")
@@ -84,27 +87,30 @@ public class UserController {
             @PathVariable UUID id,
             @Valid @RequestBody UpdateUserReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, UPDATE);
-        return ApiResponse.ok(service.update(id, req, actor));
+        return ApiResponse.ok(service.update(id, req, actor, tenant));
     }
 
     @PostMapping("/{id}/disable")
     public ApiResponse<UserResp> disable(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, DISABLE);
-        return ApiResponse.ok(service.disable(id, actor));
+        return ApiResponse.ok(service.disable(id, actor, tenant));
     }
 
     @PostMapping("/{id}/enable")
     public ApiResponse<UserResp> enable(
             @PathVariable UUID id,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, DISABLE);
-        return ApiResponse.ok(service.enable(id, actor));
+        return ApiResponse.ok(service.enable(id, actor, tenant));
     }
 
     @PutMapping("/{id}/roles")
@@ -112,9 +118,10 @@ public class UserController {
             @PathVariable UUID id,
             @Valid @RequestBody AssignRolesReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, ASSIGN_ROLE);
-        return ApiResponse.ok(service.assignRoles(id, req.roles(), actor));
+        return ApiResponse.ok(service.assignRoles(id, req.roles(), actor, tenant));
     }
 
     /** 分配账号可见院区（G45）。 */
@@ -123,9 +130,10 @@ public class UserController {
             @PathVariable UUID id,
             @Valid @RequestBody AssignCampusesReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, UPDATE);
-        return ApiResponse.ok(service.assignCampuses(id, req.campusIds(), actor));
+        return ApiResponse.ok(service.assignCampuses(id, req.campusIds(), actor, tenant));
     }
 
     @PostMapping("/{id}/reset-password")
@@ -133,9 +141,10 @@ public class UserController {
             @PathVariable UUID id,
             @Valid @RequestBody ResetPasswordReq req,
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
             @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
         Permissions.require(permissions, RESET_PASSWORD);
-        service.resetPassword(id, req.newPassword(), actor);
+        service.resetPassword(id, req.newPassword(), actor, tenant);
         return ApiResponse.ok(null);
     }
 }

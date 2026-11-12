@@ -1,6 +1,7 @@
 package com.medassist.auth.security;
 
 import com.medassist.auth.config.SsoProperties;
+import com.medassist.auth.config.TenantProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
 
@@ -12,6 +13,7 @@ import org.springframework.context.annotation.Configuration;
  * 只做标准 JWT 编解码，避免自研签名逻辑带来的算法混淆/解析缺陷。
  */
 @Configuration
-@EnableConfigurationProperties({JwtProperties.class, LoginThrottleProperties.class, SsoProperties.class})
+@EnableConfigurationProperties({JwtProperties.class, LoginThrottleProperties.class, SsoProperties.class,
+        TenantProperties.class})
 public class AuthSecurityConfig {
 }

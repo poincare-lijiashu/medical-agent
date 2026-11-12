@@ -1,6 +1,7 @@
 package com.medassist.auth.service;
 
 import com.medassist.auth.config.SsoProperties;
+import com.medassist.auth.config.TenantProperties;
 import com.medassist.auth.domain.SsoIdentity;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.SsoRepository;
@@ -55,11 +56,13 @@ public class SsoService {
     private final SsoUserProvisioner provisioner;
     private final AuthService authService;
     private final ObjectMapper objectMapper;
+    private final TenantProperties tenantProps;
     private final SecureRandom random = new SecureRandom();
 
     public SsoService(SsoProperties props, OidcClient oidc, SsoRepository sso,
                       UserRepository users, SsoUserProvisioner provisioner,
-                      AuthService authService, ObjectMapper objectMapper) {
+                      AuthService authService, ObjectMapper objectMapper,
+                      TenantProperties tenantProps) {
         this.props = props;
         this.oidc = oidc;
         this.sso = sso;
@@ -67,6 +70,7 @@ public class SsoService {
         this.provisioner = provisioner;
         this.authService = authService;
         this.objectMapper = objectMapper;
+        this.tenantProps = tenantProps;
     }
 
     public ConfigView config() {
@@ -109,9 +113,20 @@ public class SsoService {
 
     /** 授权码回调：换取并校验 id_token，映射本地账号后签发平台令牌。 */
     public LoginResp callback(CallbackReq req, String clientIp, String userAgent) {
+        return callback(req, clientIp, userAgent, null);
+    }
+
+    /**
+     * 授权码回调（带租户）。
+     *
+     * <p>统一身份回调同样经网关进入，{@code X-Tenant} 指向"从哪个院入口发起"。
+     * 自动开户落在该租户；已绑定身份但账号属于别家医院时拒绝——
+     * 否则一个 IdP 主体可以把身份绑到任意医院的账号上。
+     */
+    public LoginResp callback(CallbackReq req, String clientIp, String userAgent, String tenantCode) {
         requireConfigured();
         try {
-            return doCallback(req, clientIp, userAgent);
+            return doCallback(req, clientIp, userAgent, resolveTenant(tenantCode));
         } catch (BusinessException e) {
             audit("anonymous", "SSO_LOGIN_FAILED", "unknown", Map.of(
                     "provider", props.provider(), "reason", e.errorCode().name()));
@@ -119,7 +134,7 @@ public class SsoService {
         }
     }
 
-    private LoginResp doCallback(CallbackReq req, String clientIp, String userAgent) {
+    private LoginResp doCallback(CallbackReq req, String clientIp, String userAgent, String tenant) {
         SsoRepository.LoginState loginState = sso.consumeState(req.state().trim())
                 .orElseThrow(() -> new BusinessException(ErrorCode.SSO_STATE_INVALID));
         if (!props.provider().equalsIgnoreCase(loginState.provider())) {
@@ -140,7 +155,7 @@ public class SsoService {
         String email = trimToNull(claim(jwt, props.emailClaim()), 255);
         String displayName = trimToNull(claim(jwt, props.nameClaim()), 128);
 
-        UserAccount user = resolveUser(subject, username, displayName, email);
+        UserAccount user = resolveUser(subject, username, displayName, email, tenant);
         return authService.loginExternal(user, props.provider(), subject, clientIp, userAgent);
     }
 
@@ -158,18 +173,19 @@ public class SsoService {
     }
 
     private UserAccount resolveUser(String subject, String username,
-                                    String displayName, String email) {
+                                    String displayName, String email, String tenant) {
         Optional<SsoIdentity> bound = sso.findIdentity(props.provider(), subject);
         if (bound.isPresent()) {
             UserAccount user = users.findById(bound.get().userId())
                     .orElseThrow(() -> new BusinessException(ErrorCode.SSO_IDENTITY_NOT_LINKED,
                             "统一身份绑定的本地账号已不存在"));
+            requireSameTenant(user, tenant);
             sso.upsertIdentity(new SsoIdentity(bound.get().id(), props.provider(), subject,
                     user.id(), email, displayName, bound.get().createdAt(), Instant.now()));
             return user;
         }
 
-        Optional<UserAccount> local = users.findByUsername(username);
+        Optional<UserAccount> local = users.findByUsername(tenant, username);
         if (local.isPresent()) {
             UserAccount user = local.get();
             Optional<SsoIdentity> other = sso.findIdentityByUser(props.provider(), user.id());
@@ -190,7 +206,29 @@ public class SsoService {
                     "统一身份用户名不符合本地账号规则");
         }
         return provisioner.provisionAndBind(props, props.provider(), subject,
-                username, displayName, email);
+                username, displayName, email, tenant);
+    }
+
+    /**
+     * 已绑定身份的账号必须属于当前入口租户。
+     *
+     * <p>统一身份是全局主体（一个 subject 全局唯一），但账号是租户内的；
+     * 不做这个校验，A 院 IdP 里同名主体就能登进 B 院账号。
+     */
+    private void requireSameTenant(UserAccount user, String tenant) {
+        String owner = user.tenantCode() == null || user.tenantCode().isBlank()
+                ? tenantProps.effectiveDefaultCode() : user.tenantCode();
+        if (!owner.equals(tenant)) {
+            throw new BusinessException(ErrorCode.SSO_IDENTITY_NOT_LINKED,
+                    "该统一身份绑定的账号不属于本院，请联系管理员处理");
+        }
+    }
+
+    /** 入口租户兜底：网关一定注入 X-Tenant，缺失只可能来自直连排障。 */
+    private String resolveTenant(String tenantCode) {
+        return tenantCode == null || tenantCode.isBlank()
+                ? tenantProps.effectiveDefaultCode()
+                : tenantCode.trim();
     }
 
     private void requireConfigured() {

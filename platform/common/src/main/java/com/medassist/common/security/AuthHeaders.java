@@ -34,6 +34,15 @@ public final class AuthHeaders {
     /** 当前令牌 ID（JWT {@code jti}），用于登出撤销与审计串联。 */
     public static final String TOKEN_ID = "X-Token-Id";
 
+    /**
+     * 租户（医院）编码（ADR-001）。
+     *
+     * <p>来源是入口 Host 的租户映射与令牌 {@code tenant} 声明，两者必须一致；
+     * 下游服务只信网关注入值，用于审计归属与运维排查，<b>不作为临床数据过滤条件</b>
+     * ——临床数据面按 Cell 物理隔离，不存在跨租户数据。
+     */
+    public static final String TENANT = "X-Tenant";
+
     /** 所属科室编码（未绑定科室时网关不下发该头）。 */
     public static final String ORG = "X-Org";
 
@@ -64,7 +73,7 @@ public final class AuthHeaders {
      * 客户端经网关提交的同名头没有任何合法用途（第五轮 R5-S1）。
      */
     public static final List<String> CLIENT_SUPPLIED = List.of(
-            ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, ORG, CAMPUS, CLIENT_IP, TRACE_ID,
+            ACTOR, USER_ID, ROLES, PERMISSIONS, TOKEN_ID, TENANT, ORG, CAMPUS, CLIENT_IP, TRACE_ID,
             INTERNAL_TOKEN, InternalSignature.HEADER_SIG, InternalSignature.HEADER_TS,
             InternalSignature.HEADER_NONCE, InternalSignature.HEADER_KEY_ID,
             InternalSignature.HEADER_SIG_VER, InternalSignature.HEADER_CALLER);

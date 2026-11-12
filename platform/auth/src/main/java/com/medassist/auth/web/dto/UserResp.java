@@ -17,6 +17,8 @@ public record UserResp(
         List<String> roles,
         long version,
         Instant lastLoginAt,
-        Instant createdAt
+        Instant createdAt,
+        /** 账号所属租户（ADR-001）；管理端按此确认"我在维护哪家医院的账号"。 */
+        String tenantCode
 ) {
 }

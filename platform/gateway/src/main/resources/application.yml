@@ -1,5 +1,9 @@
 server:
   port: 8080
+  # 请求头上限（与各业务服务的 32KB 对齐）。管理员令牌携带权限点快照约 7.6KB，
+  # 再加浏览器标准请求头（UA / sec-ch-ua / cookie 等）会越过 Netty 默认 8KB，
+  # 表现为整站 431 —— 命令行复现不了，只在真实浏览器出现（2026-11-12 实测）。
+  max-http-request-header-size: ${GATEWAY_MAX_HEADER_SIZE:32KB}
   # 优雅停机（S10）：SIGTERM 后先摘流再停，避免滚动/灰度期间把在途请求切断成 5xx
   shutdown: graceful
 
@@ -296,6 +300,18 @@ medassist:
         - /docs/**
         - /redoc/**
         - /openapi.json
+    # ---- 租户入口路由（§281 / ADR-001 全院级全栈隔离）----
+    # enabled=false（本地联调/单院私有化）：不要求 Host 映射与令牌租户声明，
+    #   一律注入 X-Tenant=${TENANT_DEFAULT_CODE}。
+    # enabled=true（多院控制面）：Host 必须命中 hosts 映射，令牌 tenant 必须与之一致，
+    #   instance 必须等于本 Cell 实例码；任一不符直接 403。
+    #   hosts 用 `环境变量 + 逗号分隔` 表达，避免 YAML 里写死域名：
+    #   TENANT_HOSTS="hospital-a.example=tenant-001,*.b.example=tenant-002"
+    tenant:
+      enabled: ${TENANT_ROUTING_ENABLED:false}
+      default-tenant: ${TENANT_DEFAULT_CODE:tenant-001}
+      instance-code: ${TENANT_INSTANCE_CODE:}
+      hosts: ${TENANT_HOSTS:}
     # 安全响应头（§267，等保三级）：对所有响应统一注入，HSTS 只在 HTTPS 时输出。
     # 生产保持 enabled=true；任何关闭动作都必须有院方书面审批。
     security-headers:

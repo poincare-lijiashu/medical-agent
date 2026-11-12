@@ -23,7 +23,7 @@ class JwtTokenServiceTest {
     private static final UserAccount USER = new UserAccount(
             UUID.fromString("11111111-2222-3333-4444-555555555555"),
             "zhangsan", "$2a$10$abcdefghijklmnopqrstuv", "张三", "E1001", "DEPT-01",
-            UserAccount.STATUS_ACTIVE, 0L, null, Instant.now(), Instant.now());
+            UserAccount.STATUS_ACTIVE, 0L, null, Instant.now(), Instant.now(), "tenant-001");
 
     @Test
     void issueAndVerifyRoundTrip() {

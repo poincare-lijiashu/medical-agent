@@ -550,6 +550,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['license:read'],
   },
   {
+    // 第 281 批：租户管理（ADR-001 一院一 Cell：实例/入口/配额/状态）
+    name: 'tenant',
+    path: '/tenant',
+    title: '租户管理',
+    hint: '一院一 Cell · 实例与入口 · 容量配额 · 停用即下线 · 变更留痕',
+    icon: 'building',
+    group: '系统管理',
+    permissions: ['tenant:read'],
+  },
+  {
     // 第 231 批：打印留痕（按单号核查补打次数与打印人；按院区收敛）
     name: 'print-history',
     path: '/print-events',

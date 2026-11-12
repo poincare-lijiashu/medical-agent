@@ -52,15 +52,24 @@ public class AuthController {
         this.internalToken = internalToken == null ? "" : internalToken;
     }
 
-    /** 登录：校验 bcrypt 密码，签发访问令牌 + 刷新令牌。网关白名单中唯一放行的业务路径。 */
+    /**
+     * 登录：校验 bcrypt 密码，签发访问令牌 + 刷新令牌。网关白名单中唯一放行的业务路径。
+     *
+     * <p>{@code X-Tenant} 由网关按入口 Host 解析后注入：同一用户名可以存在于不同医院，
+     * 没有租户就无法判断"在谁家查这个账号"。
+     */
     @PostMapping("/login")
-    public ApiResponse<LoginResp> login(@Valid @RequestBody LoginReq req, HttpServletRequest request) {
-        return ApiResponse.ok(service.login(req, clientIp(request), userAgent(request)));
+    public ApiResponse<LoginResp> login(
+            @Valid @RequestBody LoginReq req,
+            @RequestHeader(value = AuthHeaders.TENANT, required = false) String tenant,
+            HttpServletRequest request) {
+        return ApiResponse.ok(service.login(req, clientIp(request), userAgent(request), tenant));
     }
 
     /** 刷新：轮换刷新令牌并重新签发访问令牌。同样在网关白名单（访问令牌已过期时也要能调用）。 */
     @PostMapping("/refresh")
-    public ApiResponse<LoginResp> refresh(@Valid @RequestBody RefreshReq req, HttpServletRequest request) {
+    public ApiResponse<LoginResp> refresh(@Valid @RequestBody RefreshReq req,
+                                          HttpServletRequest request) {
         return ApiResponse.ok(service.refresh(req.refreshToken(), clientIp(request), userAgent(request)));
     }
 

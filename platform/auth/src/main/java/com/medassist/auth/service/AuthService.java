@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.config.TenantProperties;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
@@ -60,13 +61,16 @@ public class AuthService {
     private final PasswordHasher hasher;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
+    private final TenantService tenants;
+    private final TenantProperties tenantProps;
 
     /** 用于用户名不存在时的恒定耗时比对（服务启动时生成一次，内容无意义）。 */
     private final String dummyHash;
 
     public AuthService(UserRepository users, RbacRepository rbac, TokenRepository tokens,
                        JwtTokenService jwt, LoginThrottle throttle, PasswordHasher hasher,
-                       ObjectMapper objectMapper, MeterRegistry meterRegistry) {
+                       ObjectMapper objectMapper, MeterRegistry meterRegistry,
+                       TenantService tenants, TenantProperties tenantProps) {
         this.users = users;
         this.rbac = rbac;
         this.tokens = tokens;
@@ -75,7 +79,19 @@ public class AuthService {
         this.hasher = hasher;
         this.objectMapper = objectMapper;
         this.meterRegistry = meterRegistry;
+        this.tenants = tenants;
+        this.tenantProps = tenantProps;
         this.dummyHash = hasher.encode(UUID.randomUUID().toString());
+    }
+
+    /**
+     * 登录（默认租户）。
+     *
+     * <p>保留给内部/单院部署调用；HTTP 入口一律走带 {@code tenantCode} 的重载，
+     * 由网关注入的 {@code X-Tenant} 决定在哪个租户里查账号。
+     */
+    public LoginResp login(LoginReq req, String clientIp, String userAgent) {
+        return login(req, clientIp, userAgent, tenantProps.effectiveDefaultCode());
     }
 
     /**
@@ -83,8 +99,15 @@ public class AuthService {
      *
      * <p><b>刻意不加 {@code @Transactional}</b>：bcrypt 约 100ms，包事务会占用连接；
      * 且失败审计若在同一事务内会被异常回滚，失去暴力破解检测依据。
+     *
+     * <p>租户（ADR-001）在校验密码<b>之前</b>就检查状态：停用医院连"密码错误"都不应该返回，
+     * 否则等于对外确认"这个院还有效、账号也存在"。
      */
-    public LoginResp login(LoginReq req, String clientIp, String userAgent) {
+    public LoginResp login(LoginReq req, String clientIp, String userAgent, String tenantCode) {
+        String tenant = tenants.resolveTenant(tenantCode);
+        // 停用/未开通的租户直接拒绝（fail-closed）；异常带 403 语义，不进入限速计数
+        tenants.requireUsableTenant(tenant);
+
         String username = req.username().trim();
         LoginThrottle.Reservation reservation;
         try {
@@ -96,13 +119,13 @@ public class AuthService {
             throw e;
         }
 
-        Optional<UserAccount> found = users.findByUsername(username);
+        Optional<UserAccount> found = users.findByUsername(tenant, username);
         if (found.isEmpty()) {
             hasher.verify(req.password(), dummyHash);  // 恒定耗时，防账号枚举
             throttle.record(username, clientIp, false);
             countLogin("failure", "user_not_found");
             audit("anonymous", "LOGIN_FAILED", "unknown",
-                    Map.of("username", username, "reason", "USER_NOT_FOUND", "ip", clientIp));
+                    Map.of("username", username, "reason", "USER_NOT_FOUND", "ip", clientIp, "tenant", tenant));
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "用户名或密码错误");
         }
 
@@ -147,7 +170,7 @@ public class AuthService {
                 Map.of("roles", roles, "deptIds", deptIds, "tokenId", access.tokenId(), "ip", clientIp));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt());
+                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt(), user.tenantCode());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -165,6 +188,9 @@ public class AuthService {
                     Map.of("reason", "ACCOUNT_" + user.status(), "provider", provider));
             throw new BusinessException(ErrorCode.FORBIDDEN, "账号已停用或锁定，请联系管理员");
         }
+        // SSO 同样受租户状态约束：IdP 认证通过不代表这家医院还在服务期内
+        tenants.requireUsableTenant(user.tenantCode() == null || user.tenantCode().isBlank()
+                ? tenantProps.effectiveDefaultCode() : user.tenantCode());
         List<String> roles = users.rolesOf(user.id());
         if (roles.isEmpty()) {
             audit(user.username(), "LOGIN_FAILED", user.id().toString(),
@@ -184,7 +210,7 @@ public class AuthService {
                 "tokenId", access.tokenId(), "ip", clientIp));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt());
+                user.orgCode(), deptIds, roles, permissions, user.lastLoginAt(), user.tenantCode());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -212,6 +238,9 @@ public class AuthService {
             audit(user.username(), "REFRESH_DENIED", user.id().toString(), Map.of("reason", "ACCOUNT_DISABLED"));
             throw new BusinessException(ErrorCode.FORBIDDEN, "账号已停用或锁定，请联系管理员");
         }
+        // 停用租户同样不能续期：否则"停用"只挡新登录，已登录客户端还能续 7 天
+        tenants.requireUsableTenant(user.tenantCode() == null || user.tenantCode().isBlank()
+                ? tenantProps.effectiveDefaultCode() : user.tenantCode());
         List<String> roles = users.rolesOf(user.id());
         List<String> permissions = rbac.permissionsOfUser(user.id());
 
@@ -228,7 +257,8 @@ public class AuthService {
                 Map.of("tokenId", access.tokenId(), "rotatedFrom", record.id().toString()));
 
         MeResp me = new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
-                user.orgCode(), users.deptIdsOf(user.id()), roles, permissions, user.lastLoginAt());
+                user.orgCode(), users.deptIdsOf(user.id()), roles, permissions, user.lastLoginAt(),
+                user.tenantCode());
         return new LoginResp(access.token(), "Bearer", access.expiresInSeconds(), access.expiresAt(),
                 refresh.token(), refresh.expiresAt(), me);
     }
@@ -264,7 +294,7 @@ public class AuthService {
         }
         return new MeResp(user.id(), user.username(), user.displayName(), user.employeeNo(),
                 user.orgCode(), users.deptIdsOf(user.id()), users.rolesOf(user.id()),
-                rbac.permissionsOfUser(user.id()), user.lastLoginAt());
+                rbac.permissionsOfUser(user.id()), user.lastLoginAt(), user.tenantCode());
     }
 
     /**
@@ -315,14 +345,20 @@ public class AuthService {
     // ---------------------------------------------------------------- 内部方法
 
     /**
-     * 签发访问令牌：统一在此解析科室中文名，确保三种签发路径（登录/SSO/刷新）声明一致。
-     * 科室查不到时传 null——令牌不带 {@code dept}，下游按"无科室"处理。
+     * 签发访问令牌：统一在此解析科室中文名与租户/实例声明，确保三种签发路径
+     * （登录/SSO/刷新）声明一致。科室查不到时传 null——令牌不带 {@code dept}，下游按"无科室"处理。
+     *
+     * <p>租户声明取账号归属（不是入参），因此刷新令牌也无法把身份"漂移"到别家医院；
+     * 实例声明取本部署配置，使令牌只在当前 Cell 有效。
      */
     private JwtTokenService.IssuedToken issueAccess(UserAccount user, List<String> roles,
                                                     List<String> permissions, List<UUID> deptIds,
                                                     List<UUID> campusIds) {
         String deptName = users.orgNameOf(user.orgCode()).orElse(null);
-        return jwt.issue(user, roles, permissions, deptIds, campusIds, deptName);
+        String tenant = user.tenantCode() == null || user.tenantCode().isBlank()
+                ? tenantProps.effectiveDefaultCode() : user.tenantCode();
+        return jwt.issue(user, roles, permissions, deptIds, campusIds, deptName,
+                tenant, tenantProps.effectiveInstanceCode());
     }
 
     private IssuedRefresh issueRefresh(UUID userId, String clientIp, String userAgent, UUID rotatedFrom) {

@@ -81,6 +81,15 @@ medassist:
       default-roles: ${SSO_DEFAULT_ROLES:DOCTOR}
       default-org-code: ${SSO_DEFAULT_ORG_CODE:}
 
+  # ---- 租户与实例（ADR-001 P0）----
+  # default-code：入口 Host 未映射到任何租户时的归属（本地联调 / 单院私有化）。
+  # instance-code：本部署实例码，写入令牌 instance 声明，与授权书的实例码同值；
+  #               为空表示不做实例绑定校验（仅限本地联调，生产必须注入）。
+  tenant:
+    default-code: ${TENANT_DEFAULT_CODE:tenant-001}
+    instance-code: ${TENANT_INSTANCE_CODE:}
+    enforce-active: ${TENANT_ENFORCE_ACTIVE:true}
+
 management:
   endpoints:
     web:

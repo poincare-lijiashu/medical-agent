@@ -3,6 +3,7 @@ package com.medassist.gateway.filter;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.gateway.config.GatewayAuthConfig;
 import com.medassist.gateway.config.GatewayAuthProperties;
+import com.medassist.gateway.config.GatewayTenantProperties;
 import com.medassist.gateway.security.ClientIpResolver;
 import com.medassist.gateway.security.TokenRevocationCache;
 import com.nimbusds.jose.jwk.source.ImmutableSecret;
@@ -51,9 +52,10 @@ class AuthGlobalFilterTest {
     private static final String ISSUER = "medassist-auth";
 
     private final GatewayAuthProperties props = props(true);
+    private final GatewayTenantProperties tenantProps = tenantProps(false, null);
     private final JwtDecoder decoder = new GatewayAuthConfig().jwtDecoder(props, new MockEnvironment());
     private final TokenRevocationCache revocations = new TokenRevocationCache(props);
-    private final AuthGlobalFilter filter = new AuthGlobalFilter(props, decoder, revocations,
+    private final AuthGlobalFilter filter = new AuthGlobalFilter(props, tenantProps, decoder, revocations,
             new ClientIpResolver(props));
 
     @Test
@@ -228,7 +230,7 @@ class AuthGlobalFilterTest {
 
     @Test
     void disabledSwitchStillStripsForgedHeaders() {
-        AuthGlobalFilter relaxed = new AuthGlobalFilter(props(false), decoder,
+        AuthGlobalFilter relaxed = new AuthGlobalFilter(props(false), tenantProps(false, null), decoder,
                 new TokenRevocationCache(props(false)), new ClientIpResolver(props(false)));
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/api/v2/empi/patients")
@@ -251,7 +253,143 @@ class AuthGlobalFilterTest {
         assertThat(internal.getResponse().getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
     }
 
+    // ---------------------------------------------------------------- 租户隔离（§281 / ADR-001）
+
+    @Test
+    void forgedTenantHeaderIsStrippedAndDefaultTenantInjected() {
+        // 单院模式（enabled=false）：旧令牌没有 tenant 声明，一律注入默认租户；
+        // 客户端自带 X-Tenant 必须被剥离，否则可以人为指定"我在哪家医院"。
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"), List.of("empi:patient:read"));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .header(AuthHeaders.TENANT, "tenant-999")
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        filter.filter(exchange, chain).block();
+
+        assertThat(chain.called).isTrue();
+        assertThat(chain.exchange.getRequest().getHeaders().getFirst(AuthHeaders.TENANT))
+                .isEqualTo("tenant-001");
+    }
+
+    @Test
+    void loginWhitelistAlsoCarriesTenant() {
+        // 登录路径虽然不验令牌，也必须带租户：auth 靠它决定在哪家医院里查账号
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.post("/api/v2/auth/login").build());
+        CapturingChain chain = new CapturingChain();
+
+        filter.filter(exchange, chain).block();
+
+        assertThat(chain.called).isTrue();
+        assertThat(chain.exchange.getRequest().getHeaders().getFirst(AuthHeaders.TENANT))
+                .isEqualTo("tenant-001");
+    }
+
+    @Test
+    void enabledModeRejectsTokenFromAnotherTenant() {
+        AuthGlobalFilter strict = strictFilter(tenantProps(true, null));
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"), List.of("empi:patient:read"),
+                "tenant-002", null);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("http://hospital-a.example/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        strict.filter(exchange, chain).block();
+
+        assertThat(chain.called).isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(body(exchange)).contains("\"code\":40321");
+    }
+
+    @Test
+    void enabledModeRejectsTokenWithoutTenantClaim() {
+        // 多院模式下一律要求令牌带租户声明：Cutover 时强制重新登录，好过放行"未知归属"的令牌
+        AuthGlobalFilter strict = strictFilter(tenantProps(true, null));
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"), List.of("empi:patient:read"));
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("http://hospital-a.example/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        strict.filter(exchange, chain).block();
+
+        assertThat(chain.called).isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(body(exchange)).contains("缺少院区信息");
+    }
+
+    @Test
+    void enabledModeRejectsForeignInstanceToken() {
+        // 令牌实例码必须是本 Cell：否则 A 院签发的令牌可以拿去打 B 院入口
+        AuthGlobalFilter strict = strictFilter(tenantProps(true, "MEDASSIST-TEST-0001"));
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"), List.of("empi:patient:read"),
+                "tenant-001", "MEDASSIST-OTHER-0009");
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("http://hospital-a.example/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        strict.filter(exchange, chain).block();
+
+        assertThat(chain.called).isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(body(exchange)).contains("\"code\":40322");
+    }
+
+    @Test
+    void enabledModeRejectsUnknownEntryHost() {
+        AuthGlobalFilter strict = strictFilter(tenantProps(true, null));
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"), List.of("empi:patient:read"),
+                "tenant-001", null);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("http://unknown.example/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        strict.filter(exchange, chain).block();
+
+        assertThat(chain.called).isFalse();
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(body(exchange)).contains("未登记");
+    }
+
+    @Test
+    void enabledModeAcceptsMatchingTenantAndWildcardHost() {
+        AuthGlobalFilter strict = strictFilter(tenantProps(true, null));
+        // *.group.example → tenant-002（通配按最长后缀匹配）
+        String token = token("doctor01", "DEPT-A", List.of("DOCTOR"), List.of("empi:patient:read"),
+                "tenant-002", null);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.get("http://west.group.example/api/v2/empi/patients")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                        .build());
+        CapturingChain chain = new CapturingChain();
+
+        strict.filter(exchange, chain).block();
+
+        assertThat(chain.called).isTrue();
+        assertThat(chain.exchange.getRequest().getHeaders().getFirst(AuthHeaders.TENANT))
+                .isEqualTo("tenant-002");
+    }
+
     // ---------------------------------------------------------------- 辅助
+
+    private AuthGlobalFilter strictFilter(GatewayTenantProperties tenant) {
+        return new AuthGlobalFilter(props, tenant, decoder, revocations, new ClientIpResolver(props));
+    }
+
+    private static GatewayTenantProperties tenantProps(boolean enabled, String instanceCode) {
+        return new GatewayTenantProperties(enabled, "tenant-001", instanceCode,
+                List.of("hospital-a.example=tenant-001", "*.group.example=tenant-002"));
+    }
 
     private static GatewayAuthProperties props(boolean enabled) {
         return new GatewayAuthProperties(enabled, ISSUER, SECRET,
@@ -273,6 +411,11 @@ class AuthGlobalFilterTest {
     }
 
     private static String token(String username, String org, List<String> roles, List<String> permissions) {
+        return token(username, org, roles, permissions, null, null);
+    }
+
+    private static String token(String username, String org, List<String> roles, List<String> permissions,
+                                String tenant, String instance) {
         SecretKey key = new SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256");
         JwtEncoder encoder = new NimbusJwtEncoder(new ImmutableSecret<>(key));
         Instant now = Instant.now();
@@ -287,6 +430,12 @@ class AuthGlobalFilterTest {
                 .claim("permissions", permissions);
         if (org != null) {
             claims.claim("org", org);
+        }
+        if (tenant != null) {
+            claims.claim("tenant", tenant);
+        }
+        if (instance != null) {
+            claims.claim("instance", instance);
         }
         return encoder.encode(JwtEncoderParameters.from(
                 JwsHeader.with(MacAlgorithm.HS256).build(), claims.build())).getTokenValue();

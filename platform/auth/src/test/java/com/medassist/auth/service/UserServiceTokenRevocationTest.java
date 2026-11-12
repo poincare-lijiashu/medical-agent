@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.config.TenantProperties;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
@@ -40,11 +41,12 @@ class UserServiceTokenRevocationTest {
         users = mock(UserRepository.class);
         tokens = mock(TokenRepository.class);
         service = new UserService(users, mock(RbacRepository.class), JsonMapper.builder().build(),
-                mock(PasswordHasher.class), tokens);
+                mock(PasswordHasher.class), tokens,
+                new TenantProperties("tenant-001", null, true));
 
         when(users.findById(userId)).thenReturn(Optional.of(new UserAccount(userId, "doctor01",
                 "$2a$10$mock", "张医生", "E1001", null, UserAccount.STATUS_ACTIVE, 0L, null,
-                Instant.now(), Instant.now())));
+                Instant.now(), Instant.now(), "tenant-001")));
     }
 
     @Test
@@ -52,7 +54,7 @@ class UserServiceTokenRevocationTest {
     void resetPasswordRevokesSessions() {
         when(users.updatePassword(any(), anyString())).thenReturn(true);
 
-        service.resetPassword(userId, "NewPass123", "admin01");
+        service.resetPassword(userId, "NewPass123", "admin01", "tenant-001");
 
         verify(tokens).revokeAllForUser(userId);
     }
@@ -63,7 +65,7 @@ class UserServiceTokenRevocationTest {
         when(users.rolesOf(userId)).thenReturn(List.of("DOCTOR"));
         when(users.updateStatus(any(), anyString(), anyLong())).thenReturn(true);
 
-        service.disable(userId, "admin01");
+        service.disable(userId, "admin01", "tenant-001");
 
         verify(tokens).revokeAllForUser(userId);
     }

@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.config.TenantProperties;
 import com.medassist.auth.domain.Role;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
@@ -44,15 +45,17 @@ class UserServiceDeptTest {
     private final UUID deptA = UUID.randomUUID();
     private final UUID deptB = UUID.randomUUID();
 
+    private static final TenantProperties TENANT = new TenantProperties("tenant-001", null, true);
+
     @BeforeEach
     void setUp() {
         users = mock(UserRepository.class);
         rbac = mock(RbacRepository.class);
         PasswordHasher hasher = mock(PasswordHasher.class);
         service = new UserService(users, rbac, JsonMapper.builder().build(), hasher,
-                mock(TokenRepository.class));
+                mock(TokenRepository.class), TENANT);
 
-        when(users.existsByUsername(anyString())).thenReturn(false);
+        when(users.existsByUsername(anyString(), anyString())).thenReturn(false);
         when(hasher.encode(anyString())).thenReturn("$2a$10$mock");
         when(rbac.findRole(anyString())).thenAnswer(inv ->
                 Optional.of(new Role(inv.getArgument(0), "角色", "", true)));
@@ -60,7 +63,7 @@ class UserServiceDeptTest {
             UUID id = inv.getArgument(0);
             return Optional.of(new UserAccount(id, "doctor01", "$2a$10$mock", "张医生",
                     "E1001", null, UserAccount.STATUS_ACTIVE, 0L, null,
-                    Instant.now(), Instant.now()));
+                    Instant.now(), Instant.now(), "tenant-001"));
         });
         when(users.rolesOf(any())).thenReturn(List.of("DOCTOR"));
         when(users.deptIdsOf(any())).thenReturn(List.of(deptA, deptB));
@@ -73,7 +76,7 @@ class UserServiceDeptTest {
         when(users.allCampusesActive(any())).thenReturn(false);
 
         assertThatThrownBy(() -> service.assignCampuses(UUID.randomUUID(),
-                List.of(deptA), "admin01"))
+                List.of(deptA), "admin01", "tenant-001"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.VALIDATION_FAILED));
         verify(users, never()).replaceCampuses(any(), any());

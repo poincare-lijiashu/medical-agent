@@ -1,5 +1,6 @@
 package com.medassist.auth.service;
 
+import com.medassist.auth.config.TenantProperties;
 import com.medassist.auth.domain.UserAccount;
 import com.medassist.auth.repo.RbacRepository;
 import com.medassist.auth.repo.TokenRepository;
@@ -58,20 +59,34 @@ public class UserService {
     private final ObjectMapper objectMapper;
     private final PasswordHasher hasher;
     private final TokenRepository tokens;
+    private final TenantProperties tenantProps;
 
     public UserService(UserRepository users, RbacRepository rbac, ObjectMapper objectMapper,
-                       PasswordHasher hasher, TokenRepository tokens) {
+                       PasswordHasher hasher, TokenRepository tokens, TenantProperties tenantProps) {
         this.users = users;
         this.rbac = rbac;
         this.objectMapper = objectMapper;
         this.hasher = hasher;
         this.tokens = tokens;
+        this.tenantProps = tenantProps;
+    }
+
+    /**
+     * 开户（默认租户）。
+     *
+     * <p>只在"单院私有化 / 内部调用"路径使用；HTTP 入口一律走带 {@code tenantCode} 的重载，
+     * 由网关注入的 {@code X-Tenant} 决定归属——否则管理员 A 院身份可开 B 院账号。
+     */
+    @Transactional
+    public UserResp create(CreateUserReq req, String actor) {
+        return create(req, actor, tenantProps.effectiveDefaultCode());
     }
 
     @Transactional
-    public UserResp create(CreateUserReq req, String actor) {
+    public UserResp create(CreateUserReq req, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
         String username = req.username().trim();
-        if (users.existsByUsername(username)) {
+        if (users.existsByUsername(tenant, username)) {
             throw new BusinessException(ErrorCode.USER_DUPLICATE, "用户名已存在：" + username);
         }
         validatePassword(req.password(), username);
@@ -87,21 +102,21 @@ public class UserService {
         UUID id = UUID.randomUUID();
         users.insert(new UserAccount(id, username, hasher.encode(req.password()),
                 req.displayName().trim(), blankToNull(req.employeeNo()), orgCode,
-                UserAccount.STATUS_ACTIVE, 0L, null, null, null));
+                UserAccount.STATUS_ACTIVE, 0L, null, null, null, tenant));
         users.replaceRoles(id, roles);
         users.replaceDepts(id, deptIds);
 
         audit(actor, "USER_CREATE", id.toString(), Map.of(
                 "username", username, "roles", roles, "deptIds", deptIds,
-                "orgCode", orgCode == null ? "" : orgCode));
-        return detail(id);
+                "orgCode", orgCode == null ? "" : orgCode, "tenant", tenant));
+        return detail(id, tenant);
     }
 
     /** 全量替换账号可见院区（G45）；至少保留一个院区。 */
     @Transactional
-    public UserResp assignCampuses(UUID id, List<UUID> campusIds, String actor) {
-        users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+    public UserResp assignCampuses(UUID id, List<UUID> campusIds, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
+        requireInTenant(id, tenant);
         List<UUID> ids = campusIds == null ? List.of()
                 : campusIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
         if (ids.isEmpty()) {
@@ -114,29 +129,28 @@ public class UserService {
         }
         users.replaceCampuses(id, ids);
         audit(actor, "USER_CAMPUS_ASSIGN", id.toString(), Map.of("campusIds", ids));
-        return detail(id);
+        return detail(id, tenant);
     }
 
-    public PageResult<UserResp> list(String orgCode, String status, int page, int size) {
+    public PageResult<UserResp> list(String tenantCode, String orgCode, String status, int page, int size) {
+        String tenant = requireTenant(tenantCode);
         int safePage = Math.max(page, 1);
         int safeSize = Math.min(Math.max(size, 1), PageResult.MAX_PAGE_SIZE);
         int offset = (safePage - 1) * safeSize;
-        List<UserResp> items = users.list(blankToNull(orgCode), blankToNull(status), safeSize, offset)
+        List<UserResp> items = users.list(tenant, blankToNull(orgCode), blankToNull(status), safeSize, offset)
                 .stream().map(this::toResp).toList();
-        long total = users.count(blankToNull(orgCode), blankToNull(status));
+        long total = users.count(tenant, blankToNull(orgCode), blankToNull(status));
         return PageResult.of(safePage, safeSize, total, items);
     }
 
-    public UserResp detail(UUID id) {
-        UserAccount u = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
-        return toResp(u);
+    public UserResp detail(UUID id, String tenantCode) {
+        return toResp(requireInTenant(id, requireTenant(tenantCode)));
     }
 
     @Transactional
-    public UserResp update(UUID id, UpdateUserReq req, String actor) {
-        UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+    public UserResp update(UUID id, UpdateUserReq req, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
+        UserAccount current = requireInTenant(id, tenant);
 
         String orgCode = blankToNull(req.orgCode());
         if (orgCode != null && !rbac.orgExists(orgCode)) {
@@ -160,20 +174,21 @@ public class UserService {
                 "fromVersion", current.version(),
                 "deptIds", deptIds == null ? "(unchanged)" : deptIds,
                 "orgCode", orgCode == null ? "" : orgCode));
-        return detail(id);
+        return detail(id, tenant);
     }
 
     @Transactional
-    public UserResp disable(UUID id, String actor) {
-        UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+    public UserResp disable(UUID id, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
+        UserAccount current = requireInTenant(id, tenant);
         if (!current.active()) {
             return toResp(current);  // 幂等：已停用直接返回
         }
-        // 保护规则：不能停用最后一个启用状态的 ADMIN
+        // 保护规则：不能停用最后一个启用状态的 ADMIN（按租户统计——别家管理员不算本院的兜底）
         List<String> roles = users.rolesOf(id);
-        if (roles.contains(ADMIN_ROLE) && countActiveAdmins() <= 1) {
-            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED, "不能停用系统中最后一个启用的管理员账号");
+        if (roles.contains(ADMIN_ROLE) && countActiveAdmins(tenant) <= 1) {
+            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED,
+                    "不能停用本院最后一个启用的管理员账号");
         }
         if (!users.updateStatus(id, UserAccount.STATUS_DISABLED, current.version())) {
             throw new BusinessException(ErrorCode.CONFLICT);
@@ -182,13 +197,13 @@ public class UserService {
         int revoked = revokeAllSessions(id);
         audit(actor, "USER_DISABLE", id.toString(),
                 Map.of("username", current.username(), "revokedSessions", revoked));
-        return detail(id);
+        return detail(id, tenant);
     }
 
     @Transactional
-    public UserResp enable(UUID id, String actor) {
-        UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+    public UserResp enable(UUID id, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
+        UserAccount current = requireInTenant(id, tenant);
         if (current.active()) {
             return toResp(current);
         }
@@ -196,30 +211,30 @@ public class UserService {
             throw new BusinessException(ErrorCode.CONFLICT);
         }
         audit(actor, "USER_ENABLE", id.toString(), Map.of("username", current.username()));
-        return detail(id);
+        return detail(id, tenant);
     }
 
     @Transactional
-    public UserResp assignRoles(UUID id, List<String> roleCodes, String actor) {
-        UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+    public UserResp assignRoles(UUID id, List<String> roleCodes, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
+        UserAccount current = requireInTenant(id, tenant);
         Set<String> roles = normalizeRoles(roleCodes);
 
         // 保护规则：移除最后一个 ADMIN 的管理员角色同样会锁死系统
         List<String> before = users.rolesOf(id);
-        if (before.contains(ADMIN_ROLE) && !roles.contains(ADMIN_ROLE) && countActiveAdmins() <= 1) {
-            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED, "不能移除系统中最后一个管理员的角色");
+        if (before.contains(ADMIN_ROLE) && !roles.contains(ADMIN_ROLE) && countActiveAdmins(tenant) <= 1) {
+            throw new BusinessException(ErrorCode.LAST_ADMIN_PROTECTED, "不能移除本院最后一个管理员的角色");
         }
         users.replaceRoles(id, roles);
         audit(actor, "USER_ASSIGN_ROLES", id.toString(), Map.of(
                 "username", current.username(), "before", before, "after", roles));
-        return detail(id);
+        return detail(id, tenant);
     }
 
     @Transactional
-    public void resetPassword(UUID id, String newPassword, String actor) {
-        UserAccount current = users.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+    public void resetPassword(UUID id, String newPassword, String actor, String tenantCode) {
+        String tenant = requireTenant(tenantCode);
+        UserAccount current = requireInTenant(id, tenant);
         validatePassword(newPassword, current.username());
         users.updatePassword(id, hasher.encode(newPassword));
         // 改密必须踢掉既有会话：否则被盗的 refresh token 仍能在有效期内换新令牌，等于改密无效。
@@ -287,9 +302,31 @@ public class UserService {
         return normalized;
     }
 
-    /** 统计启用状态的 ADMIN 数量（保护规则用；单条 SQL 聚合）。 */
-    private long countActiveAdmins() {
-        return users.countActiveByRole(ADMIN_ROLE);
+    /** 统计指定租户内启用状态的 ADMIN 数量（保护规则用；单条 SQL 聚合）。 */
+    private long countActiveAdmins(String tenantCode) {
+        return users.countActiveByRole(tenantCode, ADMIN_ROLE);
+    }
+
+    /** 租户编码兜底：网关一定注入 X-Tenant，缺失只可能来自内部调用或直连排障。 */
+    private String requireTenant(String tenantCode) {
+        return tenantCode == null || tenantCode.isBlank()
+                ? tenantProps.effectiveDefaultCode()
+                : tenantCode.trim();
+    }
+
+    /**
+     * 目标账号必须属于当前租户，否则按"不存在"处理。
+     *
+     * <p>返回 404 而不是 403：403 会告诉攻击者"这个 ID 在别家医院存在"，
+     * 在多租户系统里这本身就是一次信息泄露。
+     */
+    private UserAccount requireInTenant(UUID id, String tenantCode) {
+        UserAccount account = users.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOT_FOUND));
+        if (!tenantCode.equals(account.tenantCode())) {
+            throw new BusinessException(ErrorCode.USER_NOT_FOUND);
+        }
+        return account;
     }
 
     /** 科室列表归一化：去空、去重保序、限制上限。 */
@@ -327,7 +364,7 @@ public class UserService {
     private UserResp toResp(UserAccount u) {
         return new UserResp(u.id(), u.username(), u.displayName(), u.employeeNo(),
                 u.orgCode(), users.deptIdsOf(u.id()), users.campusIdsOf(u.id()), u.status(),
-                users.rolesOf(u.id()), u.version(), u.lastLoginAt(), u.createdAt());
+                users.rolesOf(u.id()), u.version(), u.lastLoginAt(), u.createdAt(), u.tenantCode());
     }
 
     private String blankToNull(String s) {

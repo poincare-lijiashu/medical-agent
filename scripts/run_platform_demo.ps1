@@ -142,6 +142,16 @@ if (-not $internal) {
 }
 $env:INTERNAL_API_TOKEN = $internal
 
+# ---------- 租户与实例（ADR-001 P0）----------
+# 实例码：写入令牌 instance 声明，必须与授权书（license）的实例码同值，
+# 否则"授权给 A 实例、令牌发到 B 实例"的场景无人拦截。
+if (-not $env:TENANT_INSTANCE_CODE) { $env:TENANT_INSTANCE_CODE = "MEDASSIST-DEV-0001" }
+# 默认租户：入口 Host 未映射时（本地单入口）一律落到该租户。
+if (-not $env:TENANT_DEFAULT_CODE) { $env:TENANT_DEFAULT_CODE = "tenant-001" }
+# 多租户入口路由：本地演示只有一个入口，默认关闭。
+# 生产多院部署必须设 true，并配置 TENANT_HOSTS="hospital-a.example=tenant-001,..."。
+if (-not $env:TENANT_ROUTING_ENABLED) { $env:TENANT_ROUTING_ENABLED = "false" }
+
 # EMPI 字段加密与查重盐：**不注入环境变量**，让各服务 application-dev.yml 的
 # 开发默认值生效——数据库里已有的患者密文就是用它加密的，换值会导致无法解密。
 # 生产必须由 Secret 注入 EMPI_FIELD_KEY / EMPI_HASH_SALT（缺失即拒绝启动）。

@@ -23,7 +23,7 @@ public class UserRepository {
 
     private static final String COLS = """
             id, username, password_hash, display_name, employee_no, org_code,
-            status, version, last_login_at, created_at, updated_at
+            status, version, last_login_at, created_at, updated_at, tenant_code
             """;
 
     private static final RowMapper<UserAccount> MAPPER = (ResultSet rs, int rowNum) -> new UserAccount(
@@ -37,7 +37,8 @@ public class UserRepository {
             rs.getLong("version"),
             rs.getTimestamp("last_login_at") == null ? null : rs.getTimestamp("last_login_at").toInstant(),
             rs.getTimestamp("created_at").toInstant(),
-            rs.getTimestamp("updated_at").toInstant()
+            rs.getTimestamp("updated_at").toInstant(),
+            rs.getString("tenant_code")
     );
 
     private final JdbcClient jdbc;
@@ -53,23 +54,31 @@ public class UserRepository {
                 .optional();
     }
 
-    /** 用户名大小写不敏感查找（与唯一索引 lower(username) 一致）。 */
-    public Optional<UserAccount> findByUsername(String username) {
-        return jdbc.sql("SELECT " + COLS + " FROM auth_svc.app_user WHERE lower(username) = lower(?)")
+    /**
+     * 用户名查找（租户内大小写不敏感；与唯一索引 {@code (tenant_code, lower(username))} 一致）。
+     *
+     * <p>必须带租户：两家医院都有 {@code admin01} 是常态，只按用户名查会串院登录。
+     */
+    public Optional<UserAccount> findByUsername(String tenantCode, String username) {
+        return jdbc.sql("SELECT " + COLS + " FROM auth_svc.app_user"
+                        + " WHERE tenant_code = ? AND lower(username) = lower(?)")
+                .param(tenantCode)
                 .param(username)
                 .query(MAPPER)
                 .optional();
     }
 
-    public boolean existsByUsername(String username) {
-        return jdbc.sql("SELECT count(*) FROM auth_svc.app_user WHERE lower(username) = lower(?)")
+    public boolean existsByUsername(String tenantCode, String username) {
+        return jdbc.sql("SELECT count(*) FROM auth_svc.app_user"
+                        + " WHERE tenant_code = ? AND lower(username) = lower(?)")
+                .param(tenantCode)
                 .param(username)
                 .query(Long.class)
                 .single() > 0;
     }
 
-    public List<UserAccount> list(String orgCode, String status, int limit, int offset) {
-        StringBuilder sql = new StringBuilder("SELECT " + COLS + " FROM auth_svc.app_user WHERE 1=1");
+    public List<UserAccount> list(String tenantCode, String orgCode, String status, int limit, int offset) {
+        StringBuilder sql = new StringBuilder("SELECT " + COLS + " FROM auth_svc.app_user WHERE tenant_code = :tenantCode");
         if (orgCode != null && !orgCode.isBlank()) {
             sql.append(" AND org_code = :orgCode");
         }
@@ -78,7 +87,7 @@ public class UserRepository {
         }
         sql.append(" ORDER BY created_at DESC LIMIT :limit OFFSET :offset");
 
-        JdbcClient.StatementSpec spec = jdbc.sql(sql.toString());
+        JdbcClient.StatementSpec spec = jdbc.sql(sql.toString()).param("tenantCode", tenantCode);
         if (orgCode != null && !orgCode.isBlank()) {
             spec = spec.param("orgCode", orgCode);
         }
@@ -88,15 +97,15 @@ public class UserRepository {
         return spec.param("limit", limit).param("offset", offset).query(MAPPER).list();
     }
 
-    public long count(String orgCode, String status) {
-        StringBuilder sql = new StringBuilder("SELECT count(*) FROM auth_svc.app_user WHERE 1=1");
+    public long count(String tenantCode, String orgCode, String status) {
+        StringBuilder sql = new StringBuilder("SELECT count(*) FROM auth_svc.app_user WHERE tenant_code = :tenantCode");
         if (orgCode != null && !orgCode.isBlank()) {
             sql.append(" AND org_code = :orgCode");
         }
         if (status != null && !status.isBlank()) {
             sql.append(" AND status = :status");
         }
-        JdbcClient.StatementSpec spec = jdbc.sql(sql.toString());
+        JdbcClient.StatementSpec spec = jdbc.sql(sql.toString()).param("tenantCode", tenantCode);
         if (orgCode != null && !orgCode.isBlank()) {
             spec = spec.param("orgCode", orgCode);
         }
@@ -109,8 +118,10 @@ public class UserRepository {
     public void insert(UserAccount u) {
         jdbc.sql("""
                         INSERT INTO auth_svc.app_user
-                            (id, username, password_hash, display_name, employee_no, org_code, status, version)
-                        VALUES (:id, :username, :passwordHash, :displayName, :employeeNo, :orgCode, :status, 0)
+                            (id, username, password_hash, display_name, employee_no, org_code, status,
+                             version, tenant_code)
+                        VALUES (:id, :username, :passwordHash, :displayName, :employeeNo, :orgCode,
+                                :status, 0, :tenantCode)
                         """)
                 .param("id", u.id())
                 .param("username", u.username())
@@ -119,6 +130,7 @@ public class UserRepository {
                 .param("employeeNo", u.employeeNo())
                 .param("orgCode", u.orgCode())
                 .param("status", u.status())
+                .param("tenantCode", u.tenantCode())
                 .update();
     }
 
@@ -324,14 +336,20 @@ public class UserRepository {
         }
     }
 
-    /** 统计启用状态的指定角色账号数（保护规则用；单条 SQL，避免 N+1 与分页截断误判）。 */
-    public long countActiveByRole(String roleCode) {
+    /**
+     * 统计指定租户内启用状态的指定角色账号数（保护规则用；单条 SQL，避免 N+1 与分页截断误判）。
+     *
+     * <p>必须按租户统计：某院只有一名管理员时不允许停用他；但别家有几个管理员与本院的
+     * "最后一个管理员"无关，用全院数字做判断会让 A 院的管理员永远停不掉。
+     */
+    public long countActiveByRole(String tenantCode, String roleCode) {
         return jdbc.sql("""
                         SELECT count(DISTINCT u.id)
                           FROM auth_svc.app_user u
                           JOIN auth_svc.user_role ur ON ur.user_id = u.id
-                         WHERE u.status = 'ACTIVE' AND ur.role_code = ?
+                         WHERE u.status = 'ACTIVE' AND u.tenant_code = ? AND ur.role_code = ?
                         """)
+                .param(tenantCode)
                 .param(roleCode)
                 .query(Long.class)
                 .single();

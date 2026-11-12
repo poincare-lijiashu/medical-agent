@@ -311,6 +311,12 @@ const router = createRouter({
           name: 'license',
           component: () => import('@/views/LicenseView.vue'),
         },
+        {
+          // 第 281 批：租户管理（tenant:read；开通/停用需 tenant:manage）
+          path: 'tenant',
+          name: 'tenant',
+          component: () => import('@/views/TenantView.vue'),
+        },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },

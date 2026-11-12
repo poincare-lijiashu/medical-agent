@@ -47,6 +47,19 @@ public class SsoUserProvisioner {
     @Transactional
     public UserAccount provisionAndBind(SsoProperties props, String provider, String subject,
                                         String username, String displayName, String email) {
+        return provisionAndBind(props, provider, subject, username, displayName, email, null);
+    }
+
+    /**
+     * 自动开户并绑定外部身份（指定租户）。
+     *
+     * <p>{@code tenantCode} 来自网关按入口 Host 注入的 {@code X-Tenant}：从哪家医院入口
+     * 发起的统一身份登录，就在哪家医院开户。为空时由数据库默认租户兜底（单院私有化）。
+     */
+    @Transactional
+    public UserAccount provisionAndBind(SsoProperties props, String provider, String subject,
+                                        String username, String displayName, String email,
+                                        String tenantCode) {
         if (props.defaultRoles().isEmpty()) {
             throw new BusinessException(ErrorCode.SSO_PROVISION_FAILED,
                     "未配置默认角色，不能自动开户");
@@ -59,13 +72,15 @@ public class SsoUserProvisioner {
         UUID userId = UUID.randomUUID();
         UserAccount user = new UserAccount(userId, username, passwordHash,
                 blankTo(displayName, username), null, blankToNull(props.defaultOrgCode()),
-                "ACTIVE", 0L, null, now, now);
+                "ACTIVE", 0L, null, now, now,
+                tenantCode == null || tenantCode.isBlank() ? null : tenantCode.trim());
         users.insert(user);
         users.replaceRoles(user.id(), props.defaultRoles());
         identities.upsertIdentity(new SsoIdentity(UUID.randomUUID(), provider, subject,
                 user.id(), blankToNull(email), blankToNull(displayName), now, now));
         audit("sso", "SSO_PROVISION", user.id().toString(), Map.of(
-                "username", username, "provider", provider, "roles", props.defaultRoles()));
+                "username", username, "provider", provider, "roles", props.defaultRoles(),
+                "tenant", tenantCode == null ? "" : tenantCode));
         return user;
     }
 

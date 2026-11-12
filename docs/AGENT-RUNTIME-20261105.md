@@ -12605,3 +12605,79 @@ Java：OAuthClientServiceTest → 8 passed（哈希/常量时间/写范围拒绝
 - 没有按客户端的调用配额（限流仍是网关统一桶，未做 per-client 计量）；
 - 没有开发者自助门户（创建客户端仍需管理员，这是有意的：开放不等于自助扩权）；
 - 客户端令牌无法单独撤销：只能停用客户端或等 TTL（15 分钟）自然过期。
+
+## 281. 2026-11-12 租户身份平面（第 281 批 / ADR-001 P0）
+
+**为什么先做身份层**
+
+多院部署的隔离契约里，"数据不串院"最容易被误以为只靠数据库。实际上第一道口子是**身份**：
+一个账号属于谁、令牌能进哪个入口、管理员能看见谁。ADR-001 把隔离强度定为第一目标
+（一院一 Cell），P0 就必须先把"归属"钉死，后面的数据面路由与 Cell 编排才有意义。
+
+**本批做了什么**
+
+1. **租户台账**（auth V95）：`auth_svc.tenant` 记录租户编码、实例码、Cell 入口、数据库主机、
+   容量配额与状态；**只存元数据，不含任何患者数据**。实例码唯一索引——重复实例码等于
+   "一张授权书开两家院"。
+2. **存量兼容**：现网单实例 `MEDASSIST-DEV-0001` 注册为 `tenant-001`，账号全部归入该租户，
+   不迁数据、不改业务表；外键 `fk_app_user_tenant` 保证"账号必属于已登记租户"（fail-closed）。
+3. **用户名唯一性收敛到租户内**：索引从 `lower(username)` 改为 `(tenant_code, lower(username))`。
+   两家医院都有 `admin01` 是常态，全局唯一会逼第二家改工号；登录时由入口租户定位，不会歧义。
+4. **令牌带 tenant + instance**：`JwtTokenService.issue(...)` 增加两个声明，租户取**账号归属**
+   （不是入参），所以刷新令牌也无法把身份漂移到别家；instance 取本 Cell 配置，使令牌只在本 Cell 有效。
+5. **网关入口校验**（`GatewayTenantProperties` + `AuthGlobalFilter`）：
+   Host → 租户映射（精确 + 最长后缀通配），令牌 tenant 必须与入口一致，instance 必须等于本 Cell；
+   客户端自带的 `X-Tenant` 一律剥离后由网关重写。未鉴权路径（登录/刷新）同样注入租户。
+6. **停用即下线**：租户切到 SUSPENDED/CLOSED 时撤销该院全部刷新令牌；登录、刷新、SSO 三条
+   签发路径都在密码校验之前检查租户状态（停用医院连"密码错误"都不返回，避免确认账号存在）。
+7. **权限分层**：`tenant:read`（本院可见）、`tenant:self:manage`（本院资料维护，ADMIN）、
+   `tenant:manage`（开通/停用，仅 `PLATFORM_OPERATOR`）。医院管理员**不能**停用别家租户。
+8. **前端**：系统管理 → 租户管理：租户清单（状态/实例/账号数/入口）、详情（隔离与容量 + 变更记录）、
+   开通/编辑/停用/恢复；非平台运营只看到自己那一条，停用必须填原因。
+9. **契约锁**：`tests/test_console_tenant.py`（16 项）+ `TenantServiceTest`（11 项）+
+   网关 `AuthGlobalFilterTest` 新增 6 个租户用例。
+
+**验证**
+
+```
+Java：auth 88 passed（含 TenantServiceTest 11）；gateway 全绿（含新增 6 个租户用例）
+前端：npm run typecheck / build 通过（入口 gzip 98.46KB < 110KB）
+契约：tests/test_console_tenant.py → 16 passed
+全量：pytest -m "not e2e" → 1956 passed / 1 skipped（基线 1941）
+
+真实库 E2E（经网关 8080，单入口模式）：
+  登录 admin01                 200  user.tenantCode=tenant-001
+  令牌声明                      tenant=tenant-001 · instance=MEDASSIST-DEV-0001
+  GET /auth/me                 200  tenantCode=tenant-001
+  GET /auth/tenants            200  total=1 · platformLevel=false
+  GET /auth/tenants/tenant-002 404  （跨租户按"不存在"处理，不泄露别家）
+  PUT 本院资料（含伪造入口）    200  cellEndpoint/dbHost 保持原值，联系人更新
+  GET 详情 recentChanges       1 条 TENANT_SELF_UPDATE（actor=admin01）
+  POST /auth/tenants（ADMIN）  403  （开通是平台运营能力）
+
+真实库 E2E（多租户入口模式 TENANT_ROUTING_ENABLED=true）：
+  Host=hospital-a.example 登录  200  tenant=tenant-001
+  A 院令牌打 other.example      403  40321（entry=tenant-002 token=tenant-001）
+  未登记 Host 访问              403  40321
+  未登记 Host 登录              403  （入口比登录更根本）
+  实例码不匹配                  403  40322（expected=OTHER actual=DEV-0001）
+
+浏览器（Vite 5174 → 网关 8080，admin01）：
+  /tenant 页 KPI 有值、tenant-001 行「在用」、详情含实例码与容量；8 条 API 全 200；无 console error
+```
+
+**顺带修掉的一个真问题（431）**
+
+浏览器登录后全站 431：管理员令牌带 228 个权限点、约 7.6KB，加上浏览器标准请求头
+（UA / sec-ch-ua / cookie）越过 Netty 默认 8KB 头上限。业务服务早已是 32KB，只有网关漏了，
+命令行请求头少所以复现不了。已在网关补 `server.max-http-request-header-size: 32KB`
+（`GATEWAY_MAX_HEADER_SIZE` 可调）并用「7.6KB 令牌 + 2KB cookie」验证通过。
+后续若权限点继续增长，应改为「令牌只带 roles、网关按角色缓存展开权限」，本批未做。
+
+**遗留（按 ADR 分期，不是缺口）**
+
+- §282 数据面隔离：每租户 DataSource 路由、迁移编排器、Helm per-cell 模板（namespace/quota/netpol/PDB）；
+- §283 隔离验收：故障注入（kill DB / CPU 打满）、分批发布演练、可对外提交的验收报告；
+- §284 开通自动化：一键开通（建库→迁移→编排→license→首个管理员）与租户健康度看板；
+- 控制台目前不提供"注销租户"入口（后端已支持 CLOSED 终态，避免误操作放在 P3 一并设计）；
+- SSO 自动开户已按入口租户落库，但 IdP 配置仍是单份：多院各自 IdP 需要按 Cell 配置（§282 一并处理）。
