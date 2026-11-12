@@ -45,7 +45,7 @@ class TenantServiceTest {
     void setUp() {
         repo = mock(TenantRepository.class);
         service = new TenantService(repo, new TenantProperties(OWN, "MEDASSIST-TEST-0001", true),
-                JsonMapper.builder().build());
+                JsonMapper.builder().build(), mock(CellDatabaseGateway.class));
     }
 
     @Test
@@ -115,9 +115,10 @@ class TenantServiceTest {
     @DisplayName("停用租户时同步撤销全院刷新令牌，并记录原因")
     void suspendRevokesRefreshTokens() {
         when(repo.findByCode(OWN)).thenReturn(Optional.of(tenant(OWN, Tenant.ACTIVE)));
-        when(repo.updateStatus(OWN, Tenant.SUSPENDED, 3L)).thenReturn(true);
+        when(repo.updateStatus(OWN, Tenant.SUSPENDED, 3L, null, "合同暂停", null)).thenReturn(true);
 
-        service.changeStatus(OWN, new TenantDtos.StatusReq(Tenant.SUSPENDED, "合同暂停", 3L), "admin01");
+        service.changeStatus(OWN,
+                new TenantDtos.StatusReq(Tenant.SUSPENDED, "合同暂停", null, 3L), "admin01");
 
         verify(repo).revokeRefreshTokensOfTenant(OWN);
     }
@@ -128,10 +129,10 @@ class TenantServiceTest {
         when(repo.findByCode(OWN)).thenReturn(Optional.of(tenant(OWN, Tenant.ACTIVE)));
 
         assertThatThrownBy(() -> service.changeStatus(OWN,
-                new TenantDtos.StatusReq(Tenant.SUSPENDED, " ", 3L), "admin01"))
+                new TenantDtos.StatusReq(Tenant.SUSPENDED, " ", null, 3L), "admin01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TENANT_INVALID));
-        verify(repo, never()).updateStatus(anyString(), anyString(), anyLong());
+        verify(repo, never()).updateStatus(anyString(), anyString(), anyLong(), any(), any(), any());
     }
 
     @Test
@@ -140,7 +141,7 @@ class TenantServiceTest {
         when(repo.findByCode(OWN)).thenReturn(Optional.of(tenant(OWN, Tenant.CLOSED)));
 
         assertThatThrownBy(() -> service.changeStatus(OWN,
-                new TenantDtos.StatusReq(Tenant.ACTIVE, "恢复", 3L), "admin01"))
+                new TenantDtos.StatusReq(Tenant.ACTIVE, "恢复", null, 3L), "admin01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TENANT_STATUS_INVALID));
     }
@@ -176,7 +177,7 @@ class TenantServiceTest {
 
         assertThatThrownBy(() -> service.create(new TenantDtos.CreateReq(
                 "tenant-003", "MEDASSIST-DUP-0001", "市三院", "ENTERPRISE", null,
-                null, null, null, null, null, null, null), "ops01"))
+                null, null, null, null, null, null, null, null), "ops01"))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.errorCode()).isEqualTo(ErrorCode.TENANT_DUPLICATE));
         verify(repo, never()).insert(any());
@@ -187,8 +188,8 @@ class TenantServiceTest {
     private static Tenant tenant(String code, String status) {
         Instant now = Instant.now();
         return new Tenant(code, "MEDASSIST-" + code.toUpperCase(), "市一院", "ENTERPRISE", status,
-                "https://hospital-a.example", "10.0.0.1:5432", "cn-east",
+                "https://hospital-a.example", "10.0.0.1:5432", "medagent", "cn-east",
                 new TenantQuotas(1200, 3000, 500, 20000),
-                "李主任", "13900000000", "演示租户", 3L, "ops01", now, now);
+                "李主任", "13900000000", "演示租户", null, null, null, 3L, "ops01", now, now);
     }
 }

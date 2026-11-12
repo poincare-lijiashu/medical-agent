@@ -66,6 +66,23 @@ public final class LicenseDtos {
     public record LicenseList(List<License> items, int total) {
     }
 
+    /**
+     * 实例授权摘要（§284 开通编排用）。
+     *
+     * <p>只暴露"是否已授权 + 状态/版本/到期时间/模块数"，不返回授权书正文与签名：
+     * 控制面只需要判断"能不能开通"，不需要拿到可转发的授权材料。
+     *
+     * @param present 该实例是否存在任何授权记录（含已吊销）
+     */
+    public record Summary(
+            boolean present,
+            String licenseNo,
+            String status,
+            String editionCode,
+            java.time.Instant expiresAt,
+            int modules) {
+    }
+
     public record AuditList(List<ChangeLog> items, int total) {
     }
 

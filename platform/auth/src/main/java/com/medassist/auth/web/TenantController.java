@@ -1,9 +1,13 @@
 package com.medassist.auth.web;
 
 import com.medassist.auth.service.CellMigrationService;
+import com.medassist.auth.service.ProvisioningService;
+import com.medassist.auth.service.TenantHealthService;
 import com.medassist.auth.service.TenantService;
 import com.medassist.auth.web.dto.CellMigrationDtos;
+import com.medassist.auth.web.dto.ProvisioningDtos;
 import com.medassist.auth.web.dto.TenantDtos;
+import com.medassist.auth.web.dto.TenantHealthDtos;
 import com.medassist.common.api.ApiResponse;
 import com.medassist.common.security.AuthHeaders;
 import com.medassist.common.security.Permissions;
@@ -41,10 +45,15 @@ public class TenantController {
 
     private final TenantService service;
     private final CellMigrationService migrations;
+    private final ProvisioningService provisioning;
+    private final TenantHealthService health;
 
-    public TenantController(TenantService service, CellMigrationService migrations) {
+    public TenantController(TenantService service, CellMigrationService migrations,
+                            ProvisioningService provisioning, TenantHealthService health) {
         this.service = service;
         this.migrations = migrations;
+        this.provisioning = provisioning;
+        this.health = health;
     }
 
     @GetMapping
@@ -111,5 +120,67 @@ public class TenantController {
             @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
         Permissions.require(permissions, MANAGE);
         return ApiResponse.ok(migrations.view(code, refresh));
+    }
+
+    // ---------------------------------------------------------------- 开通编排（§284）
+
+    /**
+     * 发起开通：建/复用租户目录 → 探测 Cell → Cell 内登记租户 → 首个管理员
+     * → 授权检查 → 激活 → 健康快照。
+     *
+     * <p>一次性管理员口令只在本次响应里出现一次；失败任务可 resume，不会重复建账号。
+     */
+    @PostMapping("/provisions")
+    public ApiResponse<ProvisioningDtos.JobView> provision(
+            @Valid @RequestBody ProvisioningDtos.ProvisionReq req,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(provisioning.start(req, actor));
+    }
+
+    /** 从失败步骤继续（已成功步骤幂等跳过）。 */
+    @PostMapping("/provisions/{id}/resume")
+    public ApiResponse<ProvisioningDtos.JobView> resume(
+            @PathVariable java.util.UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions,
+            @RequestHeader(value = AuthHeaders.ACTOR, defaultValue = "system") String actor) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(provisioning.resume(id, actor));
+    }
+
+    @GetMapping("/provisions")
+    public ApiResponse<ProvisioningDtos.JobList> provisions(
+            @RequestParam(required = false) String tenantCode,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(provisioning.list(tenantCode, limit));
+    }
+
+    @GetMapping("/provisions/{id}")
+    public ApiResponse<ProvisioningDtos.JobView> provisionJob(
+            @PathVariable java.util.UUID id,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(provisioning.view(id));
+    }
+
+    // ---------------------------------------------------------------- 健康度（§284）
+
+    /** 全部租户健康度（并行探测、单院超时；离线医院只影响自己那一行）。 */
+    @GetMapping("/health")
+    public ApiResponse<TenantHealthDtos.HealthList> health(
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(health.list());
+    }
+
+    @GetMapping("/{code}/health")
+    public ApiResponse<TenantHealthDtos.HealthView> healthOf(
+            @PathVariable String code,
+            @RequestHeader(value = AuthHeaders.PERMISSIONS, required = false) String permissions) {
+        Permissions.require(permissions, MANAGE);
+        return ApiResponse.ok(health.one(code));
     }
 }

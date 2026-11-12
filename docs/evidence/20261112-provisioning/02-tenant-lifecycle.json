@@ -1,0 +1,95 @@
+{
+  "generatedAt": "2026-11-12T12:49:20.587886+00:00",
+  "adr": "ADR-001 Section 7 P3 生命周期与保留策略",
+  "tenant": "tenant-003",
+  "gateway": "http://127.0.0.1:8080",
+  "cellAuth": "http://127.0.0.1:8184",
+  "results": [
+    {
+      "name": "平台运营登录",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "name": "开通后健康度为 OK",
+      "status": "PASS",
+      "detail": "HTTP 200 · state=OK · issues=[]"
+    },
+    {
+      "name": "健康度含 Cell 账号且 auth 就绪",
+      "status": "PASS",
+      "detail": "authReady=True users=1 latency=20ms"
+    },
+    {
+      "name": "存在成功的开通任务",
+      "status": "PASS",
+      "detail": "HTTP 200 · jobs=1 · latest=SUCCEEDED"
+    },
+    {
+      "name": "开通的首个管理员可登录 Cell",
+      "status": "PASS",
+      "detail": "HTTP 200 · tenant=tenant-003 · instance=MEDASSIST-HOSP-C-0001"
+    },
+    {
+      "name": "Cell 账号数基线 >= 1",
+      "status": "PASS",
+      "detail": "users=1"
+    },
+    {
+      "name": "停用租户",
+      "status": "PASS",
+      "detail": "HTTP 200 · code=0"
+    },
+    {
+      "name": "停用后 Cell 登录被拒 40320",
+      "status": "PASS",
+      "detail": "HTTP 403 · code=40320"
+    },
+    {
+      "name": "停用后健康度为 SUSPENDED",
+      "status": "PASS",
+      "detail": "state=SUSPENDED"
+    },
+    {
+      "name": "停用不删除数据（账号数不变）",
+      "status": "PASS",
+      "detail": "before=1 after=1"
+    },
+    {
+      "name": "恢复租户",
+      "status": "PASS",
+      "detail": "HTTP 200 · code=0"
+    },
+    {
+      "name": "恢复后可再次登录 Cell",
+      "status": "PASS",
+      "detail": "HTTP 200"
+    },
+    {
+      "name": "恢复后数据完整（账号数不变）",
+      "status": "PASS",
+      "detail": "before=1 after=1"
+    },
+    {
+      "name": "创建保留策略演练租户",
+      "status": "PASS",
+      "detail": "HTTP 200 · code=0"
+    },
+    {
+      "name": "注销并登记保留期",
+      "status": "PASS",
+      "detail": "HTTP 200 · retentionUntil=2027-05-11 closedAt=2026-11-12T12:49:22.485136Z"
+    },
+    {
+      "name": "注销是终态：恢复被拒 56403",
+      "status": "PASS",
+      "detail": "HTTP 409 · code=56403"
+    }
+  ],
+  "summary": {
+    "pass": 16,
+    "fail": 0,
+    "skip": 0
+  },
+  "verdict": "PASS"
+}

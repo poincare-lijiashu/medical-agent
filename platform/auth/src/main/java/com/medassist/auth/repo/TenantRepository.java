@@ -26,8 +26,9 @@ import java.util.Optional;
 public class TenantRepository {
 
     private static final String COLS = """
-            code, instance_code, name, edition_code, status, cell_endpoint, db_host, region,
+            code, instance_code, name, edition_code, status, cell_endpoint, db_host, db_name, region,
             quotas::text AS quotas, contact_name, contact_phone, notes,
+            closed_at, closed_reason, retention_until,
             version, created_by, created_at, updated_at
             """;
 
@@ -47,11 +48,15 @@ public class TenantRepository {
             rs.getString("status"),
             rs.getString("cell_endpoint"),
             rs.getString("db_host"),
+            rs.getString("db_name"),
             rs.getString("region"),
             parseQuotas(rs.getString("quotas")),
             rs.getString("contact_name"),
             rs.getString("contact_phone"),
             rs.getString("notes"),
+            rs.getTimestamp("closed_at") == null ? null : rs.getTimestamp("closed_at").toInstant(),
+            rs.getString("closed_reason"),
+            rs.getDate("retention_until") == null ? null : rs.getDate("retention_until").toLocalDate(),
             rs.getLong("version"),
             rs.getString("created_by"),
             rs.getTimestamp("created_at").toInstant(),
@@ -92,10 +97,11 @@ public class TenantRepository {
         jdbc.sql("""
                         INSERT INTO auth_svc.tenant
                             (code, instance_code, name, edition_code, status, cell_endpoint, db_host,
-                             region, quotas, contact_name, contact_phone, notes, version, created_by)
+                             db_name, region, quotas, contact_name, contact_phone, notes, version, created_by)
                         VALUES (:code, :instanceCode, :name, :editionCode, :status, :cellEndpoint,
-                                :dbHost, :region, CAST(:quotas AS jsonb), :contactName, :contactPhone,
-                                :notes, 0, :createdBy)
+                                :dbHost, COALESCE(:dbName, 'medagent'), :region,
+                                CAST(:quotas AS jsonb), :contactName,
+                                :contactPhone, :notes, 0, :createdBy)
                         """)
                 .param("code", t.code())
                 .param("instanceCode", t.instanceCode())
@@ -104,6 +110,7 @@ public class TenantRepository {
                 .param("status", t.status())
                 .param("cellEndpoint", t.cellEndpoint())
                 .param("dbHost", t.dbHost())
+                .param("dbName", t.dbName())
                 .param("region", t.region())
                 .param("quotas", writeQuotas(t.quotas()))
                 .param("contactName", t.contactName())
@@ -123,7 +130,8 @@ public class TenantRepository {
         return jdbc.sql("""
                         UPDATE auth_svc.tenant
                            SET name = :name, edition_code = :editionCode, cell_endpoint = :cellEndpoint,
-                               db_host = :dbHost, region = :region, quotas = CAST(:quotas AS jsonb),
+                               db_host = :dbHost, db_name = COALESCE(:dbName, db_name),
+                               region = :region, quotas = CAST(:quotas AS jsonb),
                                contact_name = :contactName, contact_phone = :contactPhone,
                                notes = :notes, version = version + 1, updated_at = now()
                          WHERE code = :code AND version = :version
@@ -132,6 +140,7 @@ public class TenantRepository {
                 .param("editionCode", t.editionCode())
                 .param("cellEndpoint", t.cellEndpoint())
                 .param("dbHost", t.dbHost())
+                .param("dbName", t.dbName())
                 .param("region", t.region())
                 .param("quotas", writeQuotas(t.quotas()))
                 .param("contactName", t.contactName())
@@ -142,17 +151,41 @@ public class TenantRepository {
                 .update() > 0;
     }
 
-    /** 状态流转（CAS）；返回 false 表示版本冲突或租户不存在。 */
-    public boolean updateStatus(String code, String status, long expectedVersion) {
+    /** 状态流转（CAS）；注销时同时落保留策略。返回 false 表示版本冲突或租户不存在。 */
+    public boolean updateStatus(String code, String status, long expectedVersion,
+                                java.time.Instant closedAt, String closedReason,
+                                java.time.LocalDate retentionUntil) {
         return jdbc.sql("""
                         UPDATE auth_svc.tenant
-                           SET status = :status, version = version + 1, updated_at = now()
+                           SET status = :status,
+                               closed_at = COALESCE(:closedAt, closed_at),
+                               closed_reason = COALESCE(:closedReason, closed_reason),
+                               retention_until = COALESCE(:retentionUntil, retention_until),
+                               version = version + 1, updated_at = now()
                          WHERE code = :code AND version = :version
                         """)
                 .param("status", status)
+                .param("closedAt", closedAt == null ? null : java.sql.Timestamp.from(closedAt))
+                .param("closedReason", closedReason)
+                .param("retentionUntil", retentionUntil == null ? null : java.sql.Date.valueOf(retentionUntil))
                 .param("code", code)
                 .param("version", expectedVersion)
                 .update() > 0;
+    }
+
+    /** 该 Cell 数据库是否已被其他租户占用（一院一库的硬约束，跳过自身编码）。 */
+    public boolean cellDatabaseTaken(String dbHost, String dbName, String excludeCode) {
+        if (dbHost == null || dbHost.isBlank() || dbName == null || dbName.isBlank()) {
+            return false;
+        }
+        return jdbc.sql("""
+                        SELECT count(*) FROM auth_svc.tenant
+                         WHERE lower(db_host) = lower(?) AND db_name = ? AND code <> ?
+                        """)
+                .param(dbHost.trim())
+                .param(dbName.trim())
+                .param(excludeCode == null ? "" : excludeCode)
+                .query(Long.class).single() > 0;
     }
 
     /**

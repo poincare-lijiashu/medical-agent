@@ -119,6 +119,25 @@ public class LicenseService {
         return repo.list(limit);
     }
 
+    /**
+     * 某实例的授权摘要（§284）：开通编排只需要"有没有、能不能用"。
+     *
+     * <p>不存在返回 {@code present=false}，而不是 404：对开通流程来说
+     * "没有授权"是一个正常分支（是否需要它由开通参数决定），不是接口错误。
+     */
+    public com.medassist.license.web.LicenseDtos.Summary summaryOf(String instanceCode) {
+        String instance = instanceCode == null ? "" : instanceCode.trim();
+        if (instance.isEmpty()) {
+            return new com.medassist.license.web.LicenseDtos.Summary(false, null, null, null, null, 0);
+        }
+        return repo.findLatest(instance)
+                .map(l -> new com.medassist.license.web.LicenseDtos.Summary(true, l.licenseNo(),
+                        l.status(), l.editionCode(), l.expiresAt(),
+                        l.modules() == null ? 0 : l.modules().size()))
+                .orElseGet(() -> new com.medassist.license.web.LicenseDtos.Summary(
+                        false, null, null, null, null, 0));
+    }
+
     public List<Edition> editions() {
         return repo.listEditions();
     }

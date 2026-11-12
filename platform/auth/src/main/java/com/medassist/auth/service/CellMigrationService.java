@@ -181,6 +181,12 @@ public class CellMigrationService {
      * 强制 {@code connectTimeout/socketTimeout}：没有超时的 JDBC 连接会在对端静默丢包时挂死。
      */
     static String jdbcUrl(String dbHost, String dbName) {
+        return jdbcUrl(dbHost, dbName, CONNECT_TIMEOUT_SECONDS, SOCKET_TIMEOUT_SECONDS);
+    }
+
+    /** 供开通编排复用：不同步骤对超时的要求不同（探测要快，建账号可以稍慢）。 */
+    static String jdbcUrl(String dbHost, String dbName, int connectTimeoutSeconds,
+                          int socketTimeoutSeconds) {
         String host = dbHost.trim();
         String port = "5432";
         int colon = host.lastIndexOf(':');
@@ -190,9 +196,9 @@ public class CellMigrationService {
         }
         String database = dbName == null || dbName.isBlank() ? "medagent" : dbName.trim();
         return "jdbc:postgresql://" + host + ":" + port + "/" + database
-                + "?connectTimeout=" + CONNECT_TIMEOUT_SECONDS
-                + "&socketTimeout=" + SOCKET_TIMEOUT_SECONDS
-                + "&ApplicationName=medassist-cell-ledger";
+                + "?connectTimeout=" + connectTimeoutSeconds
+                + "&socketTimeout=" + socketTimeoutSeconds
+                + "&ApplicationName=medassist-cell-provisioning";
     }
 
     private static String safeSqlState(SQLException e) {

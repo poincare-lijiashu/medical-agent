@@ -43,6 +43,10 @@ public final class TenantDtos {
             @Size(max = 200, message = "数据库主机长度不能超过 200")
             String dbHost,
 
+            @Pattern(regexp = "[A-Za-z0-9_][A-Za-z0-9_-]{0,62}",
+                    message = "数据库名只能包含字母、数字、下划线与短横线")
+            String dbName,
+
             @Size(max = 32, message = "区域长度不能超过 32")
             String region,
 
@@ -80,6 +84,8 @@ public final class TenantDtos {
             @Pattern(regexp = "ACTIVE|SUSPENDED|CLOSED", message = "目标状态只能是 ACTIVE / SUSPENDED / CLOSED")
             String status,
             @Size(max = 200, message = "原因长度不能超过 200") String reason,
+            /** 注销时的数据保留截止日；缺省按 365 天写入，避免"保留期只存在于合同里"。 */
+            java.time.LocalDate retentionUntil,
             @NotNull(message = "缺少版本号") Long version
     ) {
     }
@@ -100,6 +106,9 @@ public final class TenantDtos {
             String notes,
             long userCount,
             long activeUserCount,
+            Instant closedAt,
+            String closedReason,
+            java.time.LocalDate retentionUntil,
             long version,
             Instant createdAt,
             Instant updatedAt,

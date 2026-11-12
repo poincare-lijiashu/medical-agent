@@ -1,0 +1,129 @@
+﻿{
+    "code":  0,
+    "message":  "æå",
+    "data":  {
+                 "id":  "ffe3fdb1-c344-4f28-8fd2-4c78dce04f67",
+                 "tenantCode":  "tenant-003",
+                 "instanceCode":  "MEDASSIST-HOSP-C-0001",
+                 "status":  "SUCCEEDED",
+                 "requestedBy":  "ops01",
+                 "startedAt":  "2026-11-12T12:43:00.017822Z",
+                 "finishedAt":  "2026-11-12T12:43:00.375181Z",
+                 "steps":  [
+                               {
+                                   "stepNo":  1,
+                                   "code":  "SPEC",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "dbHost":  "127.0.0.1:5435",
+                                                  "dbName":  "medagent",
+                                                  "tenantCode":  "tenant-003",
+                                                  "instanceCode":  "MEDASSIST-HOSP-C-0001"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.024149Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.025716Z",
+                                   "durationMs":  1
+                               },
+                               {
+                                   "stepNo":  2,
+                                   "code":  "TENANT",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "status":  "PENDING",
+                                                  "created":  true,
+                                                  "tenantCode":  "tenant-003"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.032491Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.040398Z",
+                                   "durationMs":  8
+                               },
+                               {
+                                   "stepNo":  3,
+                                   "code":  "CELL_CONNECT",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "authReady":  true,
+                                                  "latencyMs":  27,
+                                                  "authVersion":  "98"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.044549Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.071770Z",
+                                   "durationMs":  27
+                               },
+                               {
+                                   "stepNo":  4,
+                                   "code":  "CELL_TENANT",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "tenant":  "tenant-003",
+                                                  "instanceCode":  "MEDASSIST-HOSP-C-0001"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.076409Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.092324Z",
+                                   "durationMs":  16
+                               },
+                               {
+                                   "stepNo":  5,
+                                   "code":  "ADMIN",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "roles":  [
+                                                                "ADMIN"
+                                                            ],
+                                                  "created":  true,
+                                                  "username":  "admin01"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.097243Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.318536Z",
+                                   "durationMs":  221
+                               },
+                               {
+                                   "stepNo":  6,
+                                   "code":  "LICENSE",
+                                   "status":  "SKIPPED",
+                                   "detail":  {
+                                                  "state":  "DISABLED",
+                                                  "reason":  "æ¬é¨ç½²æªé\u0085ç½®æææå¡ï¼ç¦»çº¿/æ¬å°äº¤ä»ï¼",
+                                                  "modules":  0
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.324195Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.324713Z",
+                                   "durationMs":  0
+                               },
+                               {
+                                   "stepNo":  7,
+                                   "code":  "ACTIVATE",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "status":  "ACTIVE"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.328418Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.335298Z",
+                                   "durationMs":  7
+                               },
+                               {
+                                   "stepNo":  8,
+                                   "code":  "HEALTH",
+                                   "status":  "SUCCEEDED",
+                                   "detail":  {
+                                                  "users":  1,
+                                                  "latencyMs":  20,
+                                                  "authVersion":  "98"
+                                              },
+                                   "error":  null,
+                                   "startedAt":  "2026-11-12T12:43:00.339948Z",
+                                   "finishedAt":  "2026-11-12T12:43:00.369903Z",
+                                   "durationMs":  30
+                               }
+                           ],
+                 "oneTimeAdminPassword":  null
+             },
+    "timestamp":  "2026-11-12T12:54:58.358340800Z"
+}

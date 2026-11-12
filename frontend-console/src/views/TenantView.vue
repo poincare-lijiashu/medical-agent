@@ -8,8 +8,11 @@
         <button class="btn" type="button" :disabled="loading" @click="load">
           <AppIcon name="refresh" :size="15" /> {{ loading ? '加载中…' : '刷新' }}
         </button>
-        <button v-if="platformLevel" class="btn btn--primary" type="button" @click="openCreate">
-          <AppIcon name="plus" :size="15" /> 开通租户
+        <button v-if="platformLevel" class="btn btn--primary" type="button" @click="openProvision">
+          <AppIcon name="plus" :size="15" /> 开通 Cell
+        </button>
+        <button v-if="platformLevel" class="btn" type="button" @click="openCreate">
+          仅登记租户
         </button>
       </template>
     </PageHeader>
@@ -38,7 +41,21 @@
           :tone="countBy('SUSPENDED') + countBy('PENDING') > 0 ? 'warn' : undefined"
           meta="停用即撤销全院刷新令牌"
         />
-        <KpiCard label="本院账号" :value="ownTenant?.activeUserCount ?? 0" unit="个" :meta="`共 ${ownTenant?.userCount ?? 0} 个账号`" />
+        <KpiCard
+          v-if="platformLevel"
+          label="需关注"
+          :value="attentionCount"
+          unit="家"
+          :tone="attentionCount > 0 ? 'warn' : 'ok'"
+          meta="数据库不可达 / 迁移失败 / 开通失败"
+        />
+        <KpiCard
+          v-else
+          label="本院账号"
+          :value="ownTenant?.activeUserCount ?? 0"
+          unit="个"
+          :meta="`共 ${ownTenant?.userCount ?? 0} 个账号`"
+        />
       </div>
 
       <section class="sheet">
@@ -65,6 +82,7 @@
                 <th>实例码</th>
                 <th>状态</th>
                 <th class="right">账号</th>
+                <th v-if="platformLevel">健康</th>
                 <th v-if="platformLevel">发布对齐</th>
                 <th>Cell 入口</th>
                 <th>更新时间</th>
@@ -88,6 +106,15 @@
                   <span class="badge" :class="statusBadge(t.status)">{{ statusText(t.status) }}</span>
                 </td>
                 <td class="right mono">{{ t.activeUserCount }} / {{ t.userCount }}</td>
+                <td v-if="platformLevel">
+                  <span
+                    class="badge"
+                    :class="healthBadge(healthMap[t.code]?.state)"
+                    :title="healthMap[t.code]?.issues?.join('；') || '健康检查通过'"
+                  >
+                    {{ healthText(healthMap[t.code]?.state) }}
+                  </span>
+                </td>
                 <td v-if="platformLevel">
                   <span
                     class="badge"
@@ -168,6 +195,27 @@
                 <span class="quota-value mono">{{ selected.quotas?.maxAiCallsPerDay ?? '—' }}</span>
               </div>
             </div>
+            <div v-if="platformLevel && selectedHealth" class="health-box">
+              <div class="health-head">
+                <span class="badge" :class="healthBadge(selectedHealth.state)">
+                  {{ healthText(selectedHealth.state) }}
+                </span>
+                <span v-if="selectedHealth.cellReachable" class="sub">
+                  Cell 延迟 {{ selectedHealth.latencyMs ?? '—' }}ms · auth
+                  v{{ selectedHealth.authVersion || '—' }} · {{ selectedHealth.servicesTracked }} 个服务域
+                </span>
+                <span v-else class="sub">Cell 数据库不可达</span>
+                <span class="spacer" />
+                <span class="sub">检查于 {{ dateTime(selectedHealth.checkedAt) }}</span>
+              </div>
+              <ul v-if="selectedHealth.issues.length" class="health-issues">
+                <li v-for="(issue, i) in selectedHealth.issues" :key="i">{{ issue }}</li>
+              </ul>
+            </div>
+            <p v-if="selected.retentionUntil" class="hint notes">
+              注销保留：数据保留至 <span class="mono">{{ selected.retentionUntil }}</span>
+              <template v-if="selected.closedReason"> · {{ selected.closedReason }}</template>
+            </p>
             <p v-if="selected.notes" class="hint notes">{{ selected.notes }}</p>
           </div>
         </section>
@@ -391,6 +439,117 @@
       </template>
     </AppModal>
 
+    <!-- 开通 Cell（§284） -->
+    <AppModal v-model="provisionOpen" title="开通 Cell" width="820px" :dismissible="!provisionBusy">
+      <div class="form">
+        <p class="hint">
+          开通会依次执行：登记租户目录 → 探测 Cell 数据库结构 → 在 Cell 内登记租户 →
+          创建首个管理员 → 授权检查 → 激活 → 健康快照。失败可按原任务从失败步骤继续。
+        </p>
+        <div class="form-grid">
+          <label class="form-row">
+            <span class="label">租户编码 <span class="req">*</span></span>
+            <input v-model="provisionForm.tenantCode" class="input mono" type="text" placeholder="tenant-003" />
+          </label>
+          <label class="form-row">
+            <span class="label">实例码 <span class="req">*</span></span>
+            <input v-model="provisionForm.instanceCode" class="input mono" type="text" placeholder="MEDASSIST-HOSP-C-0001" />
+          </label>
+          <label class="form-row">
+            <span class="label">医院名称 <span class="req">*</span></span>
+            <input v-model="provisionForm.name" class="input" type="text" placeholder="某某市第三人民医院" />
+          </label>
+          <label class="form-row">
+            <span class="label">产品版本</span>
+            <input v-model="provisionForm.editionCode" class="input" type="text" placeholder="ENTERPRISE" />
+          </label>
+          <label class="form-row">
+            <span class="label">Cell 数据库 <span class="req">*</span></span>
+            <input v-model="provisionForm.dbHost" class="input mono" type="text" placeholder="127.0.0.1:5435" />
+            <span class="hint">必须是独立 PostgreSQL 实例；不允许填控制面库</span>
+          </label>
+          <label class="form-row">
+            <span class="label">数据库名</span>
+            <input v-model="provisionForm.dbName" class="input mono" type="text" placeholder="medagent" />
+          </label>
+          <label class="form-row">
+            <span class="label">Cell 入口</span>
+            <input v-model="provisionForm.cellEndpoint" class="input mono" type="text" placeholder="https://hospital-c.example" />
+          </label>
+          <label class="form-row">
+            <span class="label">区域</span>
+            <input v-model="provisionForm.region" class="input" type="text" placeholder="cn-east" />
+          </label>
+          <label class="form-row">
+            <span class="label">首个管理员登录名 <span class="req">*</span></span>
+            <input v-model="provisionForm.adminUsername" class="input mono" type="text" placeholder="admin01" />
+          </label>
+          <label class="form-row">
+            <span class="label">管理员姓名 <span class="req">*</span></span>
+            <input v-model="provisionForm.adminDisplayName" class="input" type="text" placeholder="三院管理员" />
+          </label>
+          <label class="form-row">
+            <span class="label">床位上限</span>
+            <input v-model.number="provisionForm.maxBeds" class="input" type="number" min="1" />
+          </label>
+          <label class="form-row">
+            <span class="label">账号上限</span>
+            <input v-model.number="provisionForm.maxUsers" class="input" type="number" min="1" />
+          </label>
+        </div>
+        <label class="checkbox-row">
+          <input v-model="provisionForm.requireLicense" type="checkbox" />
+          <span>要求该实例已有可用授权（生产建议开启；本地/离线交付可关闭）</span>
+        </label>
+        <p class="hint">管理员口令由服务端生成，只在开通成功时显示一次，请当场转交并督促改密。</p>
+        <p v-if="provisionError" class="form-error">{{ provisionError }}</p>
+
+        <div v-if="provisionJob" class="prov-result">
+          <div class="prov-head">
+            <span class="badge" :class="provisionJobBadge">{{ provisionStatusText }}</span>
+            <span class="mono sub">{{ provisionJob.tenantCode }}</span>
+            <span class="spacer" />
+            <span class="sub">{{ provisionJob.steps.length }} 个步骤</span>
+          </div>
+          <div v-if="provisionJob.oneTimeAdminPassword" class="password-box">
+            <div class="password-main">
+              <span class="sub">一次性管理员口令（仅显示一次）</span>
+              <code class="mono">{{ provisionJob.oneTimeAdminPassword }}</code>
+            </div>
+            <button class="btn btn--sm" type="button" @click="copyPassword">复制</button>
+          </div>
+          <ul class="step-list">
+            <li v-for="step in provisionJob.steps" :key="step.code" class="step-item">
+              <span class="badge" :class="stepBadge(step.status)">{{ stepText(step.status) }}</span>
+              <span class="step-name">{{ stepLabel(step.code) }}</span>
+              <span class="mono sub step-ms">{{ step.durationMs }}ms</span>
+              <span v-if="step.error" class="step-error">{{ step.error }}</span>
+            </li>
+          </ul>
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn" type="button" :disabled="provisionBusy" @click="closeProvision">关闭</button>
+        <button
+          v-if="provisionJob?.status === 'FAILED'"
+          class="btn"
+          type="button"
+          :disabled="provisionBusy"
+          @click="resumeProvision"
+        >
+          {{ provisionBusy ? '继续中…' : '从失败步骤继续' }}
+        </button>
+        <button
+          class="btn btn--primary"
+          type="button"
+          :disabled="provisionBusy || !!provisionJob"
+          @click="doProvision"
+        >
+          {{ provisionBusy ? '开通中…' : '开始开通' }}
+        </button>
+      </template>
+    </AppModal>
+
     <!-- 编辑租户 -->
     <AppModal v-model="editOpen" title="编辑租户资料" width="680px" :dismissible="!busy">
       <div class="form">
@@ -469,6 +628,11 @@
           <span class="label">原因 <span class="req">*</span></span>
           <textarea v-model="statusReason" class="input" rows="3" placeholder="如：合同暂停 / 欠费 / 院方要求下线" />
         </label>
+        <label v-if="statusTarget === 'CLOSED'" class="form-row">
+          <span class="label">数据保留至</span>
+          <input v-model="statusRetention" class="input" type="date" />
+          <span class="hint">注销是终态；留空按 365 天登记，到期后由数据处置流程归档/销毁</span>
+        </label>
         <p v-if="statusError" class="form-error">{{ statusError }}</p>
       </div>
       <template #footer>
@@ -503,7 +667,11 @@ import {
   TENANT_STATUS_TEXT,
   tenantApi,
   type CellMigrationView,
+  type ProvisionJob,
+  type ProvisionStepStatus,
   type Tenant,
+  type TenantHealth,
+  type TenantHealthState,
   type TenantList,
   type TenantStatus,
 } from '@/api/tenant'
@@ -521,6 +689,8 @@ const forbidden = ref(false)
 /** 各院相对已发布列车的对齐结论（平台运营视角；租户管理员不请求）。 */
 const cellStatuses = ref<Record<string, CellReleaseStatus>>({})
 const statusLoading = ref(false)
+/** 各院健康度（§284）：并行探测结果。 */
+const healthMap = ref<Record<string, TenantHealth>>({})
 
 const platformLevel = computed(() => list.value?.platformLevel === true)
 const canSelfManage = computed(() => session.hasPermission('tenant:self:manage'))
@@ -531,6 +701,15 @@ const ownTenant = computed(() => {
 const currentStatus = computed(() => ownTenant.value?.status || null)
 const selectedStatus = computed(() =>
   selected.value ? cellStatuses.value[selected.value.code] || null : null,
+)
+const selectedHealth = computed(() =>
+  selected.value ? healthMap.value[selected.value.code] || null : null,
+)
+/** 需要人介入的院区：离线 / 降级。 */
+const attentionCount = computed(
+  () =>
+    Object.values(healthMap.value).filter((h) => h.state === 'DOWN' || h.state === 'DEGRADED')
+      .length,
 )
 
 onMounted(load)
@@ -543,9 +722,10 @@ async function load() {
     const data = await tenantApi.list()
     list.value = data
     if (platformLevel.value) {
-      await loadCellStatuses()
+      await Promise.all([loadCellStatuses(), loadHealth()])
     } else {
       cellStatuses.value = {}
+      healthMap.value = {}
     }
     // 优先展示本院详情：租户管理员打开页面就是要看"我在哪家院、入口是什么"
     const preferred = data.items.find((t) => t.code === data.currentTenant) || data.items[0]
@@ -633,6 +813,43 @@ async function loadCellStatuses() {
 
 function reloadCellStatuses() {
   return loadCellStatuses()
+}
+
+/* ---------------------------------------------------------------- 健康度 */
+
+async function loadHealth() {
+  try {
+    const data = await tenantApi.health()
+    const map: Record<string, TenantHealth> = {}
+    for (const item of data.items) {
+      map[item.tenantCode] = item
+    }
+    healthMap.value = map
+  } catch {
+    // 健康度失败不影响台账主体：页面降级为不显示健康列
+    healthMap.value = {}
+  }
+}
+
+function healthText(state?: TenantHealthState): string {
+  if (!state) return '—'
+  const map: Record<TenantHealthState, string> = {
+    OK: '正常',
+    PENDING: '待开通',
+    SUSPENDED: '已停用',
+    CLOSED: '已注销',
+    DEGRADED: '需关注',
+    DOWN: '不可达',
+  }
+  return map[state]
+}
+
+function healthBadge(state?: TenantHealthState): string {
+  if (!state) return 'badge--neutral'
+  if (state === 'OK') return 'badge--ok'
+  if (state === 'DOWN' || state === 'DEGRADED') return 'badge--danger'
+  if (state === 'PENDING') return 'badge--warn'
+  return 'badge--neutral'
 }
 
 function releaseText(status?: CellReleaseStatus): string {
@@ -736,6 +953,175 @@ async function doCreate() {
   }
 }
 
+/* ---------------------------------------------------------------- 开通 Cell */
+
+const provisionOpen = ref(false)
+const provisionBusy = ref(false)
+const provisionError = ref('')
+const provisionJob = ref<ProvisionJob | null>(null)
+const provisionForm = reactive({
+  tenantCode: '',
+  instanceCode: '',
+  name: '',
+  editionCode: 'ENTERPRISE',
+  dbHost: '',
+  dbName: 'medagent',
+  cellEndpoint: '',
+  region: 'local',
+  adminUsername: 'admin01',
+  adminDisplayName: '',
+  maxBeds: undefined as number | undefined,
+  maxUsers: undefined as number | undefined,
+  requireLicense: false,
+})
+
+const provisionStatusText = computed(() => {
+  const status = provisionJob.value?.status
+  if (status === 'SUCCEEDED') return '开通成功'
+  if (status === 'FAILED') return '开通失败'
+  if (status === 'RUNNING') return '执行中'
+  return ''
+})
+
+const provisionJobBadge = computed(() => {
+  const status = provisionJob.value?.status
+  if (status === 'SUCCEEDED') return 'badge--ok'
+  if (status === 'FAILED') return 'badge--danger'
+  return 'badge--warn'
+})
+
+function openProvision() {
+  const code = suggestCode()
+  provisionError.value = ''
+  provisionJob.value = null
+  provisionForm.tenantCode = code
+  provisionForm.instanceCode = suggestInstance(code)
+  provisionForm.name = ''
+  provisionForm.editionCode = 'ENTERPRISE'
+  provisionForm.dbHost = ''
+  provisionForm.dbName = 'medagent'
+  provisionForm.cellEndpoint = ''
+  provisionForm.region = 'local'
+  provisionForm.adminUsername = 'admin01'
+  provisionForm.adminDisplayName = ''
+  provisionForm.maxBeds = undefined
+  provisionForm.maxUsers = undefined
+  provisionForm.requireLicense = false
+  provisionOpen.value = true
+}
+
+async function doProvision() {
+  if (!provisionForm.tenantCode.trim() || !provisionForm.instanceCode.trim()
+      || !provisionForm.name.trim() || !provisionForm.dbHost.trim()
+      || !provisionForm.adminUsername.trim() || !provisionForm.adminDisplayName.trim()) {
+    provisionError.value = '租户编码、实例码、医院名称、Cell 数据库与管理员信息为必填项'
+    return
+  }
+  provisionBusy.value = true
+  provisionError.value = ''
+  try {
+    provisionJob.value = await tenantApi.provision({
+      tenantCode: provisionForm.tenantCode.trim(),
+      instanceCode: provisionForm.instanceCode.trim(),
+      name: provisionForm.name.trim(),
+      editionCode: provisionForm.editionCode.trim() || undefined,
+      dbHost: provisionForm.dbHost.trim(),
+      dbName: provisionForm.dbName.trim() || undefined,
+      cellEndpoint: provisionForm.cellEndpoint.trim() || undefined,
+      region: provisionForm.region.trim() || undefined,
+      quotas: {
+        maxBeds: provisionForm.maxBeds || undefined,
+        maxUsers: provisionForm.maxUsers || undefined,
+      },
+      initialAdmin: {
+        username: provisionForm.adminUsername.trim(),
+        displayName: provisionForm.adminDisplayName.trim(),
+      },
+      requireLicense: provisionForm.requireLicense,
+    })
+    if (provisionJob.value.status === 'SUCCEEDED') {
+      toast.ok(`Cell 已开通：${provisionJob.value.tenantCode}`)
+      await load()
+    } else {
+      provisionError.value = '开通未完成：请查看失败步骤与原因后选择「从失败步骤继续」'
+    }
+  } catch (e) {
+    provisionError.value = errorText(e)
+  } finally {
+    provisionBusy.value = false
+  }
+}
+
+async function resumeProvision() {
+  if (!provisionJob.value) return
+  provisionBusy.value = true
+  provisionError.value = ''
+  try {
+    provisionJob.value = await tenantApi.resumeProvision(provisionJob.value.id)
+    if (provisionJob.value.status === 'SUCCEEDED') {
+      toast.ok(`Cell 已开通：${provisionJob.value.tenantCode}`)
+      await load()
+    } else {
+      provisionError.value = '仍未完成：请按失败步骤的原因处理后再继续'
+    }
+  } catch (e) {
+    provisionError.value = errorText(e)
+  } finally {
+    provisionBusy.value = false
+  }
+}
+
+function closeProvision() {
+  provisionOpen.value = false
+}
+
+const STEP_LABELS: Record<string, string> = {
+  SPEC: '规格与护栏校验',
+  TENANT: '登记租户目录',
+  CELL_CONNECT: '探测 Cell 数据库',
+  CELL_TENANT: 'Cell 内登记租户',
+  ADMIN: '创建首个管理员',
+  LICENSE: '授权检查',
+  ACTIVATE: '激活租户',
+  HEALTH: '健康快照',
+}
+
+function stepLabel(code: string): string {
+  return STEP_LABELS[code] || code
+}
+
+function stepText(status: ProvisionStepStatus): string {
+  const map: Record<ProvisionStepStatus, string> = {
+    SUCCEEDED: '完成',
+    FAILED: '失败',
+    SKIPPED: '跳过',
+  }
+  return map[status] || status
+}
+
+function stepBadge(status: ProvisionStepStatus): string {
+  if (status === 'SUCCEEDED') return 'badge--ok'
+  if (status === 'FAILED') return 'badge--danger'
+  return 'badge--neutral'
+}
+
+async function copyPassword() {
+  const password = provisionJob.value?.oneTimeAdminPassword
+  if (!password) return
+  try {
+    await navigator.clipboard.writeText(password)
+    toast.ok('口令已复制，请通过安全渠道转交')
+  } catch {
+    toast.error('复制失败：请手动选择口令文本')
+  }
+}
+
+/** 按现有租户推算实例码，减少手填格式错误。 */
+function suggestInstance(code: string): string {
+  const digits = code.replace(/[^0-9]/g, '')
+  return `MEDASSIST-HOSP-${(digits || '001').padStart(4, '0')}`
+}
+
 /* ---------------------------------------------------------------- 编辑 */
 
 const editOpen = ref(false)
@@ -805,6 +1191,7 @@ async function doEdit() {
 const statusOpen = ref(false)
 const statusError = ref('')
 const statusReason = ref('')
+const statusRetention = ref('')
 const statusTarget = ref<'ACTIVE' | 'SUSPENDED' | 'CLOSED'>('SUSPENDED')
 const statusTenant = ref<Tenant | null>(null)
 
@@ -818,6 +1205,7 @@ function openStatus(t: Tenant, target: 'ACTIVE' | 'SUSPENDED' | 'CLOSED') {
   statusTenant.value = t
   statusTarget.value = target
   statusReason.value = ''
+  statusRetention.value = ''
   statusError.value = ''
   statusOpen.value = true
 }
@@ -832,6 +1220,7 @@ async function doStatus() {
       statusTarget.value,
       statusReason.value.trim(),
       statusTenant.value.version,
+      statusTarget.value === 'CLOSED' ? statusRetention.value || undefined : undefined,
     )
     statusOpen.value = false
     toast.ok(statusTitle.value + '成功')
@@ -997,6 +1386,95 @@ function suggestCode(): string {
 .rel-target {
   flex: 1;
   min-width: 0;
+}
+.health-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--ground);
+}
+.health-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.health-issues {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--warning);
+  font-size: var(--fs-small);
+  line-height: 1.7;
+}
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-small);
+  color: var(--muted);
+}
+.prov-result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--ground);
+}
+.prov-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.password-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px dashed color-mix(in srgb, var(--positive) 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--positive) 7%, var(--surface));
+}
+.password-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.password-main code {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: var(--fs-small);
+}
+.step-name {
+  min-width: 132px;
+}
+.step-ms {
+  min-width: 52px;
+  text-align: right;
+}
+.step-error {
+  color: var(--negative);
+  overflow-wrap: anywhere;
 }
 .table-wrap {
   overflow: auto;

@@ -8,6 +8,8 @@ import com.medassist.auth.web.dto.TenantDtos;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.Permissions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.core.JacksonException;
@@ -32,6 +34,8 @@ import java.util.Map;
 @Service
 public class TenantService {
 
+    private static final Logger log = LoggerFactory.getLogger(TenantService.class);
+
     private static final String PERM_MANAGE = "tenant:manage";
     private static final String PERM_SELF_MANAGE = "tenant:self:manage";
 
@@ -41,11 +45,14 @@ public class TenantService {
     private final TenantRepository repo;
     private final TenantProperties props;
     private final ObjectMapper objectMapper;
+    private final CellDatabaseGateway cell;
 
-    public TenantService(TenantRepository repo, TenantProperties props, ObjectMapper objectMapper) {
+    public TenantService(TenantRepository repo, TenantProperties props, ObjectMapper objectMapper,
+                         CellDatabaseGateway cell) {
         this.repo = repo;
         this.props = props;
         this.objectMapper = objectMapper;
+        this.cell = cell;
     }
 
     // ---------------------------------------------------------------- 查询
@@ -87,6 +94,12 @@ public class TenantService {
         if (!quotas.valid()) {
             throw new BusinessException(ErrorCode.TENANT_INVALID, "资源配额必须为正整数且不超过 1000000");
         }
+        String dbHost = blankToNull(req.dbHost());
+        String dbName = blankToNull(req.dbName());
+        if (dbHost != null && dbName != null && repo.cellDatabaseTaken(dbHost, dbName, code)) {
+            throw new BusinessException(ErrorCode.TENANT_INVALID,
+                    "该 Cell 数据库已被其他租户占用：一院一库，不能两家医院共用一个业务库");
+        }
         String status = req.status() == null || req.status().isBlank() ? Tenant.PENDING : req.status().trim();
         if (!Tenant.PENDING.equals(status) && !Tenant.ACTIVE.equals(status)) {
             throw new BusinessException(ErrorCode.TENANT_INVALID, "新建租户只能是待开通或在用状态");
@@ -94,9 +107,9 @@ public class TenantService {
 
         Tenant tenant = new Tenant(code, instanceCode, req.name().trim(),
                 blankToNull(req.editionCode()), status,
-                blankToNull(req.cellEndpoint()), blankToNull(req.dbHost()), blankToNull(req.region()),
+                blankToNull(req.cellEndpoint()), dbHost, dbName, blankToNull(req.region()),
                 quotas, blankToNull(req.contactName()), blankToNull(req.contactPhone()),
-                blankToNull(req.notes()), 0L, actor, null, null);
+                blankToNull(req.notes()), null, null, null, 0L, actor, null, null);
         repo.insert(tenant);
         audit(actor, "TENANT_CREATE", code, Map.of(
                 "instanceCode", instanceCode,
@@ -132,11 +145,15 @@ public class TenantService {
                 current.status(),
                 platformLevel ? blankToNull(req.cellEndpoint()) : current.cellEndpoint(),
                 platformLevel ? blankToNull(req.dbHost()) : current.dbHost(),
+                current.dbName(),
                 platformLevel ? blankToNull(req.region()) : current.region(),
                 quotas,
                 req.contactName() == null ? current.contactName() : blankToNull(req.contactName()),
                 req.contactPhone() == null ? current.contactPhone() : blankToNull(req.contactPhone()),
                 req.notes() == null ? current.notes() : blankToNull(req.notes()),
+                current.closedAt(),
+                current.closedReason(),
+                current.retentionUntil(),
                 current.version(),
                 current.createdBy(),
                 current.createdAt(),
@@ -175,14 +192,25 @@ public class TenantService {
         if (!Tenant.ACTIVE.equals(target) && (reason == null || reason.length() < 2)) {
             throw new BusinessException(ErrorCode.TENANT_INVALID, "停用或注销必须填写原因（至少 2 个字）");
         }
-        if (!repo.updateStatus(current.code(), target, req.version())) {
+        java.time.Instant closedAt = null;
+        java.time.LocalDate retentionUntil = null;
+        if (Tenant.CLOSED.equals(target)) {
+            closedAt = java.time.Instant.now();
+            retentionUntil = req.retentionUntil() != null
+                    ? req.retentionUntil()
+                    : java.time.LocalDate.now(java.time.ZoneOffset.UTC).plusDays(365);
+        }
+        if (!repo.updateStatus(current.code(), target, req.version(), closedAt, reason, retentionUntil)) {
             throw new BusinessException(ErrorCode.CONFLICT, "租户状态已被其他管理员修改，请刷新后重试");
         }
         int revoked = Tenant.ACTIVE.equals(target) ? 0 : repo.revokeRefreshTokensOfTenant(current.code());
+        boolean cellPropagated = propagateToCell(current, target, closedAt, reason);
         audit(actor, "TENANT_STATUS", current.code(), Map.of(
                 "from", current.status(), "to", target,
                 "reason", reason == null ? "" : reason,
-                "revokedSessions", revoked));
+                "retentionUntil", retentionUntil == null ? "" : retentionUntil.toString(),
+                "revokedSessions", revoked,
+                "cellPropagated", cellPropagated));
         return toResp(repo.findByCode(current.code()).orElseThrow(), true);
     }
 
@@ -225,6 +253,30 @@ public class TenantService {
 
     // ---------------------------------------------------------------- 内部方法
 
+    /**
+     * 把状态同步到 Cell 内租户台账（best-effort）。
+     *
+     * <p>不因为 Cell 离线而拒绝停用：控制面停用必须立即生效（撤销刷新令牌已经完成），
+     * Cell 内同步失败只记录在审计与日志里，等恢复后可由健康度/运维补同步。
+     * 反过来如果因为院方库不可达就不让停用，等于把"下线一家医院"的权力交给对方机房。
+     */
+    private boolean propagateToCell(Tenant tenant, String target, java.time.Instant closedAt,
+                                    String reason) {
+        if (tenant.dbHost() == null || tenant.dbHost().isBlank()) {
+            return false;
+        }
+        try {
+            cell.updateTenantStatus(tenant.dbHost(),
+                    tenant.dbName() == null || tenant.dbName().isBlank() ? "medagent" : tenant.dbName(),
+                    tenant.code(), target, closedAt, reason);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("tenant.status.cell_sync_failed tenant={} status={} reason={}",
+                    tenant.code(), target, e.getMessage());
+            return false;
+        }
+    }
+
     /** 可见性判定：没有全局管理权时，只允许访问自己那条，其余按"不存在"处理。 */
     private Tenant requireVisible(String code, String permissionsHeader, String tenantHeader) {
         String target = code == null ? "" : code.trim();
@@ -248,6 +300,7 @@ public class TenantService {
                 t.cellEndpoint(), t.dbHost(), t.region(), t.quotas(),
                 t.contactName(), t.contactPhone(), t.notes(),
                 repo.countUsers(t.code()), repo.countActiveUsers(t.code()),
+                t.closedAt(), t.closedReason(), t.retentionUntil(),
                 t.version(), t.createdAt(), t.updatedAt(), changes);
     }
 

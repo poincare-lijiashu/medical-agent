@@ -1,6 +1,7 @@
 package com.medassist.auth.domain;
 
 import java.time.Instant;
+import java.time.LocalDate;
 
 /**
  * 租户（医院）台账（第 281 批 / ADR-001）。
@@ -23,11 +24,19 @@ public record Tenant(
         String status,
         String cellEndpoint,
         String dbHost,
+        /** Cell 库名；与 dbHost 一起构成"一院一库"的唯一坐标。 */
+        String dbName,
         String region,
         TenantQuotas quotas,
         String contactName,
         String contactPhone,
         String notes,
+        /** 注销时间（终态）；停用不写该字段。 */
+        Instant closedAt,
+        /** 注销原因（合同终止/欠费/院方要求下线等）。 */
+        String closedReason,
+        /** 数据保留截止日：到期后由数据处置流程归档/销毁，本服务不删除数据。 */
+        LocalDate retentionUntil,
         long version,
         String createdBy,
         Instant createdAt,

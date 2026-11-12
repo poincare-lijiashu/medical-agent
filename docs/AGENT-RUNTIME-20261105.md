@@ -12808,3 +12808,75 @@ CPU 打满                 本地单机 +156.7%，标记 LOCAL_REFERENCE（不�
 
 一键开通（建库→迁移→Cell 内租户登记→命名空间/配额→license→首个管理员）、
 租户停用/注销的数据保留策略、租户健康度看板、单院备份桶 + PITR 与恢复演练。
+
+## 284. 2026-11-12 开通自动化、生命周期与租户健康度（第 284 批 / ADR-001 P3）
+
+**为什么"开通"必须是一条流水线，而不是一个按钮**
+
+一院一 Cell 之后，开通要跨越控制面与院方数据库：建目录、探结构、登记 Cell 租户、建首个管理员、
+查授权、激活、健康检查。任何一步都可能因网络/迁移/授权失败而中断；如果只做成一个"点了就等"的按钮，
+失败后既不知道卡在哪，也不敢重试（怕重复建账号）。本批把它做成**步骤落库、可解释、可 resume** 的编排。
+
+**本批做了什么**
+
+1. **开通编排**（auth V98 + `ProvisioningService`）：8 个步骤
+   `SPEC → TENANT → CELL_CONNECT → CELL_TENANT → ADMIN → LICENSE → ACTIVATE → HEALTH`；
+   每步写 `auth_svc.provision_step`，失败任务可 `POST /provisions/{id}/resume` 从失败步骤继续。
+2. **安全护栏（写死在服务端）**：
+   - 禁止把租户开进控制面数据库；
+   - 同一 `(db_host, db_name)` 不能被两家租户占用（V98 部分唯一索引 + 服务层校验）；
+   - 一次性管理员口令不落库、不写审计、不进日志，只在创建响应里返回一次；
+   - 管理员已存在则 SKIPPED，resume 不会重复建账号。
+3. **授权检查**：license 服务新增 `/internal/license/summary`（网关拒绝 `/internal/**`，且强制
+   `X-Internal-Token`）；`requireLicense=true` 时无授权/已吊销/已过期会阻塞激活，否则记为 SKIPPED 并留证据。
+4. **状态同步与保留策略**：停用/注销会 best-effort 同步到 Cell 内 `auth_svc.tenant`（Cell 离线不阻止控制面停用），
+   注销写入 `closed_at / closed_reason / retention_until`（缺省 365 天），CLOSED 为终态。
+5. **租户健康度**：`GET /tenants/health`、`GET /tenants/{code}/health`；4 线程并行探测、单院 4 秒超时，
+   输出 `OK / PENDING / SUSPENDED / CLOSED / DEGRADED / DOWN` 与可读 `issues[]`；
+   离线医院只影响自己那一行。
+6. **控制台**：租户页新增「健康」列、「需关注」KPI、详情健康块；新增「开通 Cell」弹窗
+   （步骤进度、失败步骤原因、resume、一次性口令复制）；注销弹窗支持登记保留期。
+7. **本地一键开通** `scripts/provision_cell.ps1`：独立 PG → 15 个服务迁移 → 调用开通 API → 打印步骤与一次性口令；
+   迁移仍由 Cell 自己跑，控制面不代跑 Flyway。
+8. **运维手册** [PROVISIONING-RUNBOOK.md](PROVISIONING-RUNBOOK.md)：生产 Helm、开通命令、失败处理、
+   停用/注销/回滚、健康巡检与 30 分钟预算。
+
+**验证**
+
+```
+Java：auth + license 119 passed（新增 ProvisioningServiceTest 8、TenantHealthServiceTest 6）
+契约：tests/test_provisioning_contract.py 14 passed（编排/护栏/生命周期/健康度/脚本/手册）
+前端：typecheck / build 通过（入口 gzip 98.48KB < 110KB）
+全量：pytest -m "not e2e" → 1993 passed / 1 skipped
+```
+
+真实栈（独立 Cell `tenant-003`，独立 PG 5435）：
+
+```
+开通任务          8 个步骤全部 SUCCEEDED，编排本身 358ms
+Cell 探测          authReady=true · authVersion=98 · 20–27ms
+首个管理员         直接登录 Cell 200，令牌 tenant=tenant-003 / instance=MEDASSIST-HOSP-C-0001
+生命周期套件       16/16 PASS：
+                  停用 → Cell 登录 403/40320；健康度 SUSPENDED；账号数不变
+                  恢复 → 登录 200；账号数不变
+                  注销 → retentionUntil/closedAt 落库；恢复被拒 56403
+健康度             tenant-001/002/003 = OK；tenant-099（注销）= CLOSED
+浏览器（ops01）    四行租户、健康列绿色「正常」/灰色「已注销」、「需关注 0」、
+                  「开通 Cell」弹窗 13 个字段与 2 个按钮渲染正常，无报错/无横向溢出
+```
+
+> 本机验收：从建独立 PG 到开通成功 = 15 个服务迁移 + 8 步编排；编排耗时 0.36 秒。
+> 生产 30 分钟预算与各阶段耗时见运维手册第 7 节。
+
+**已知边界（下一批处理）**
+
+- 一次性口令**尚未强制首登改密**（服务端可强制，前端改密流程未做）——当前依靠交付流程约束；
+- 开通的 LICENSE 步骤只做"检查"，授权书的签发/导入仍是 license 服务的人工流程；
+- 保留期到期后的归档/销毁由数据处置流程执行，应用不自动删数据；
+- 编排是同步执行（单步 10 秒上限）；大规模批量开通需要队列化，避免长请求；
+- 生产 K8s 下的开通（namespace/PG/迁移 Job）仍需按手册执行，脚本只覆盖本地 Docker 形态。
+
+**下一批建议（§285）**
+
+首登强制改密与自助改密闭环、授权签发/导入与开通联动、单院备份桶 + PITR 与恢复演练、
+租户健康度接入 Prometheus/告警路由。
