@@ -1,120 +1,355 @@
 <template>
-  <div class="ai-page">
-    <header class="ai-bar">
-      <div class="ai-title">
-        <span class="ai-dot" />
-        <strong>AI 临床助手 · 完整工作台</strong>
-        <span class="ai-hint">
-          已用当前登录身份进入，无需二次登录；审方与质控已内联在医嘱工作台/病案首页
-        </span>
-      </div>
-      <div class="ai-actions">
-        <button class="btn btn--ghost" type="button" @click="reload">重新加载</button>
-        <button class="btn btn--primary" type="button" @click="openNew">在新窗口打开</button>
-      </div>
-    </header>
-    <!--
-      为什么用 iframe 而不是重写：AI 中台是一套独立演进的 Vue 应用（14 个视图），
-      已按临床场景打磨过交互；这里把它的会话桥接过来即可"一次登录、一处入口"。
-      URL 里带的是同一枚 Java 平台 JWT，AI 中台用同一密钥验签，因此不产生第二次登录；
-      进入后 AI 前端会立刻把 token 从地址栏抹掉（replaceState）。
-    -->
-    <iframe
-      v-if="src"
-      ref="frame"
-      class="ai-frame"
-      :src="src"
+  <div class="page">
+    <PageHeader
       title="AI 临床助手"
-      allow="clipboard-read; clipboard-write"
-    />
-    <div v-else class="ai-empty">未取到登录令牌，请重新登录后再进入。</div>
+      :sub="`一次登录进入全部 AI 能力；调用复用当前会话令牌，答案与操作全程可追溯。${runtimeText}`"
+    >
+      <template #actions>
+        <button class="btn" type="button" :disabled="loading" @click="load">
+          <AppIcon name="refresh" :size="15" /> {{ loading ? '加载中…' : '刷新' }}
+        </button>
+      </template>
+    </PageHeader>
+
+    <TableSkeleton v-if="loading && !overview" :rows="4" />
+    <LoadError v-else-if="error" :message="error" :retrying="loading" @retry="load" />
+
+    <template v-else>
+      <div class="kpi-strip">
+        <KpiCard
+          label="待人工核对"
+          :value="overview?.pending ?? 0"
+          unit="条"
+          :tone="(overview?.pending ?? 0) > 0 ? 'warn' : 'ok'"
+          meta="低置信度/高风险优先"
+        />
+        <KpiCard label="已处理" :value="overview?.resolved ?? 0" unit="条" meta="累计人工复核" />
+        <KpiCard
+          label="知识库文档"
+          :value="kbDocs"
+          unit="篇"
+          :meta="(overview?.kb_docs ?? 0) < 0 ? '知识库暂不可达' : '指南/文献/院内制度'"
+        />
+        <KpiCard label="审计事件" :value="overview?.events_total ?? 0" unit="条" meta="AI 调用与复核留痕" />
+      </div>
+
+      <section class="sheet">
+        <div class="sheet-head">
+          <span class="sheet-title">能力入口</span>
+          <span class="spacer" />
+          <span class="hint">所有能力共用同一会话与同一套权限；无权限的入口不会出现在左侧导航。</span>
+        </div>
+        <div class="cap-grid">
+          <RouterLink v-for="cap in CAPABILITIES" :key="cap.to" :to="cap.to" class="cap-card">
+            <span class="cap-icon"><AppIcon :name="cap.icon" :size="20" /></span>
+            <span class="cap-body">
+              <span class="cap-title">{{ cap.title }}</span>
+              <span class="cap-desc">{{ cap.desc }}</span>
+            </span>
+            <AppIcon class="cap-arrow" name="arrow-right" :size="16" />
+          </RouterLink>
+        </div>
+      </section>
+
+      <div class="two-col">
+        <section class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">最近待核对</span>
+            <span class="badge badge--neutral">{{ pending.length }}</span>
+            <span class="spacer" />
+            <RouterLink class="btn btn--sm" to="/ai/review">进入审核中心</RouterLink>
+          </div>
+          <EmptyState
+            v-if="pending.length === 0"
+            title="当前没有待核对条目"
+            desc="AI 结论已全部处理；低置信度或高风险结论会强制进入人工复核。"
+          />
+          <ul v-else class="pending-list">
+            <li v-for="item in pending" :key="item.id" class="pending-item">
+              <div class="pending-main">
+                <span class="pending-agent">{{ agentLabel(item.agent) }}</span>
+                <span class="pending-question">{{ item.question || '（未提供问题）' }}</span>
+              </div>
+              <div class="pending-meta">
+                <span v-if="item.risk_reason" class="badge badge--warn">{{ item.risk_reason }}</span>
+                <span class="sub">{{ dateTime(item.ts) }}</span>
+              </div>
+            </li>
+          </ul>
+        </section>
+
+        <section class="sheet">
+          <div class="sheet-head">
+            <span class="sheet-title">运行状态</span>
+            <span class="spacer" />
+            <span class="badge" :class="error ? 'badge--danger' : 'badge--ok'">
+              {{ error ? '异常' : '在线' }}
+            </span>
+          </div>
+          <dl class="runtime">
+            <div><dt>版本</dt><dd>{{ overview?.version || '—' }}</dd></div>
+            <div><dt>环境</dt><dd>{{ overview?.env || '—' }}</dd></div>
+            <div><dt>推理设备</dt><dd>{{ overview?.device || '—' }}</dd></div>
+            <div><dt>已运行</dt><dd>{{ uptimeText }}</dd></div>
+            <div><dt>会话身份</dt><dd>{{ session.user.value?.username || '—' }}</dd></div>
+          </dl>
+          <p class="hint runtime-hint">
+            AI 调用异常只会让本页显示错误，不会把整个控制台登出；可在左侧导航进入具体能力重试。
+          </p>
+        </section>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { getAccessToken } from '@/api/http'
+import { computed, onMounted, ref } from 'vue'
+import AppIcon from '@/components/ui/AppIcon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import KpiCard from '@/components/ui/KpiCard.vue'
+import LoadError from '@/components/ui/LoadError.vue'
+import PageHeader from '@/components/ui/PageHeader.vue'
+import TableSkeleton from '@/components/ui/TableSkeleton.vue'
+import { aiOverview, aiReviewPending, type AiOverview, type AiReviewItem } from '@/api/ai'
+import { errorText } from '@/api/http'
+import { session } from '@/stores/session'
 
-const frame = ref<HTMLIFrameElement | null>(null)
-
-/** AI 中台地址：默认与本控制台同主机、端口 8001；部署时可用 VITE_AI_BASE 覆盖。 */
-const AI_BASE = (
-  (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_AI_BASE ||
-  `${window.location.protocol}//${window.location.hostname}:8001`
-).replace(/\/$/, '')
-
-const src = computed(() => {
-  const token = getAccessToken()
-  if (!token) return ''
-  return `${AI_BASE}/?token=${encodeURIComponent(token)}`
-})
-
-function reload() {
-  if (frame.value && src.value) frame.value.src = src.value
+interface Capability {
+  to: string
+  icon: string
+  title: string
+  desc: string
 }
 
-function openNew() {
-  if (src.value) window.open(src.value, '_blank', 'noopener')
+const CAPABILITIES: Capability[] = [
+  { to: '/ai/chat', icon: 'stethoscope', title: 'AI 对话', desc: '多轮临床问答、文书草拟与指南解释' },
+  { to: '/ai/case', icon: 'file-text', title: 'AI 病例影像', desc: '病例与影像多模态分析，输出结构化结论' },
+  { to: '/ai/qc', icon: 'qc', title: 'AI 病历质控', desc: '病案首页与病历内涵质控，缺陷可追溯' },
+  { to: '/ai/review', icon: 'check-circle', title: '审核中心', desc: 'AI 结论人工复核，低置信度强制复核' },
+  { to: '/ai/kb', icon: 'kb', title: 'AI 知识库', desc: '指南、文献与院内制度检索，答案带出处' },
+  { to: '/ai/data', icon: 'monitor', title: 'AI 数据面板', desc: '调用量、延迟、采纳率与异常事件' },
+]
+
+const overview = ref<AiOverview | null>(null)
+const pending = ref<AiReviewItem[]>([])
+const loading = ref(false)
+const error = ref('')
+
+const kbDocs = computed(() => {
+  const value = overview.value?.kb_docs
+  return value === undefined || value < 0 ? '—' : value
+})
+
+const uptimeText = computed(() => {
+  const seconds = overview.value?.uptime_s
+  if (!seconds || seconds < 0) return '—'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟`
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分`
+  return `${Math.floor(seconds / 86400)} 天 ${Math.floor((seconds % 86400) / 3600)} 小时`
+})
+
+const runtimeText = computed(() => {
+  const device = overview.value?.device
+  return device ? `推理设备 ${device}。` : ''
+})
+
+onMounted(load)
+
+async function load() {
+  loading.value = true
+  error.value = ''
+  try {
+    const [summary, review] = await Promise.all([
+      aiOverview(undefined, { noSessionExpire: true }),
+      aiReviewPending({ limit: 5, compact: 1 }, { noSessionExpire: true }),
+    ])
+    overview.value = summary
+    pending.value = review.pending ?? review.items ?? []
+  } catch (e) {
+    error.value = `AI 中台暂不可达：${errorText(e)}`
+  } finally {
+    loading.value = false
+  }
+}
+
+function agentLabel(agent?: string): string {
+  const map: Record<string, string> = {
+    literature: '文献循证',
+    diagnosis: '诊断建议',
+    pharmacy: '用药审核',
+    record: '病历质控',
+    imaging: '影像分析',
+  }
+  return map[agent ?? ''] ?? agent ?? 'AI'
+}
+
+function dateTime(value?: string): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return value
+  return d.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 </script>
 
 <style scoped>
-.ai-page {
+.page {
   display: flex;
   flex-direction: column;
-  height: calc(100svh - 96px);
-  min-height: 480px;
-  background: var(--surface);
+  gap: 14px;
+}
+.spacer {
+  flex: 1;
+}
+.hint {
+  color: var(--muted);
+  font-size: var(--fs-small);
+}
+.cap-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px 16px 18px;
+}
+.cap-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  overflow: hidden;
+  background: var(--surface);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
 }
-
-.ai-bar {
+.cap-card:hover {
+  border-color: var(--accent, #1f6f5c);
+  transform: translateY(-1px);
+}
+.cap-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--raised);
+  color: var(--accent, #1f6f5c);
+  flex: 0 0 auto;
+}
+.cap-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.cap-title {
+  font-weight: 600;
+}
+.cap-desc {
+  color: var(--muted);
+  font-size: var(--fs-small);
+  line-height: 1.5;
+}
+.cap-arrow {
+  color: var(--muted);
+  margin-top: 4px;
+}
+.two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.pending-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 16px 12px;
+}
+.pending-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-2, #fafafa);
-  flex-wrap: wrap;
 }
-
-.ai-title {
+.pending-item:last-child {
+  border-bottom: 0;
+}
+.pending-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pending-agent {
+  flex: 0 0 auto;
+  font-size: var(--fs-small);
+  color: var(--accent, #1f6f5c);
+  background: var(--raised);
+  border-radius: 5px;
+  padding: 2px 8px;
+}
+.pending-question {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pending-meta {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  flex: 0 0 auto;
 }
-
-.ai-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: #1f6f5c;
-}
-
-.ai-hint {
+.sub {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--fs-small);
 }
-
-.ai-actions {
-  display: flex;
-  gap: 8px;
+.runtime {
+  margin: 0;
+  padding: 10px 16px 4px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px 12px;
+  font-size: var(--fs-body);
 }
-
-.ai-frame {
-  flex: 1;
-  width: 100%;
-  border: 0;
-  background: #fff;
+.runtime div {
+  display: contents;
 }
-
-.ai-empty {
-  padding: 32px;
+.runtime dt {
   color: var(--muted);
-  font-size: 13px;
+}
+.runtime dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.runtime-hint {
+  padding: 0 16px 16px;
+  line-height: 1.6;
+}
+@media (max-width: 1100px) {
+  .cap-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 720px) {
+  .cap-grid {
+    grid-template-columns: 1fr;
+  }
+  .pending-item {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>

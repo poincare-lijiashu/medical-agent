@@ -18,6 +18,10 @@ export interface AiOverview {
   kb_docs?: number
   events_total?: number
   version?: string
+  /** 运行设备（如 cuda / cpu），用于工作台状态卡。 */
+  device?: string
+  env?: string
+  uptime_s?: number
   recent?: AiAuditEvent[]
 }
 
@@ -30,8 +34,11 @@ export interface AiAuditEvent {
   payload?: Record<string, unknown>
 }
 
-export function aiOverview(signal?: AbortSignal): Promise<AiOverview> {
-  return aiGet<AiOverview>('/medical/overview', undefined, signal)
+export function aiOverview(
+  signal?: AbortSignal,
+  opts?: { noSessionExpire?: boolean },
+): Promise<AiOverview> {
+  return aiGet<AiOverview>('/medical/overview', undefined, signal, opts)
 }
 
 /* ------------------------------------------------------------------ *

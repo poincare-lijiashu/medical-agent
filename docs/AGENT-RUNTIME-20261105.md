@@ -12375,3 +12375,52 @@ SLA 与发布审计就永远有缺口。
 - 告警自动合并（同一服务多条告警归并为一张工单）与静默期（maintenance silence）；
 - CI 产物签名/来源证明（SLSA）与制品库联动；
 - 开放平台 OAuth2 client credentials（当前只做接入源令牌，不做第三方应用授权）。
+
+## 277. 2026-11-12 AI 前端演示前全面走查与修复（第 277 批）
+
+**背景**
+
+演示前按"AI 相关前端功能必须一切正常"逐页走查，发现两类问题：
+一是 `/ai` 首页仍是 `iframe src=http://host:8001/?token=...`，
+而第 211 批起 8001 根路径托管的就是同一份 `frontend-console/dist` ——
+iframe 会递归加载控制台自身，URL 里的 token 也没有任何人消费，
+最终被路由守卫重定向到 `/login`，表现为"空白 + 掉登录"；
+二是 Java auth/gateway 重启时未带 `JWT_SECRET`，落到默认 dev secret，
+与 AI 中台 `.env.local` 的 `AUTH_JWT_SECRET` 不一致，`/api/v1/**` 全量 401。
+
+**本批做了什么**
+
+1. **重写 `/ai` 为 AI 工作台首页**（`AiAssistantView.vue`）：不再 iframe。
+   - 4 个 KPI：待人工核对 / 已处理 / 知识库文档 / 审计事件（`kb_docs = -1` 显示「—」）；
+   - 6 个能力入口卡（对话 / 病例影像 / 病历质控 / 审核中心 / 知识库 / 数据面板）；
+   - 最近待核对 5 条（`compact=1`，只取预览，不搬正文与影像）；
+   - 运行状态：版本、环境、推理设备、已运行时长、会话身份，异常时显示「异常」而非整页报错。
+2. **`noSessionExpire` 贯通**：工作台首页的两个 AI 请求都带该选项，
+   AI 中台短暂不可达时只让本页显示错误，不会把整个控制台登出。
+3. **契约补字段**：`AiOverview` 增 `device / env / uptime_s`（AI 中台已返回，前端此前丢弃）。
+4. **运行口径写清**（演示最容易踩）：
+   - 控制台静态资源由 AI 中台 8001 托管，但 `/api/v2/**` 只经网关 8080，
+     8001 单端口访问只能拿到静态壳（登录会 405）——这是拓扑而非缺陷；
+   - 演示入口统一用 `http://localhost:5174/`（Vite 代理 `/api/v1`→8001、`/api/v2`→8080），
+     与 `docs/DEPLOY.md` 的 nginx 反代口径一致；
+   - `scripts/run_platform_demo.ps1` 已把 `.env.local` 的 `AUTH_JWT_SECRET` 注入 Java 侧，
+     手工起 auth/gateway 时必须自行带同一枚密钥，否则 AI 接口 401。
+
+**验证**
+
+```
+前端：npm run typecheck → 通过；npm run build → 通过（AiAssistantView 6.63 KB / gzip 3.24 KB）
+浏览器（127.0.0.1:5174，admin01 真实会话）逐页走查 15 个 AI 路由，全部渲染且控制台零 error/warn：
+  /ai            待核对 76 / 已处理 1093 / 知识库 2997 / 审计 79；运行状态 1.0.0·development·cuda
+  /ai/chat       真实提问「高血压合并糖尿病患者一线降压药」→ 高置信 0.91 + 2 条来源 + 4 条证据链
+  /ai/case /ai/qc /ai/review（12 行真实待核对）/ai/kb /ai/data（26552 字审计流）
+  /ai/agent（3 表）/ai/agent/skills /ai/agent/bots /ai/agent/teams /ai/agent/ops
+  /ai/agent/library /ai/agent/lab /ai/llm（2 表）
+网络：各页 /api/v1 与 /api/v2 请求全部 200（无 401/404/5xx）
+```
+
+**遗留**
+
+- AI 治理页（技能卡 / Bot / Bot 团队 / 技能运营）当前无数据，页面为空态而非故障；
+  演示需要时可按四眼审核流程灌入示例技能卡与团队；
+- 8001 单端口模式缺少前置反代，生产必须按 `docs/DEPLOY.md` 的 nginx 口径部署。
