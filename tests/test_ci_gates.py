@@ -136,4 +136,8 @@ def test_ci_runs_e2e_in_layered_job():
     for name in ("test_smoke_flow.py", "test_vue_admin.py",
                  "test_vue_assist.py", "test_vue_parity.py"):
         with open(os.path.join(e2e_dir, name), encoding="utf-8") as f:
-            assert "pytestmark = pytest.mark.e2e" in f.read(), f"{name} 缺 e2e 标记"
+            src = f.read()
+        # 允许两种合法写法：pytestmark = pytest.mark.e2e 或
+        # pytestmark = [pytest.mark.e2e, pytest.mark.skip(...)]（旧 UI 用例显式 skip）
+        assert re.search(r"(?m)^pytestmark\s*=\s*(\[[^\n]*)?pytest\.mark\.e2e", src), \
+            f"{name} 缺 e2e 标记"

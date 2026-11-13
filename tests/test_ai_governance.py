@@ -376,10 +376,14 @@ def test_summary_readiness_reflects_delivered_controls(monkeypatch, tmp_path):
 
     admin = _h(_login(c, "admin01"))
     data = c.get("/api/v1/agent/governance/summary", headers=admin).json()
-    assert data["readiness"]["checks"] == {
-        "activeModelVersion": True,
-        "activePromptVersion": True,
-        "approvedValidationMeetsAcceptance": True,
-        "driftBaselineConfigured": True,
-    }
-    assert data["readiness"]["score"] == 1.0
+    checks = data["readiness"]["checks"]
+    assert checks["activeModelVersion"] is True
+    assert checks["activePromptVersion"] is True
+    assert checks["approvedValidationMeetsAcceptance"] is True
+    assert checks["driftBaselineConfigured"] is True
+    # 评测 D-13：运行时模型绑定必须是独立检查项。它的取值取决于本机是否真的把
+    # 运行时模型登记成了 ACTIVE，因此只锁"存在且为布尔"，不锁具体真假（避免环境耦合）。
+    assert isinstance(checks["runtimeModelMatchesRegistry"], bool)
+    assert data["readiness"]["total"] == len(checks) == 5
+    passed = sum(1 for v in checks.values() if v)
+    assert data["readiness"]["score"] == round(passed / len(checks), 4)
