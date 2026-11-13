@@ -99,7 +99,10 @@ public class SettlementReconService {
         }
 
         List<ReconBillRow> rows = repo.listReconBills(start, end, MAX_BILLS);
-        Map<UUID, ClinicalClient.ClinicCollection> collections = loadCollections(start, end);
+        // 期间内没有清单时不必访问临床：空期间也要能出一份"零差异"的对账结论，
+        // 不能因为下游暂不可用把"本来就没有业务"变成失败。
+        Map<UUID, ClinicalClient.ClinicCollection> collections = rows.isEmpty()
+                ? Map.of() : loadCollections(start, end);
         Computed computed = evaluate(rows, collections);
         UUID batchId = existing.map(ReconBatch::id).orElseGet(UUID::randomUUID);
         List<ReconDiff> diffs = computed.withBatch(batchId);

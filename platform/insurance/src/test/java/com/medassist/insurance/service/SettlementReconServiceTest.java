@@ -136,6 +136,19 @@ class SettlementReconServiceTest {
     }
 
     @Test
+    @DisplayName("空期间不访问临床，仍生成零差异结论")
+    void emptyPeriodDoesNotCallClinical() {
+        when(repo.countReconBills(DAY, DAY)).thenReturn(0L);
+        when(repo.listReconBills(DAY, DAY, 10_000)).thenReturn(List.of());
+
+        ReconBatch batch = service.compute("DAY", DAY.toString(), DAY.toString(), "admin01", ALL);
+
+        assertThat(batch.billCount()).isZero();
+        assertThat(batch.openDiffCount()).isZero();
+        verify(clinical, never()).collections(any(), any());
+    }
+
+    @Test
     @DisplayName("院区受限账号不能生成对账（避免部分数据被当成全院结论）")
     void rejectsCampusScopedAccount() {
         DataScope scoped = DataScope.of("u1", Set.of(), true, Set.of(UUID.randomUUID()), false, true);

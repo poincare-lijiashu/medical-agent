@@ -13385,7 +13385,7 @@ Java：SettlementReconServiceTest 10 passed（分类/汇总/范围/期间/幂等
 
 ```
 Java：PayerAllocationServiceTest 6 passed（合计/BASIC/重复分摊/超额退费/追加台账）
-      SettlementReconServiceTest 10 passed（含三方差异分类与汇总）
+      SettlementReconServiceTest 11 passed（含三方差异分类、汇总与空期间）
       InsuranceServiceTest 新增"未冲销分摊禁止作废"用例；insurance 模块 244 tests 全通过
 Python：全量 pytest 2058 passed / 1 skipped（含 §292 契约锁 7 条）
 前端：typecheck 通过；build 通过（入口 gzip 99.39 KB）
