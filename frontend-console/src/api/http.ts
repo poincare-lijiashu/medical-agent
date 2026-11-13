@@ -375,8 +375,10 @@ async function aiOnce<T>(path: string, opts: RequestOptions, retried: boolean): 
 
   if (res.status === 401) {
     if (!retried && (await doRefresh())) return aiOnce<T>(path, opts, true)
-    if (!opts.noSessionExpire) onSessionExpired?.()
-    throw new AiRequestError('登录状态已失效，请重新登录', 401)
+    // 不在 AI 通道做全局登出：Java 侧与 AI 中台可能因密钥配置不一致，对同一令牌给出
+    // 不同结论。若在这里登出，用户重新登录仍然进不去，还会把可用的业务页面一起踢掉。
+    // 真正的会话过期由 /api/v2 的 401 触发登出；这里只让本次 AI 操作失败。
+    throw new AiRequestError('AI 服务未接受当前登录态；若重新登录仍如此，请联系信息科检查两端令牌配置', 401)
   }
   if (!res.ok) throw new AiRequestError(aiErrorMessage(text, res.status), res.status)
   if (!text) return undefined as T
@@ -472,8 +474,8 @@ export async function aiStream(
     if (!retried && !opts.signal?.aborted && (await doRefresh())) {
       return aiStream(path, body, opts, true)
     }
-    onSessionExpired?.()
-    throw new AiRequestError('登录状态已失效，请重新登录', 401)
+    // 同 aiOnce：AI 通道 401 不做全局登出，避免"重登也进不去 + 全站被踢"。
+    throw new AiRequestError('AI 服务未接受当前登录态；若重新登录仍如此，请联系信息科检查两端令牌配置', 401)
   }
   if (!res.ok || !res.body) {
     let text = ''
@@ -581,8 +583,8 @@ export async function aiDownload(
 
   if (res.status === 401) {
     if (!retried && (await doRefresh())) return aiDownload(path, query, true)
-    onSessionExpired?.()
-    throw new AiRequestError('登录状态已失效，请重新登录', 401)
+    // 同 aiOnce：AI 通道 401 不做全局登出。
+    throw new AiRequestError('AI 服务未接受当前登录态；若重新登录仍如此，请联系信息科检查两端令牌配置', 401)
   }
   if (!res.ok) {
     const text = await res.text()

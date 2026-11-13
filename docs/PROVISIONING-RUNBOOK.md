@@ -1227,3 +1227,5 @@ curl -s ".../ops/golive/evidence?projectId=<pid>&componentCode=platform-gateway"
 | 接口 503 `code=50301` | 反代目标为空 | 配置 `PLATFORM_GATEWAY_BASE_URL` 或改由 ingress 分流 |
 | 身份同步日志 403 | `INTERNAL_API_TOKEN` 两端不一致 | 对齐令牌并重启 AI 中台与 auth |
 | 用 5174/5175 时登录间歇 500 | vite 代理与网关 keep-alive 关闭时序冲突 | 改用 8001 入口（推荐），或仅用于前端热更新调试 |
+| 点侧栏直接回登录页、重登仍被踢 | Java 用开发默认 JWT 密钥启动（手工 `java -jar`），与 AI 中台密钥不一致 | 用 `run_platform_demo.ps1` 重启全部服务（§304） |
+| 多个页面同时"数据加载失败" | 服务矩阵不全（8080–8095 有缺失） | 用脚本启动并确认 16 个端口全部监听 |
