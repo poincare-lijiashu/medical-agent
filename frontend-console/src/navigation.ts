@@ -570,6 +570,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['mdm:read'],
   },
   {
+    // 第 294 批：传染病上报（诊断自动匹配、时限、受理/退回、漏报监测）
+    name: 'infection-report',
+    path: '/infections',
+    title: '传染病上报',
+    hint: '诊断自动匹配 · 甲类2小时/乙丙24小时 · 提交受理退回 · 逾期漏报监测',
+    icon: 'shield',
+    group: '临床诊疗',
+    permissions: ['clinical:infection:read'],
+  },
+  {
     // 第 231 批：打印留痕（按单号核查补打次数与打印人；按院区收敛）
     name: 'print-history',
     path: '/print-events',

@@ -323,6 +323,12 @@ const router = createRouter({
           name: 'metric-dictionary',
           component: () => import('@/views/MetricDictionaryView.vue'),
         },
+        {
+          // 第 294 批：传染病上报与漏报监测（clinical:infection:*）
+          path: 'infections',
+          name: 'infection-report',
+          component: () => import('@/views/InfectionReportView.vue'),
+        },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },

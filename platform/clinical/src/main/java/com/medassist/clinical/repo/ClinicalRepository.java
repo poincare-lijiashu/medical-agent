@@ -11,6 +11,10 @@ import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.ChargeReceipt;
 import com.medassist.clinical.domain.ClinicalModel.VisitCollection;
+import com.medassist.clinical.domain.ClinicalModel.InfectionDisease;
+import com.medassist.clinical.domain.ClinicalModel.InfectionReport;
+import com.medassist.clinical.domain.ClinicalModel.InfectionReportEvent;
+import com.medassist.clinical.domain.ClinicalModel.InfectionDiagnosisCandidate;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.DailyAdmissionTotal;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
@@ -8752,6 +8756,314 @@ public class ClinicalRepository {
                         """)
                 .param("id", id).param("status", targetStatus).param("actor", actor)
                 .param("note", note).param("version", expectedVersion).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 传染病上报（§294）
+
+    private static final RowMapper<InfectionDisease> INFECTION_DISEASE_MAPPER = (rs, i) ->
+            new InfectionDisease(rs.getObject("id", UUID.class), rs.getString("code"),
+                    rs.getString("name"), rs.getString("disease_class"),
+                    parseJsonArray(rs.getString("icd_prefixes")),
+                    rs.getInt("report_hours"), rs.getBoolean("enabled"),
+                    rs.getInt("sort_no"), rs.getString("remark"), rs.getLong("version"));
+
+    private static final RowMapper<InfectionReport> INFECTION_REPORT_MAPPER = (rs, i) ->
+            new InfectionReport(rs.getObject("id", UUID.class), rs.getString("report_no"),
+                    rs.getObject("visit_id", UUID.class), rs.getObject("patient_id", UUID.class),
+                    rs.getString("patient_no"), rs.getString("disease_code"),
+                    rs.getString("disease_name"), rs.getString("disease_class"),
+                    rs.getString("icd_code"), rs.getString("icd_name"),
+                    rs.getDate("onset_date") == null ? null
+                            : rs.getDate("onset_date").toLocalDate(),
+                    rs.getTimestamp("diagnosed_at").toInstant(),
+                    rs.getTimestamp("report_deadline").toInstant(), rs.getString("status"),
+                    rs.getString("source"), rs.getString("reporter"),
+                    rs.getString("reporter_dept"), rs.getString("submitted_by"),
+                    rs.getTimestamp("submitted_at") == null ? null
+                            : rs.getTimestamp("submitted_at").toInstant(),
+                    rs.getString("cdc_receipt_no"),
+                    rs.getTimestamp("cdc_receipt_at") == null ? null
+                            : rs.getTimestamp("cdc_receipt_at").toInstant(),
+                    rs.getString("return_reason"), rs.getString("void_reason"),
+                    rs.getString("created_by"), rs.getString("updated_by"),
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getTimestamp("updated_at").toInstant(), rs.getLong("version"));
+
+    private static final RowMapper<InfectionReportEvent> INFECTION_EVENT_MAPPER = (rs, i) ->
+            new InfectionReportEvent(rs.getLong("id"), rs.getObject("report_id", UUID.class),
+                    rs.getString("action"), rs.getString("from_status"),
+                    rs.getString("to_status"), rs.getString("actor"), rs.getString("note"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    private static final String INFECTION_REPORT_COLUMNS = """
+            id, report_no, visit_id, patient_id, patient_no, disease_code, disease_name,
+            disease_class, icd_code, icd_name, onset_date, diagnosed_at, report_deadline,
+            status, source, reporter, reporter_dept, submitted_by, submitted_at,
+            cdc_receipt_no, cdc_receipt_at, return_reason, void_reason, created_by,
+            updated_by, created_at, updated_at, version
+            """;
+
+    public List<InfectionDisease> listInfectionDiseases(boolean onlyEnabled) {
+        return jdbc.sql("""
+                        SELECT id, code, name, disease_class, icd_prefixes::text AS icd_prefixes,
+                               report_hours, enabled, sort_no, remark, version
+                          FROM clinical_svc.infection_disease
+                         WHERE (NOT :onlyEnabled OR enabled)
+                         ORDER BY sort_no, code
+                        """)
+                .param("onlyEnabled", onlyEnabled).query(INFECTION_DISEASE_MAPPER).list();
+    }
+
+    public Optional<InfectionDisease> findInfectionDisease(String code) {
+        return jdbc.sql("""
+                        SELECT id, code, name, disease_class, icd_prefixes::text AS icd_prefixes,
+                               report_hours, enabled, sort_no, remark, version
+                          FROM clinical_svc.infection_disease WHERE code = ?
+                        """).param(code).query(INFECTION_DISEASE_MAPPER).optional();
+    }
+
+    public List<InfectionReport> listInfectionReports(String status, LocalDate from, LocalDate to,
+                                                      String keyword, boolean overdueOnly,
+                                                      int limit) {
+        return jdbc.sql("""
+                        SELECT /*infection-report*/ """ + INFECTION_REPORT_COLUMNS + """
+                          FROM clinical_svc.infection_report
+                         WHERE (CAST(:status AS text) = '' OR status = CAST(:status AS text))
+                           AND (CAST(:from AS date) IS NULL
+                                OR (diagnosed_at AT TIME ZONE :zone)::date >= CAST(:from AS date))
+                           AND (CAST(:to AS date) IS NULL
+                                OR (diagnosed_at AT TIME ZONE :zone)::date <= CAST(:to AS date))
+                           AND (CAST(:keyword AS text) = ''
+                                OR report_no ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR patient_no ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR disease_name ILIKE '%' || CAST(:keyword AS text) || '%')
+                           AND (NOT :overdue
+                                OR (status = 'DRAFT' AND report_deadline < now()))
+                         ORDER BY report_deadline ASC, diagnosed_at DESC
+                         LIMIT :limit
+                        """)
+                .param("status", status == null ? "" : status.trim().toUpperCase())
+                .param("from", from).param("to", to)
+                .param("keyword", keyword == null ? "" : keyword.trim())
+                .param("overdue", overdueOnly)
+                .param("zone", BusinessTime.zone().getId())
+                .param("limit", limit)
+                .query(INFECTION_REPORT_MAPPER).list();
+    }
+
+    public Optional<InfectionReport> findInfectionReport(UUID id) {
+        return jdbc.sql("SELECT " + INFECTION_REPORT_COLUMNS
+                        + " FROM clinical_svc.infection_report WHERE id = ?")
+                .param(id).query(INFECTION_REPORT_MAPPER).optional();
+    }
+
+    public Optional<InfectionReport> findActiveInfectionReport(UUID visitId, String diseaseCode) {
+        return jdbc.sql("SELECT " + INFECTION_REPORT_COLUMNS + """
+                          FROM clinical_svc.infection_report
+                         WHERE visit_id = :visitId AND disease_code = :code AND status <> 'VOID'
+                        """)
+                .param("visitId", visitId).param("code", diseaseCode)
+                .query(INFECTION_REPORT_MAPPER).optional();
+    }
+
+    /** 生成报告号：I + 日期 + 6 位流水（与收费单/票据同风格）。 */
+    public String nextInfectionReportNo() {
+        Long seq = jdbc.sql("SELECT nextval('clinical_svc.infection_report_no_seq')")
+                .query(Long.class).single();
+        return "I" + BusinessTime.today().format(DateTimeFormatter.BASIC_ISO_DATE)
+                + String.format("%06d", seq == null ? 1 : seq);
+    }
+
+    /** 插入报告卡；同一就诊同病种已有有效卡时由部分唯一索引拒绝（返回 false）。 */
+    public boolean insertInfectionReport(InfectionReport r) {
+        try {
+            jdbc.sql("""
+                            INSERT INTO clinical_svc.infection_report
+                                (id, report_no, visit_id, patient_id, patient_no, disease_code,
+                                 disease_name, disease_class, icd_code, icd_name, onset_date,
+                                 diagnosed_at, report_deadline, status, source, reporter,
+                                 reporter_dept, created_by, updated_by)
+                            VALUES (:id, :reportNo, :visitId, :patientId, :patientNo, :diseaseCode,
+                                    :diseaseName, :diseaseClass, :icdCode, :icdName, :onsetDate,
+                                    :diagnosedAt, :deadline, 'DRAFT', :source, :reporter,
+                                    :reporterDept, :by, :by)
+                            """)
+                    .param("id", r.id()).param("reportNo", r.reportNo())
+                    .param("visitId", r.visitId()).param("patientId", r.patientId())
+                    .param("patientNo", r.patientNo()).param("diseaseCode", r.diseaseCode())
+                    .param("diseaseName", r.diseaseName())
+                    .param("diseaseClass", r.diseaseClass()).param("icdCode", r.icdCode())
+                    .param("icdName", r.icdName()).param("onsetDate", r.onsetDate())
+                    .param("diagnosedAt", java.sql.Timestamp.from(r.diagnosedAt()))
+                    .param("deadline", java.sql.Timestamp.from(r.reportDeadline()))
+                    .param("source", r.source()).param("reporter", r.reporter())
+                    .param("reporterDept", r.reporterDept()).param("by", r.createdBy())
+                    .update();
+            return true;
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            return false;
+        }
+    }
+
+    /** 提交/重报：DRAFT 或 RETURNED → SUBMITTED（CAS + 状态双条件）。 */
+    public boolean submitInfectionReport(UUID id, long version, String reporter,
+                                          String reporterDept, String actor) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.infection_report
+                           SET status = 'SUBMITTED', reporter = :reporter,
+                               reporter_dept = :dept, submitted_by = :by, submitted_at = now(),
+                               return_reason = NULL, updated_by = :by, updated_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND version = :version
+                           AND status IN ('DRAFT', 'RETURNED')
+                        """)
+                .param("id", id).param("version", version).param("reporter", reporter)
+                .param("dept", reporterDept).param("by", actor).update() > 0;
+    }
+
+    /** 疾控受理：SUBMITTED → ACCEPTED，必须登记回执号。 */
+    public boolean acceptInfectionReport(UUID id, long version, String receiptNo, String actor) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.infection_report
+                           SET status = 'ACCEPTED', cdc_receipt_no = :receiptNo,
+                               cdc_receipt_at = now(), updated_by = :by, updated_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND version = :version AND status = 'SUBMITTED'
+                        """)
+                .param("id", id).param("version", version).param("receiptNo", receiptNo)
+                .param("by", actor).update() > 0;
+    }
+
+    /** 疾控退回：SUBMITTED → RETURNED，必须写原因。 */
+    public boolean returnInfectionReport(UUID id, long version, String reason, String actor) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.infection_report
+                           SET status = 'RETURNED', return_reason = :reason,
+                               updated_by = :by, updated_at = now(), version = version + 1
+                         WHERE id = :id AND version = :version AND status = 'SUBMITTED'
+                        """)
+                .param("id", id).param("version", version).param("reason", reason)
+                .param("by", actor).update() > 0;
+    }
+
+    /** 作废：DRAFT/RETURNED → VOID，必须写原因（已提交的卡不能作废）。 */
+    public boolean voidInfectionReport(UUID id, long version, String reason, String actor) {
+        return jdbc.sql("""
+                        UPDATE clinical_svc.infection_report
+                           SET status = 'VOID', void_reason = :reason, updated_by = :by,
+                               updated_at = now(), version = version + 1
+                         WHERE id = :id AND version = :version AND status IN ('DRAFT', 'RETURNED')
+                        """)
+                .param("id", id).param("version", version).param("reason", reason)
+                .param("by", actor).update() > 0;
+    }
+
+    public void insertInfectionEvent(UUID reportId, String action, String fromStatus,
+                                     String toStatus, String actor, String note) {
+        jdbc.sql("""
+                        INSERT INTO clinical_svc.infection_report_event
+                            (report_id, action, from_status, to_status, actor, note)
+                        VALUES (:reportId, :action, :fromStatus, :toStatus, :actor, :note)
+                        """)
+                .param("reportId", reportId).param("action", action)
+                .param("fromStatus", fromStatus).param("toStatus", toStatus)
+                .param("actor", actor).param("note", note).update();
+    }
+
+    public List<InfectionReportEvent> listInfectionEvents(UUID reportId) {
+        return jdbc.sql("""
+                        SELECT id, report_id, action, from_status, to_status, actor, note, created_at
+                          FROM clinical_svc.infection_report_event
+                         WHERE report_id = ?
+                         ORDER BY created_at, id
+                        """).param(reportId).query(INFECTION_EVENT_MAPPER).list();
+    }
+
+    /** 汇总：待报/逾期/今日提交/受理/退回/有效卡/及时率（SQL 内一次算完）。 */
+    public Map<String, Object> infectionSummaryRaw(String zone) {
+        return jdbc.sql("""
+                        SELECT count(*) FILTER (WHERE status = 'DRAFT') AS draft,
+                               count(*) FILTER (WHERE status = 'DRAFT'
+                                                AND report_deadline < now()) AS overdue,
+                               count(*) FILTER (WHERE status = 'SUBMITTED'
+                                                AND (submitted_at AT TIME ZONE :zone)::date
+                                                    = (now() AT TIME ZONE :zone)::date)
+                                   AS submitted_today,
+                               count(*) FILTER (WHERE status = 'ACCEPTED') AS accepted,
+                               count(*) FILTER (WHERE status = 'RETURNED') AS returned,
+                               count(*) FILTER (WHERE status <> 'VOID') AS total_active,
+                               COALESCE(round(100.0 * count(*) FILTER (
+                                          WHERE submitted_at IS NOT NULL
+                                            AND submitted_at <= report_deadline)
+                                       / NULLIF(count(*) FILTER (WHERE submitted_at IS NOT NULL), 0),
+                                       2), 100.00) AS timely_rate
+                          FROM clinical_svc.infection_report
+                        """)
+                .param("zone", zone)
+                .query((rs, i) -> {
+                    Map<String, Object> out = new LinkedHashMap<>();
+                    out.put("draft", rs.getLong("draft"));
+                    out.put("overdue", rs.getLong("overdue"));
+                    out.put("submittedToday", rs.getLong("submitted_today"));
+                    out.put("accepted", rs.getLong("accepted"));
+                    out.put("returned", rs.getLong("returned"));
+                    out.put("totalActive", rs.getLong("total_active"));
+                    out.put("timelyRate", rs.getBigDecimal("timely_rate"));
+                    return out;
+                }).single();
+    }
+
+    /** 扫描水位之后的诊断（按诊断时间升序，单批上限由调用方控制）。 */
+    public List<InfectionDiagnosisCandidate> listInfectionCandidates(Instant since, int limit) {
+        return jdbc.sql("""
+                        SELECT d.id AS diagnosis_id, d.visit_id, d.code, d.name, d.diagnosed_at,
+                               v.patient_id, v.patient_no
+                          FROM clinical_svc.visit_diagnosis d
+                          JOIN clinical_svc.visit v ON v.id = d.visit_id
+                         WHERE d.diagnosed_at > :since
+                         ORDER BY d.diagnosed_at
+                         LIMIT :limit
+                        """)
+                .param("since", java.sql.Timestamp.from(since)).param("limit", limit)
+                .query((rs, i) -> new InfectionDiagnosisCandidate(
+                        rs.getObject("diagnosis_id", UUID.class),
+                        rs.getObject("visit_id", UUID.class),
+                        rs.getObject("patient_id", UUID.class),
+                        rs.getString("patient_no"), rs.getString("code"),
+                        rs.getString("name"), rs.getTimestamp("diagnosed_at").toInstant()))
+                .list();
+    }
+
+    public Optional<Instant> infectionScanWatermark() {
+        java.util.List<Instant> rows = jdbc.sql(
+                        "SELECT last_diagnosed_at FROM clinical_svc.infection_scan_state WHERE id = 1")
+                .query((rs, i) -> rs.getTimestamp("last_diagnosed_at") == null ? null
+                        : rs.getTimestamp("last_diagnosed_at").toInstant())
+                .list();
+        return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
+    }
+
+    public void updateInfectionScanState(Instant watermark, int created) {
+        jdbc.sql("""
+                        UPDATE clinical_svc.infection_scan_state
+                           SET last_diagnosed_at = COALESCE(:watermark, last_diagnosed_at),
+                               last_run_at = now(), last_created = :created
+                         WHERE id = 1
+                        """)
+                .param("watermark", watermark == null ? null : java.sql.Timestamp.from(watermark))
+                .param("created", created).update();
+    }
+
+    private static List<String> parseJsonArray(String json) {
+        if (json == null || json.isBlank()) {
+            return List.of();
+        }
+        String cleaned = json.replace("[", "").replace("]", "").replace("\"", "");
+        if (cleaned.isBlank()) {
+            return List.of();
+        }
+        return java.util.Arrays.stream(cleaned.split(","))
+                .map(String::trim).filter(s -> !s.isEmpty()).toList();
     }
 
     // ---------------------------------------------------------------- 审计

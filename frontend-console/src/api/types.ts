@@ -3130,6 +3130,87 @@ export interface MetricUpsertInput {
   version?: number
 }
 
+// ---------------------------------------------------------------- 传染病上报（§294）
+
+export type InfectionDiseaseClass = 'A' | 'B' | 'C'
+export type InfectionReportStatus = 'DRAFT' | 'SUBMITTED' | 'ACCEPTED' | 'RETURNED' | 'VOID'
+
+export interface InfectionDisease {
+  id: string
+  code: string
+  name: string
+  diseaseClass: InfectionDiseaseClass
+  icdPrefixes: string[]
+  reportHours: number
+  enabled: boolean
+  sortNo: number
+  remark: string | null
+  version: number
+}
+
+export interface InfectionReport {
+  id: string
+  reportNo: string
+  visitId: string
+  patientId: string
+  patientNo: string
+  diseaseCode: string
+  diseaseName: string
+  diseaseClass: InfectionDiseaseClass
+  icdCode: string | null
+  icdName: string | null
+  onsetDate: string | null
+  diagnosedAt: string
+  reportDeadline: string
+  status: InfectionReportStatus
+  source: 'AUTO' | 'MANUAL'
+  reporter: string | null
+  reporterDept: string | null
+  submittedBy: string | null
+  submittedAt: string | null
+  cdcReceiptNo: string | null
+  cdcReceiptAt: string | null
+  returnReason: string | null
+  voidReason: string | null
+  createdBy: string
+  updatedBy: string
+  createdAt: string
+  updatedAt: string
+  version: number
+}
+
+export interface InfectionReportEvent {
+  id: number
+  reportId: string
+  action: string
+  fromStatus: string | null
+  toStatus: string
+  actor: string
+  note: string | null
+  createdAt: string
+}
+
+export interface InfectionReportDetail {
+  report: InfectionReport
+  events: InfectionReportEvent[]
+}
+
+export interface InfectionSummary {
+  draft: number
+  overdue: number
+  submittedToday: number
+  accepted: number
+  returned: number
+  totalActive: number
+  timelyRate: number
+}
+
+export interface InfectionDetection {
+  scanned: number
+  created: number
+  skipped: number
+}
+
 // ---------------------------------------------------------------- DRG/DIP 分组
 
 /** 支付方案：DRG 按权重×费率，DIP 按分值×点值。 */

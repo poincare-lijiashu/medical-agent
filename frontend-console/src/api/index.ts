@@ -85,6 +85,11 @@ import type {
   MetricImpact,
   MetricSummary,
   MetricUpsertInput,
+  InfectionDetection,
+  InfectionDisease,
+  InfectionReport,
+  InfectionReportDetail,
+  InfectionSummary,
   ChargeMapping,
   GroupSimulation,
   InpatientTrendView,
@@ -1631,6 +1636,43 @@ export const metricDictionaryApi = {
     code: string,
     body: { direction: string; refType: string; refCode: string; description?: string },
   ) => post<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}/lineage`, body),
+}
+
+/**
+ * 传染病上报与漏报监测（§294）。
+ * 读取需 clinical:infection:read；补录/提交需 report；受理/退回/作废/扫描需 manage。
+ */
+export const infectionApi = {
+  summary: () => get<InfectionSummary>('/clinical/infections/summary'),
+  diseases: (enabledOnly = true) =>
+    get<InfectionDisease[]>('/clinical/infections/diseases', { enabledOnly }),
+  reports: (params: {
+    status?: string
+    from?: string
+    to?: string
+    q?: string
+    overdueOnly?: boolean
+    limit?: number
+  } = {}) => get<InfectionReport[]>('/clinical/infections/reports', params),
+  detail: (id: string) =>
+    get<InfectionReportDetail>(`/clinical/infections/reports/${id}`),
+  detect: () => post<InfectionDetection>('/clinical/infections/detect'),
+  create: (body: {
+    visitId: string
+    diseaseCode: string
+    onsetDate?: string
+    icdCode?: string
+    icdName?: string
+    reporterDept?: string
+  }) => post<InfectionReportDetail>('/clinical/infections/reports', body),
+  submit: (id: string, body: { reporter: string; reporterDept?: string; version: number }) =>
+    post<InfectionReportDetail>(`/clinical/infections/reports/${id}/submit`, body),
+  accept: (id: string, body: { receiptNo: string; version: number }) =>
+    post<InfectionReportDetail>(`/clinical/infections/reports/${id}/accept`, body),
+  returnCard: (id: string, body: { reason: string; version: number }) =>
+    post<InfectionReportDetail>(`/clinical/infections/reports/${id}/return`, body),
+  voidCard: (id: string, body: { reason: string; version: number }) =>
+    post<InfectionReportDetail>(`/clinical/infections/reports/${id}/void`, body),
 }
 
 export const insuranceGroupingApi = {

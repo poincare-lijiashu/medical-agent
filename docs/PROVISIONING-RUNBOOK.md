@@ -551,3 +551,57 @@ curl -X POST http://127.0.0.1:8080/api/v2/mdm/metrics/OUTPATIENT_VISIT_COUNT/pub
 | 修改报 409 | 他人已修改/发布，版本不一致 | 刷新后重试 |
 | 修改报“已发布指标不能直接修改” | 试图直接改生效口径 | 先「修订」，再编辑草稿 |
 | 详情没有下游 | 报表/看板尚未登记血缘 | 在详情页登记 DOWNSTREAM |
+
+## 16. 传染病上报与漏报监测（§294 / 计划书 W1.9）
+
+### 16.1 时限与状态
+
+| 类别 | 时限 | 说明 |
+| --- | --- | --- |
+| 甲类 | 诊断后 **2 小时** | 鼠疫、霍乱；按甲类管理的乙类病种按目录配置 |
+| 乙/丙类 | 诊断后 **24 小时** | 肺结核、病毒性肝炎、流感等 |
+
+状态机：`DRAFT`（待报）→ `SUBMITTED`（已提交）→ `ACCEPTED`（疾控受理）/ `RETURNED`（退回）；
+`RETURNED` 可重报；`DRAFT`/`RETURNED` 可作废；**已提交/已受理不可作废**。
+
+### 16.2 自动匹配与扫描
+
+- 每 10 分钟扫描一次新诊断（水位 `infection_scan_state.last_diagnosed_at`），
+  按法定目录的 ICD-10 前缀匹配，生成待报卡；
+- 同一次就诊的同一种传染病只生成一张有效卡（部分唯一索引兜底）；
+- 运维可在页面点「立即扫描」，或调 `POST /clinical/infections/detect`；
+- 目录新增/修正后，历史漏报用「手工补录」建立卡片。
+
+```bash
+# 汇总（需 clinical:infection:read）
+curl "http://127.0.0.1:8080/api/v2/clinical/infections/summary" \
+  -H "Authorization: Bearer <token>"
+# 提交（需 clinical:infection:report；version 为卡片当前版本）
+curl -X POST http://127.0.0.1:8080/api/v2/clinical/infections/reports/<id>/submit \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"reporter":"张医生","reporterDept":"呼吸内科","version":1}'
+# 受理（需 clinical:infection:manage；必须登记疾控回执号）
+curl -X POST http://127.0.0.1:8080/api/v2/clinical/infections/reports/<id>/accept \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"receiptNo":"CDC-2026-0001","version":2}'
+```
+
+### 16.3 漏报与迟报口径
+
+- **逾期**：`DRAFT` 且 `report_deadline < now()`；
+- **迟报**：`submitted_at > report_deadline`；
+- **及时率**：按时提交卡数 / 已提交卡数 × 100%；
+- 页面 KPI 与 `medassist_clinical_infection_pending/overdue` 指标同源（SQL 聚合）。
+
+### 16.4 权限与排障
+
+- `clinical:infection:read`：医生/护士/质控/运营；
+- `clinical:infection:report`：医生/护士（补录、提交/重报）；
+- `clinical:infection:manage`：质控/管理员（扫描、受理、退回、作废）。
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 诊断后没有待报卡 | 病种停用 / ICD 前缀不匹配 / 扫描水位已过 | 核对目录；点「立即扫描」；必要时手工补录 |
+| 提交报 409 | 他人已提交/退回，版本变化 | 刷新后重试 |
+| 作废报“已提交不能作废” | 法定报告已提交，不能物理撤回 | 联系疾控走更正流程 |
+| 逾期数量持续增加 | 临床未及时提交 | 防保科按逾期列表督办 |

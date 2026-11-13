@@ -1695,4 +1695,65 @@ public final class ClinicalModel {
                                       long transfusing, long completedToday,
                                       long reactionsToday, long totalToday) {
     }
+
+    // ---------------------------------------------------------------- 传染病上报（§294）
+
+    /** 法定传染病目录：甲类 2 小时、乙/丙类 24 小时，ICD 前缀用于诊断自动匹配。 */
+    public record InfectionDisease(UUID id, String code, String name, String diseaseClass,
+                                   java.util.List<String> icdPrefixes, int reportHours,
+                                   boolean enabled, int sortNo, String remark, long version) {
+
+        public static final String CLASS_A = "A";
+        public static final String CLASS_B = "B";
+        public static final String CLASS_C = "C";
+    }
+
+    /**
+     * 传染病报告卡：一次就诊 × 一种传染病。
+     *
+     * <p>状态机：DRAFT →（提交）→ SUBMITTED →（疾控受理）→ ACCEPTED，
+     * 或 →（退回）→ RETURNED →（重报）→ SUBMITTED；DRAFT/RETURNED 可作废。
+     * 截止时间 = 诊断时间 + 病种时限；提交晚于截止即迟报。
+     */
+    public record InfectionReport(UUID id, String reportNo, UUID visitId, UUID patientId,
+                                  String patientNo, String diseaseCode, String diseaseName,
+                                  String diseaseClass, String icdCode, String icdName,
+                                  java.time.LocalDate onsetDate, Instant diagnosedAt,
+                                  Instant reportDeadline, String status, String source,
+                                  String reporter, String reporterDept, String submittedBy,
+                                  Instant submittedAt, String cdcReceiptNo, Instant cdcReceiptAt,
+                                  String returnReason, String voidReason, String createdBy,
+                                  String updatedBy, Instant createdAt, Instant updatedAt,
+                                  long version) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String SUBMITTED = "SUBMITTED";
+        public static final String ACCEPTED = "ACCEPTED";
+        public static final String RETURNED = "RETURNED";
+        public static final String VOID = "VOID";
+
+        public static final String SOURCE_AUTO = "AUTO";
+        public static final String SOURCE_MANUAL = "MANUAL";
+    }
+
+    /** 报告卡状态流转留痕（追加式）。 */
+    public record InfectionReportEvent(long id, UUID reportId, String action, String fromStatus,
+                                       String toStatus, String actor, String note,
+                                       Instant createdAt) {
+    }
+
+    /** 上报汇总：待报/逾期/今日提交/及时率等。 */
+    public record InfectionSummary(long draft, long overdue, long submittedToday, long accepted,
+                                   long returned, long totalActive, java.math.BigDecimal timelyRate) {
+    }
+
+    /** 自动扫描结果：扫描诊断数、新生成报告卡数、跳过数。 */
+    public record InfectionDetection(int scanned, int created, int skipped) {
+    }
+
+    /** 自动扫描候选诊断（已带就诊与患者主键，供匹配传染病目录）。 */
+    public record InfectionDiagnosisCandidate(UUID diagnosisId, UUID visitId, UUID patientId,
+                                              String patientNo, String code, String name,
+                                              Instant diagnosedAt) {
+    }
 }

@@ -132,6 +132,8 @@ const messages = {
   'nav.tenant.hint': '一院一 Cell · 实例与入口 · 容量配额 · 停用即下线 · 变更留痕',
   'nav.metric-dictionary.title': '指标字典',
   'nav.metric-dictionary.hint': '同一指标一个口径 · 版本发布 · 上下游血缘 · 修订影响分析',
+  'nav.infection-report.title': '传染病上报',
+  'nav.infection-report.hint': '诊断自动匹配 · 甲类2小时/乙丙24小时 · 提交受理退回 · 逾期漏报监测',
   'nav.open-platform.title': '开放平台',
   'nav.open-platform.hint': '第三方 client_credentials · 只读范围目录 · 密钥轮换与停用 · 接入示例',
   'nav.group.系统管理': '系统管理',
