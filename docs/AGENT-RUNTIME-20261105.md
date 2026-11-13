@@ -13534,4 +13534,95 @@ Python：全量 pytest 2069 passed / 1 skipped（含 §294 契约锁 5 条）
 
 IHE XDS/CDA 文档共享、AI 漂移/误报闭环、单院恢复演练纳入发布门禁。
 
+---
+
+## 295. 2026-11-13 IHE XDS/CDA 文档共享（第 295 批 / 计划书 W3.5）
+
+**为什么需要这一批**
+
+互联互通四级甲等要求"共享文档"能被区域平台注册、检索、调阅。此前系统只有
+FHIR 资源投影（Patient/Encounter/Observation/MedicationRequest），没有"文档"
+这一层：出院小结、检验报告无法被区域平台按 uniqueId 找到，也没有内容哈希
+与调阅审计。区域平台联调时只能靠接口临时拼装，无法验收。
+
+**本批做了什么**
+
+1. **XDS 注册表（fhir V2）**
+   - `xds_submission_set`：一次 ITI-41 对应一个提交集，停用保留原因；
+   - `xds_document`：uniqueId 全局唯一，logicalId + 版本唯一；类型/格式/保密级别/
+     作者/机构/服务时间/事件码齐全；`campus_id` 支持多院区收敛；
+   - `xds_document_content`：内容独立存 `bytea`，`size_bytes = octet_length(content)`，
+     元数据与内容各存一份 SHA-256，调阅时两边比对；
+   - `xds_access_log`：PROVIDE/QUERY/RETRIEVE/GENERATE/DEPRECATE 追加式审计，
+     UPDATE/DELETE 由触发器拒绝。
+2. **ITI-41 Provide and Register（REST/JSON 子集）**
+   - `POST /fhir/xds/provide-and-register`：Base64 内容 + 元数据；
+   - 服务端按字节重算 SHA-256 与大小，客户端给了就比对，不一致 500/422；
+   - uniqueId 重复 409，不覆盖历史文档；提交集重复同样拒绝；
+   - 内容类型收窄到 text/xml、application/xml、application/pdf、text/plain，
+     单份上限 5MB（可配）。
+3. **ITI-18 Registry Stored Query**
+   - `GET /fhir/xds/registry/stored-query`：患者（UUID/患者号）、uniqueId、
+     classCode、创建时间范围、关键词、状态；
+   - 未提供患者/唯一标识/时间范围时直接 422，禁止"整院文档全量拉取"；
+   - 患者号按 `fhir:xds:phi` 返回明文或掩码。
+4. **ITI-43 Retrieve Document Set**
+   - `GET /fhir/xds/retrieve?uniqueId=...`：返回原始字节与 Content-Type；
+   - 响应头带 `X-XDS-Hash`、`X-XDS-Size`、`X-XDS-Status`；`Cache-Control: no-store`；
+   - 库内内容重算 SHA-256，与元数据不一致时拒绝返回并记 HASH_MISMATCH 审计。
+5. **CDA R2 生成**
+   - `POST /fhir/xds/documents/discharge-summary`（住院就诊）：患者、住院号、
+     科室/病区/床号、入院/出院时间、诊断（主诊断标记）、出院带药；
+   - `POST /fhir/xds/documents/lab-report`（已签发报告）：申请单、标本、临床诊断、
+     所见、结论、报告/审核人；
+   - 文档头含 realmCode CN、LOINC 文档类型、保密级别、recordTarget/author/custodian/
+     serviceEvent；国家模板 OID（WS 445 出院小结/检验报告）可配置；
+   - 正文明确"系统生成、未经电子签名、须执业医师复核"，不伪造签名。
+6. **ITI-62 停用元数据**
+   - `POST /fhir/xds/documents/{uniqueId}/deprecate`：写原因、保留内容与审计，
+     不做物理删除；版本不匹配返回 409。
+7. **权限、指标与界面**
+   - auth V104：`fhir:xds:read/phi/register/generate/manage`；
+   - 指标：注册/生成/检索/调阅/停用计数 + 哈希不一致计数；
+   - 临床诊疗新增「文档共享」页：检索、详情与 XML 预览、下载、生成出院小结/
+     检验报告、注册外部文档（文件转 Base64）、停用。
+
+**验证**
+
+```
+Java：fhir 模块 38 passed（新增 CdaDocumentBuilder 3 + XdsValidation 4 + XdsController 8）；
+      XML 转义、模板 OID、权限分离、真实操作人、统一错误壳、调阅响应头均覆盖；
+      platform 全量 mvn test 通过
+Python：全量 pytest 2076 passed / 1 skipped（含 §295 契约锁 7 条）
+前端：typecheck 通过；build 通过（入口 gzip 100.70 KB）
+迁移：fhir V2（注册表/内容/审计）+ auth V104（XDS 权限）；
+      真实栈已应用：fhir v2、auth v104
+真实栈（8090，dev，直接带头验证）：
+  出院小结        visit a0c3ac2c… → 4341 B，SHA-256 fc78fdd3…
+  检验报告        report 3cf36a97… → 4127 B，SHA-256 411fe208…
+  注册外部文档    urn:uuid:smoke-295-external → 42 B
+  重复注册        409（唯一标识不覆盖）
+  停用            DEPRECATED，rowVersion 1；status=ALL 检索仍可见
+  哈希不一致      注册时 500；调阅前篡改内容 → 500，恢复后 200
+  权限分离        仅 fhir:read → 403；缺 X-Actor → 403（57411）
+  审计            GENERATE 2 / PROVIDE OK 1 / PROVIDE BAD_REQUEST 3 /
+                  CONFLICT 1 / HASH_MISMATCH 1 / QUERY 2 / RETRIEVE 4 / DEPRECATE 1
+```
+
+**已知边界**
+
+- 本批是 XDS.b 的 **REST/JSON 子集**，不是完整 SOAP/ebXML 信封；区域平台若只提供
+  SOAP 端点，需要在外围适配器转换（字段已按 ITI-41/18/43 槽位命名）；
+- CDA 模板 OID 默认按 WS 445 配置，但**未内置 Schematron 校验**；国家级模板校验、
+  电子签名/时间戳需在院方/区域平台联调与 CA 资质项中完成；
+- 文档内容依赖数据库磁盘/TDE 加密，应用层不做二次加密（密钥轮换会导致历史文档
+  不可读）；生产需开启存储加密并把 `xds_document_content` 纳入备份范围；
+- 未实现跨机构文档源（XCA/XCPD）与患者隐私同意（BPPC）；区域共享按"院内注册 +
+  授权调阅"落地，跨机构需下一阶段扩展。
+
+**下一批建议（§296）**
+
+AI 漂移与误报闭环、单院恢复演练纳入发布门禁、XDS 与区域平台 SOAP 适配器。
+
+
 

@@ -4175,3 +4175,65 @@ export interface ConsentVerify {
   signatureValid: boolean | null
   status: string
 }
+
+// ---------------------------------------------------------------- IHE XDS 文档共享（§295）
+
+export type XdsAvailability = 'APPROVED' | 'DEPRECATED'
+
+export interface XdsDocument {
+  documentId: string
+  uniqueId: string
+  logicalId: string
+  documentVersion: number
+  patientId: string
+  patientNo: string
+  classCode: string
+  classDisplay: string | null
+  typeCode: string | null
+  typeDisplay: string | null
+  formatCode: string
+  formatDisplay: string | null
+  eventCodes: string[]
+  title: string
+  comments: string | null
+  authorPerson: string | null
+  authorInstitution: string | null
+  confidentialityCode: string
+  languageCode: string
+  mimeType: string
+  sizeBytes: number
+  hashSha256: string
+  availabilityStatus: XdsAvailability
+  creationTime: string
+  serviceStartTime: string | null
+  serviceStopTime: string | null
+  registeredAt: string
+  rowVersion: number
+}
+
+export interface XdsQueryResult {
+  items: XdsDocument[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface XdsProvideResult {
+  submissionSetId: string
+  submissionSetUid: string
+  documentId: string
+  uniqueId: string
+  hashSha256: string
+  sizeBytes: number
+  availabilityStatus: XdsAvailability
+}
+
+export interface XdsSummary {
+  total: number
+  approved: number
+  deprecated: number
+  dischargeSummaries: number
+  labReports: number
+  todayRegistered: number
+  todayRetrieved: number
+}

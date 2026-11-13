@@ -134,6 +134,8 @@ const messages = {
   'nav.metric-dictionary.hint': '同一指标一个口径 · 版本发布 · 上下游血缘 · 修订影响分析',
   'nav.infection-report.title': '传染病上报',
   'nav.infection-report.hint': '诊断自动匹配 · 甲类2小时/乙丙24小时 · 提交受理退回 · 逾期漏报监测',
+  'nav.document-sharing.title': '文档共享',
+  'nav.document-sharing.hint': 'IHE XDS 注册 · 出院小结/检验报告 CDA · 按患者与时间检索 · SHA-256 校验调阅',
   'nav.open-platform.title': '开放平台',
   'nav.open-platform.hint': '第三方 client_credentials · 只读范围目录 · 密钥轮换与停用 · 接入示例',
   'nav.group.系统管理': '系统管理',

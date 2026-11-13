@@ -329,6 +329,12 @@ const router = createRouter({
           name: 'infection-report',
           component: () => import('@/views/InfectionReportView.vue'),
         },
+        {
+          // 第 295 批：IHE XDS 文档共享（fhir:xds:read；注册/生成/停用各有权限点）
+          path: 'documents',
+          name: 'document-sharing',
+          component: () => import('@/views/DocumentSharingView.vue'),
+        },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },

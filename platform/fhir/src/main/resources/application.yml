@@ -10,9 +10,9 @@ spring:
     name: platform-fhir
 
   datasource:
-    # 只读投影服务：与业务服务共用同一 PostgreSQL，但本服务**只执行 SELECT**
-    # （唯一写入是 fhir_svc.access_log 审计表）。生产建议指向只读副本，
-    # 并用只读账号 + 仅授予 SELECT 的权限收敛（见 platform/README.md「FHIR 开放层」）。
+    # 业务域（clinical/tech/empi/pharmacy）只读；本服务只写 fhir_svc 下的
+    # 访问审计与 XDS 注册表/文档内容。生产建议：业务域账号仅授 SELECT，
+    # fhir_svc 账号可写；或把 FHIR 读取指向只读副本（见 platform/README.md「FHIR 开放层」）。
     url: "jdbc:postgresql://${PG_HOST:127.0.0.1}:${PG_PORT:5433}/${PG_DATABASE:medagent}?sslmode=${PG_SSLMODE:prefer}&sslrootcert=${PG_SSLROOTCERT:}"
     username: ${PG_USER:medagent}
     password: ${PG_PASSWORD:medagent123}
@@ -51,6 +51,16 @@ medassist:
     max-offset: ${FHIR_MAX_OFFSET:10000}
     # Bundle.fullUrl 前缀。留空则按当前请求推断（经网关时自动带上 /api/v2/fhir）。
     base-url: ${FHIR_BASE_URL:}
+    # ---- IHE XDS 文档共享（§295）----
+    # 单份文档上限（字节）：防一次注册把内存打爆；超过直接 422。
+    xds-max-document-bytes: ${XDS_MAX_DOCUMENT_BYTES:5242880}
+    # 院方在区域平台注册的 OID 根；默认值仅用于本地联调，上线必须替换。
+    xds-root-oid: ${XDS_ROOT_OID:1.2.156.112.1.1}
+    # CDA 保管机构名称（写入 custodian）。
+    xds-custodian-name: ${XDS_CUSTODIAN_NAME:铭医医院信息平台}
+    # WS 445 模板 OID：出院小结 / 检验报告。上线前由院方按属地规范核对。
+    xds-discharge-template-id: ${XDS_DISCHARGE_TEMPLATE_ID:2.16.156.10011.2.1.1.31}
+    xds-lab-template-id: ${XDS_LAB_TEMPLATE_ID:2.16.156.10011.2.1.1.28}
 
 management:
   endpoints:

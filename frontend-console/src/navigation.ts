@@ -580,6 +580,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:infection:read'],
   },
   {
+    // 第 295 批：IHE XDS 文档共享（注册/检索/调阅/生成/停用）
+    name: 'document-sharing',
+    path: '/documents',
+    title: '文档共享',
+    hint: 'IHE XDS 注册 · 出院小结/检验报告 CDA · 按患者与时间检索 · SHA-256 校验调阅',
+    icon: 'link',
+    group: '临床诊疗',
+    permissions: ['fhir:xds:read'],
+  },
+  {
     // 第 231 批：打印留痕（按单号核查补打次数与打印人；按院区收敛）
     name: 'print-history',
     path: '/print-events',

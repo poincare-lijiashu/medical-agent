@@ -217,6 +217,10 @@ import type {
   WardDischargeReadinessView,
   WardNursingSheets,
   WardOccupancy,
+  XdsDocument,
+  XdsProvideResult,
+  XdsQueryResult,
+  XdsSummary,
 } from './types'
 
 export const authApi = {
@@ -1808,6 +1812,58 @@ export const kbApi = {
     post<KbSearchResult>(`/kb/spaces/${spaceId}/search`, { query, topK, mode }),
   answer: (spaceId: string, question: string, topK = 6) =>
     post<KbAnswerResult>(`/kb/spaces/${spaceId}/answer`, { question, topK }),
+}
+
+/**
+ * IHE XDS 文档共享（§295）。
+ * 检索/调阅需 fhir:xds:read；注册需 fhir:xds:register；生成需 fhir:xds:generate；
+ * 停用需 fhir:xds:manage；患者号明文需 fhir:xds:phi。
+ */
+export const xdsApi = {
+  summary: () => get<XdsSummary>('/fhir/xds/summary'),
+  query: (params: {
+    patient?: string
+    uniqueId?: string
+    classCode?: string
+    status?: 'APPROVED' | 'DEPRECATED' | 'ALL'
+    creationTimeFrom?: string
+    creationTimeTo?: string
+    q?: string
+    limit?: number
+    offset?: number
+  }) => get<XdsQueryResult>('/fhir/xds/registry/stored-query', params),
+  /** 调阅原始文档（Blob）：CDA XML 可直接读文本预览，PDF 走下载。 */
+  retrieve: (uniqueId: string) => download('/fhir/xds/retrieve', { uniqueId }),
+  generateDischarge: (visitId: string) =>
+    post<XdsProvideResult>('/fhir/xds/documents/discharge-summary', { visitId }),
+  generateLab: (reportId: string) =>
+    post<XdsProvideResult>('/fhir/xds/documents/lab-report', { reportId }),
+  register: (body: {
+    uniqueId: string
+    patientId: string
+    classCode: string
+    classDisplay?: string
+    typeCode?: string
+    typeDisplay?: string
+    formatCode: string
+    formatDisplay?: string
+    title: string
+    mimeType: string
+    contentBase64: string
+    sizeBytes?: number
+    authorPerson?: string
+    authorInstitution?: string
+    confidentialityCode?: string
+    comments?: string
+    creationTime?: string
+    serviceStartTime?: string
+    serviceStopTime?: string
+  }) => post<XdsProvideResult>('/fhir/xds/provide-and-register', body),
+  deprecate: (uniqueId: string, body: { reason: string; rowVersion?: number }) =>
+    post<XdsDocument>(
+      `/fhir/xds/documents/${encodeURIComponent(uniqueId)}/deprecate`,
+      body,
+    ),
 }
 
 export { request }

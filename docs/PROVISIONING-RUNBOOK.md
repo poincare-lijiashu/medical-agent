@@ -605,3 +605,79 @@ curl -X POST http://127.0.0.1:8080/api/v2/clinical/infections/reports/<id>/accep
 | 提交报 409 | 他人已提交/退回，版本变化 | 刷新后重试 |
 | 作废报“已提交不能作废” | 法定报告已提交，不能物理撤回 | 联系疾控走更正流程 |
 | 逾期数量持续增加 | 临床未及时提交 | 防保科按逾期列表督办 |
+
+---
+
+## 17. IHE XDS 文档共享（§295 / 计划书 W3.5）
+
+### 17.1 定位与边界
+
+- 本服务（fhir，默认 8090）在既有 FHIR 只读投影之外，**新增 XDS 文档注册表**；
+  业务域（clinical/tech/empi）仍是只读，写入只发生在 `fhir_svc`；
+- 实现 ITI-41（单文档注册）、ITI-18（注册表检索）、ITI-43（文档调阅）、
+  ITI-62（元数据停用）的 **REST/JSON 子集**；
+- 完整 SOAP/ebXML 与国家级 CDA Schematron 校验、CA 签名/时间戳不在本服务内完成。
+
+### 17.2 上线前配置
+
+| 环境变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `XDS_MAX_DOCUMENT_BYTES` | 单份文档上限（字节） | 5242880（5MB） |
+| `XDS_ROOT_OID` | 院方在区域平台注册的 OID 根 | `1.2.156.112.1.1`（仅联调） |
+| `XDS_CUSTODIAN_NAME` | CDA custodian 机构名 | 铭医医院信息平台 |
+| `XDS_DISCHARGE_TEMPLATE_ID` | 出院小结模板 OID（WS 445） | `2.16.156.10011.2.1.1.31` |
+| `XDS_LAB_TEMPLATE_ID` | 检验报告模板 OID（WS 445） | `2.16.156.10011.2.1.1.28` |
+
+> `XDS_ROOT_OID` 上线必须替换为院方 OID；默认值只用于本地联调，写进区域平台的
+> 文档会带错误的机构标识。
+
+### 17.3 常用操作
+
+```bash
+# 生成出院小结（需 fhir:xds:generate；visitId 必须是住院就诊）
+curl -X POST http://127.0.0.1:8080/api/v2/fhir/xds/documents/discharge-summary \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"visitId":"<visit-uuid>"}'
+
+# 生成检验报告（需报告已 FINAL/AMENDED）
+curl -X POST http://127.0.0.1:8080/api/v2/fhir/xds/documents/lab-report \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"reportId":"<report-uuid>"}'
+
+# 检索（至少给 patient / uniqueId / 时间范围之一）
+curl "http://127.0.0.1:8080/api/v2/fhir/xds/registry/stored-query?patient=P20261113001&limit=20" \
+  -H "Authorization: Bearer <token>"
+
+# 调阅（响应头 X-XDS-Hash / X-XDS-Size / X-XDS-Status）
+curl -OJ "http://127.0.0.1:8080/api/v2/fhir/xds/retrieve?uniqueId=urn:uuid:<uuid>" \
+  -H "Authorization: Bearer <token>"
+
+# 停用元数据（需 fhir:xds:manage；保留内容与审计）
+curl -X POST "http://127.0.0.1:8080/api/v2/fhir/xds/documents/urn:uuid:<uuid>/deprecate" \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"reason":"患者信息登记错误","rowVersion":0}'
+```
+
+### 17.4 完整性校验与排障
+
+- 注册时服务端按字节计算 SHA-256 与大小；调阅时重新计算并与元数据比对，
+  任一不一致都**拒绝返回内容**（`57404`），同时写 `HASH_MISMATCH` 审计；
+- 唯一标识重复返回 `57409`，不会覆盖历史文档；需要更正时先停用旧文档，
+  再用新 uniqueId 注册；
+- 检索过宽返回 `57407`：必须提供患者、唯一标识或时间范围，避免整院导出；
+- 报告未签发返回 `57410`：先在医技系统完成审核签发。
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 生成出院小结报“不是住院就诊” | visitId 是门诊就诊 | 改用住院 visitId |
+| 调阅 500 且码 57404 | 内容或元数据被改动/恢复不完整 | 停用该文档，核对备份后重新注册 |
+| 检索 422 码 57407 | 未给患者/唯一标识/时间范围 | 增加检索条件 |
+| 页面患者号显示为掩码 | 账号缺 `fhir:xds:phi` | 由管理员按岗位授予 |
+| 区域平台拿不到文档 | 只用 SOAP/ebXML 端点 | 在外围适配器转换到 REST/JSON 子集 |
+
+### 17.5 备份与恢复
+
+- `fhir_svc.xds_document` 与 `xds_document_content` 必须与业务库一起纳入备份；
+- 恢复后先跑一次调阅校验：任一份文档哈希不一致会直接暴露为 57404；
+- 审计表 `xds_access_log` 只增不改，恢复时不得用旧快照覆盖较新的审计数据。
+

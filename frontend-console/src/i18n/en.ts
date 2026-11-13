@@ -129,6 +129,8 @@ const messages: Record<MessageKey, string> = {
   'nav.metric-dictionary.hint': 'One definition per metric · versioned publishing · upstream and downstream lineage · impact analysis',
   'nav.infection-report.title': 'Notifiable Disease Reporting',
   'nav.infection-report.hint': 'Diagnosis auto-matching · class A 2h / B-C 24h · submit, accept and return · overdue and missed reporting',
+  'nav.document-sharing.title': 'Document Sharing',
+  'nav.document-sharing.hint': 'IHE XDS registry · discharge summary and lab report CDA · search by patient and time · SHA-256 verified retrieval',
   'nav.open-platform.title': 'Open Platform',
   'nav.open-platform.hint': 'Third-party client_credentials · read-only scope catalog · secret rotation and disable · integration examples',
   'nav.release-console.title': 'Release Management',
