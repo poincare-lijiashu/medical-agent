@@ -801,7 +801,7 @@ curl -X POST .../incidents -d '{"agentId":"drug","kind":"FALSE_POSITIVE","severi
 # 令牌
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+  -d '{"username":"admin01","password":"<demo-password>"}' | jq -r .data.accessToken)
 H="Authorization: Bearer $TOKEN"
 
 # 备份策略
@@ -889,7 +889,7 @@ curl -s ".../ops/dr/gate?scope=ALL&environment=PROD&days=90" -H "$H" | jq .data
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+  -d '{"username":"admin01","password":"<demo-password>"}' | jq -r .data.accessToken)
 H="Authorization: Bearer $TOKEN"
 
 # 模板与课程
@@ -963,7 +963,7 @@ curl -s -X POST ".../ops/impl/projects/<pid>/accept" -H "$H" \
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+  -d '{"username":"admin01","password":"<demo-password>"}' | jq -r .data.accessToken)
 H="Authorization: Bearer $TOKEN"
 
 # 看板与规则
@@ -1030,7 +1030,7 @@ curl -s -X POST ".../mdm/quality/issues/<issueId>/waive" -H "$H" \
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+  -d '{"username":"admin01","password":"<demo-password>"}' | jq -r .data.accessToken)
 H="Authorization: Bearer $TOKEN"
 
 # 服务目录与 SLO 列表
@@ -1094,7 +1094,7 @@ curl -s ".../ops/slo/<sloId>" -H "$H" | jq .data.evaluation
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+  -d '{"username":"admin01","password":"<demo-password>"}' | jq -r .data.accessToken)
 H="Authorization: Bearer $TOKEN"
 
 # 看板/用例/端点
@@ -1158,7 +1158,7 @@ curl -s ".../clinical/integration/hl7/runs?caseCode=ADT-A01" -H "$H" | jq
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+  -d '{"username":"admin01","password":"<demo-password>"}' | jq -r .data.accessToken)
 H="Authorization: Bearer $TOKEN"
 
 curl -s ".../ops/golive/cockpit?projectId=<pid>&componentCode=platform-gateway&environment=PROD" \
@@ -1198,7 +1198,7 @@ curl -s ".../ops/golive/evidence?projectId=<pid>&componentCode=platform-gateway"
 
 ### 25.2 演示账号
 
-`admin01` / `doctor01` / `qc01` / `pharm01`，口令 `Med@2026`（仅本地演示库；
+`admin01` / `doctor01` / `qc01` / `pharm01`，口令 `<demo-password>`（仅本地演示库；
 生产由院方身份源或运维初始化，禁止沿用演示口令）。
 
 ### 25.3 请求路径

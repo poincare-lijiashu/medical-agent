@@ -1,4 +1,4 @@
-﻿# MedAssist 多智能体全面评测意见书（2026-11-03）
+# MedAssist 多智能体全面评测意见书（2026-11-03）
 
 > **范围**：本项目历史全部交付任务，重点覆盖 2026-11-02 至 2026-11-03 新落地的六项能力：药房工作台、医技工作台、医保结算工作台、医保目录与报盘、DRG/DIP 分组、系统管理（账号授权 + 审计）；并回溯其依赖的 auth / common / clinical 既有实现。
 > **方式**：4 个子智能体分维度深读源码（单并发依次派发，避免网关 504），主控汇总去重、按"必须改 / 应改 / 上线必需 / 可延后 / 门禁"五级归档。
@@ -21,7 +21,7 @@
 - **开发环境**：网关 8080、auth 8081、EMPI 8082（开处方时药房会校验患者主索引，本轮已启动）、clinical 8083、pharmacy 8084、tech 8085、emr 8086、insurance 8087、material 8089。影像联调用本地 mock DICOMweb（127.0.0.1:9097，系列/影像/rendered），tech 以 `PACS_BASE_URL=http://127.0.0.1:9097`、`PACS_VIEWER_URL=http://127.0.0.1:9096/viewer` 启动。
 - **启动顺序硬约束（实测）**：auth 必须先于 gateway 且带 `INTERNAL_API_TOKEN=medassist-dev-internal-token`（网关启动时 fail-fast 拉取撤销名单，auth 不可达或令牌不匹配都会拒绝启动）；网关另需 `--medassist.gateway.auth.internal-token=medassist-dev-internal-token`。
 - **已修平台问题（G31/G36）**：网关会把完整权限点注入 `X-Permissions`，管理员令牌可超过 Tomcat 默认 8KB 请求头上限，导致下游返回 400（日志 `Request header is too large`）。各服务 `server.max-http-request-header-size=32KB`；本轮重启 auth / clinical / EMPI 后经网关实测 admin01 正常。
-- **演示账号**：`admin01 / Med@2026`（ADMIN，主院区+东院区），`doctor01`（DOCTOR，主院区）、`pharm01`、`pharm02`（PHARMACIST）、`qc01`（主院区+东院区）同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。院区冒烟脚本每次会创建 `east*` / `eastadm*`（口令 `East@2026x`，仅东院区）用于隔离验证。
+- **演示账号**：`admin01 / <demo-password>`（ADMIN，主院区+东院区），`doctor01`（DOCTOR，主院区）、`pharm01`、`pharm02`（PHARMACIST）、`qc01`（主院区+东院区）同口令。SSO 默认关闭；联调时 `doctor01` 通过 OIDC 外部身份 `sso-doctor01` 绑定，本地密码登录不受影响。院区冒烟脚本每次会创建 `east*` / `eastadm*`（口令 `East@2026x`，仅东院区）用于隔离验证。
 - **备份**：`<backup-dir>\medical_agent.git` 与 `medical_agent_20261105.bundle`（每轮提交后 `git push --mirror` + `git bundle create --all` 同步）。
 
 ### 1. 功能完成度（按业务域）
@@ -288,7 +288,7 @@ cd ..\frontend-console; npm run typecheck; npm run build
 | P1-S1 | 成立 | 改密改用独立权限点 `auth:user:reset_password`；新增 auth V39 迁移建权限并把"已持有 auth:user:update 的角色"一并授予（升级后不出现"突然不能改密"） | auth 43 全绿 |
 | P1-S2 | 成立 | BCrypt 强度 10→12；`needsUpgrade` 同时识别"低于当前强度"的旧哈希（登录成功后在线重写）；密码策略补常见弱口令黑名单 + 单一字符重复拒绝 | auth 43 全绿（1 处测试口令替换） |
 | P1-S3 | 成立 | 登录限流账号维度改为"账号 + 来源 IP"（新增 `countRecentFailuresForUserAndIp`），移除纯 username 全局计数——攻击者无法再靠连错 5 次锁死他人账号；IP 维度阈值不变 | 回归 +1（`attackerFromAnotherIpCannotLockVictimAccount`），auth 43 全绿 |
-| P1-S5 | 成立 | 新增 `DevCredentialGuardAutoConfiguration`：生产/预发布仍用 `PG_PASSWORD=medagent123`（或启用 Nacos 且口令为 `nacos`）时**拒绝启动**，非生产仅告警 | 全模块编译 + 单测全绿 |
+| P1-S5 | 成立 | 新增 `DevCredentialGuardAutoConfiguration`：生产/预发布仍用 `PG_PASSWORD=<dev-password>`（或启用 Nacos 且口令为 `nacos`）时**拒绝启动**，非生产仅告警 | 全模块编译 + 单测全绿 |
 | P1-F1 | 成立 | 新增 `components/ui/TableSkeleton.vue`（`rows`/`height` 可配），替换 7 个视图共 17 处骨架块 | typecheck + build 全绿 |
 | P1-F3 | 成立 | `.loading` 样式上提 `styles/base.css`，删除 7 个视图的重复 scoped 规则 | typecheck + build 全绿 |
 | P1-F5 | 成立 | `types.ts`：`UserAccount.status` 补 `'LOCKED'`；`InsuranceMemberHistory` 的 `insuranceType`/`status` 收敛为联合类型 | typecheck 全绿 |

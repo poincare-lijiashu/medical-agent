@@ -130,7 +130,7 @@ i18n 覆盖度实测为**完美对称**：`zh-CN.ts` 与 `en.ts` 各 2090 个叶
 ```powershell
 # 0) 取 token（只写本机临时目录）
 $r = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" -Method Post -ContentType 'application/json' `
-     -Body (@{username='admin01';password='Med@2026'}|ConvertTo-Json)
+     -Body (@{username='admin01';password='<demo-password>'}|ConvertTo-Json)
 $r.data.accessToken | Out-File "$env:TEMP\ma_token.txt" -Encoding ascii -NoNewline
 $T = Get-Content "$env:TEMP\ma_token.txt" -Raw
 

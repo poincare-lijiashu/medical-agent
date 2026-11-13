@@ -75,7 +75,7 @@ python scripts\mcp_server.py
 # 示例：登录换取令牌
 curl.exe -s -X POST http://127.0.0.1:8001/api/v1/auth/login ^
   -H "Content-Type: application/json" ^
-  -d "{\"username\":\"doctor01\",\"password\":\"Med@2026\"}"
+  -d "{\"username\":\"doctor01\",\"password\":\"<demo-password>\"}"
 ```
 
 ## Claude Desktop 配置示例

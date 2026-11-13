@@ -947,7 +947,7 @@ SELECT current_setting('statement_timeout'), current_setting('lock_timeout'),
 
 ```bash
 # 会诊意见子表对账（只读，--check 不写入）
-python scripts/backfill_consult_opinions.py --check --dsn "postgresql://medagent:medagent123@127.0.0.1:5433/medagent_test"
+python scripts/backfill_consult_opinions.py --check --dsn "postgresql://medagent:<dev-password>@127.0.0.1:5433/medagent_test"
 # 实测输出：会诊单 6 单；子表 12 行 / 12 单；不一致单数 6（全部为孤儿行）→ 退出码 1
 ```
 

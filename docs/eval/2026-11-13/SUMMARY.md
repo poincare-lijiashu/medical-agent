@@ -227,7 +227,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_platform_demo.ps
 
 # 2) 各域独立复现命令见对应分域报告第 7 节（节标题「可复现命令」）
 #    例：E3 越权复现（修复前应返回 PHI，修复后应 401/403）
-$body = @{username='admin01';password='Med@2026'} | ConvertTo-Json
+$body = @{username='admin01';password='<demo-password>'} | ConvertTo-Json
 $token = (Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" `
   -Method Post -ContentType 'application/json' -Body $body).data.accessToken
 Invoke-WebRequest -Uri "http://127.0.0.1:8082/patients?patientNo=P20261030000001" `

@@ -29,14 +29,19 @@
 # Restore: git clone <Dst>\medical_agent_YYYYMMDD.bundle <dir>
 #          (a bundle clone needs no existing repo -- it rescued this project)
 param(
-    [string]$Src = "<repo>",
-    [string]$Dst = "<backup-dir>",
+    [string]$Src = "",
+    [string]$Dst = "",
     [int]$Keep = 14,
     [switch]$NoPrune
 )
 
 $ErrorActionPreference = "Continue"
 $stamp = Get-Date -Format "yyyyMMdd"
+
+# 默认值从脚本位置推导：仓库可被克隆到任意目录，硬编码本机路径会把
+# 开发者的目录结构带进版本库（评测整改：上传前脱敏）。
+if (-not $Src) { $Src = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path) }
+if (-not $Dst) { $Dst = Join-Path $env:USERPROFILE "backup_repos" }
 
 # -- 0) source sanity: refuse to "back up" from a broken tree
 if (-not (Test-Path (Join-Path $Src ".git"))) {

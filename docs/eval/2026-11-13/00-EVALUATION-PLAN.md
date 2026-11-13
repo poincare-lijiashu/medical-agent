@@ -93,7 +93,7 @@
 | Java 模块 | 12 个业务模块（common/auth/gateway/empi/clinical/emr/pharmacy/tech/material/insurance/kb/license + masterdata/migration/ops/release/fhir） |
 | 代码规模 | Java main 713 / test 272；Vue 135；TS 42；Python 118；SQL 迁移 614 |
 | 运行态 | AI 中台与控制台 8001；网关 8080；业务服务 8081–8095；PostgreSQL 5433 |
-| 演示账号 | `admin01` / `doctor01` / `qc01` / `pharm01`，口令 `Med@2026`（仅本地演示库） |
+| 演示账号 | `admin01` / `doctor01` / `qc01` / `pharm01`，口令 `<demo-password>`（仅本地演示库） |
 | 既有自述文档 | `docs/COMMERCIAL-READINESS-100-PLAN.md`、`docs/AGENT-RUNTIME-20261105.md` |
 | 评测原则 | 只读；不修改产品代码；仅在本目录写报告 |
 

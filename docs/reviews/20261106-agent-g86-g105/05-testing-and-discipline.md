@@ -45,7 +45,7 @@ Agent 域 16 个测试文件合计收集 **206** 个用例，全部真实存在�
 - **问题（已实测复现）**：
   1. `test_row_level_users.py` 的 `pg_pool` fixture 会 `asyncio.run(pg_store.init())` 建立真实 PG 池（连 `medagent_test`），随后 `auth_mod.create_user("rowlvl", ...)` / `auth_mod.delete_user("rowlvl", ...)` 走 `auth.py:173` 的 `pg_store.mirror_json_file(USERS_FILE, users)` 分支——**`USERS_FILE` 未被 monkeypatch**，写的是仓库真实路径 `data/auth/users.json`。实测执行 `pytest tests/test_row_level_users.py::test_auth_row_level_lifecycle` 后该文件内容变为 `{}`（4 个演示账号被删除）。
   2. `tests/conftest.py` **没有** `_isolate_users_file` fixture。`auth.USERS_FILE` 的隔离完全依赖各测试文件自己 monkeypatch（`grep` 出 39 处零散 monkeypatch），凡调用 `seed_default_users()` 而未 monkeypatch 的测试（如 `test_security.py:53`、`:114`）都会读写真实 `data/auth/users.json`。
-  3. 全量跑之后该文件的 SHA256 发生变化（内容仍是 4 账号，但 `password_hash` 被重新生成 → **演示账号密码被测试轮换**）。虽然 `AUTH_DEMO_PASSWORD=Med@2026` 在 conftest 里固定、演示账号仍能登录，但本地开发机上"改过的密码"会被静默冲掉。
+  3. 全量跑之后该文件的 SHA256 发生变化（内容仍是 4 账号，但 `password_hash` 被重新生成 → **演示账号密码被测试轮换**）。虽然 `AUTH_DEMO_PASSWORD=<demo-password>` 在 conftest 里固定、演示账号仍能登录，但本地开发机上"改过的密码"会被静默冲掉。
 - **为什么必须改**：这是 2026-10-30 那起"users 表被清成 1 行 → 全站 401"事故的**同型复发**——事故记录写在 `tests/conftest.py:13-16` 的注释里，但修复只覆盖了 **PG 侧**（`PG_DATABASE=medagent_test`），**JSON 侧（`data/auth/users.json`）没有隔离**。Agent 域 16 个测试文件里有 8 个调用 `seed_default_users()`（`test_consult.py:230`、`test_skill_usage.py:109`、`test_consult_metrics.py:274`、`test_agent_bots.py:265`、`test_agent_governance.py:182`、`test_skill_library.py:119`、`test_skill_trends.py:137`、`test_metrics_auth.py:15`），任何一个在错误顺序下执行都可能踩到同一个坑。
 - **建议方向**：
   1. 在 `tests/conftest.py` 增加 autouse fixture，把 `backend.core.auth.USERS_FILE` 指向 `tmp_path`（与 `_isolate_runtime_flags` / `_isolate_case_archive` 同模式），使所有测试默认不写真实用户表；
@@ -372,7 +372,7 @@ Get-Content data/auth/users.json -Raw
 ```
 
 > ⚠️ **本评审已将该文件从 `data/backups/backup_20261030_210229.tar.gz` 还原**，
-> 并验证 4 个演示账号（doctor01/pharm01/admin01/qc01）角色、科室、`Med@2026` 口令均可正常校验通过。
+> 并验证 4 个演示账号（doctor01/pharm01/admin01/qc01）角色、科室、`<demo-password>` 口令均可正常校验通过。
 > 仓库 `data/` 目录的其余 60 个文件在本次评审前后**逐文件比对无变化**（唯一变化即本条 M1 所述的 `users.json`）。
 
 ### C. Agent 域 PG 侧断言缺失的定位

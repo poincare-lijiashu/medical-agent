@@ -39,7 +39,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\setup_gpu_cuda.ps1
 - 规模化：持续往 `data/kb_docs/` 添加正式指南 → 重跑 `seed_kb_docs.py` 即增量入库（幂等）。
 
 ## 鉴权与安全
-- 令牌：JWT HS256（access 12h / refresh 7d），口令 pbkdf2；用户表默认 `data/auth/users.json`（生产迁 Postgres）。演示账号 `doctor01/pharm01/admin01 / Med@2026`，**上线务必改密/删**。
+- 令牌：JWT HS256（access 12h / refresh 7d），口令 pbkdf2；用户表默认 `data/auth/users.json`（生产迁 Postgres）。演示账号 `doctor01/pharm01/admin01 / <demo-password>`，**上线务必改密/删**。
 - 限流：进程内滑动窗口（`RATE_LIMIT_PER_MIN`），多实例改 Redis。
 - PHI：入站脱敏身份证/手机/邮箱/病案号/社保卡；审计追加式、无删除接口。
 - 双人核对：药物禁忌/影像高危/低置信入队，审核人≠提交人。

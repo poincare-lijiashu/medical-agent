@@ -19,12 +19,13 @@ param(
     [string]$PgContainer = "medagent_pg",
     [string]$DbName = "medagent",
     [string]$DbUser = "medagent",
-    [string]$BackupDir = "<backup-dir>",
+    [string]$BackupDir = "",
     [string]$Output = "",
     [switch]$Strict
 )
 
 $ErrorActionPreference = "Stop"
+if (-not $BackupDir) { $BackupDir = Join-Path $env:USERPROFILE "backup_repos" }
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 

@@ -121,7 +121,7 @@
 | X-4 | **PACS / DICOM 影像设备对接** | 依赖院区 Orthanc/PACS 设备的 DICOM AE Title、端口与网络策略 | 设备侧配置非代码可关闭 |
 | X-5 | **院内网络与端口规划、KS8 集群资源配额** | `deploy/helm` 的 PDB/HPA/ResourceQuota/NetworkPolicy 与 `deploy/argocd` 的 3 套 Application 需院内 K8s 与网络策略配合 | 属部署环境约束 |
 | X-6 | **既有 HIS/LIS/EMR 系统对接接口文档** | 内部契约（4-7）缺少机器可读制品的根本原因是**对方系统不提供 OpenAPI**；本仓库可先对内部契约补契约测试，对方契约需院方协调 | 外部系统契约能力不可由本仓库单方补齐 |
-| X-7 | **开发默认口令的历史泄露面**（`PG_PASSWORD:medagent123`、`JWT_SECRET:medassist-local-dev-only-...`、`application-dev.yml` 的 `medassist-dev-internal-token`） | 代码侧已用 `DevCredentialGuard`/`JwtTokenService`/`prod-package` profile 三重守卫关闭；剩余风险是**已派发过这些公开常量**的历史环境是否仍在线 | 已由代码关闭“新部署误用”；存量环境的轮换需运维执行 |
+| X-7 | **开发默认口令的历史泄露面**（`PG_PASSWORD:<dev-password>`、`JWT_SECRET:medassist-local-dev-only-...`、`application-dev.yml` 的 `medassist-dev-internal-token`） | 代码侧已用 `DevCredentialGuard`/`JwtTokenService`/`prod-package` profile 三重守卫关闭；剩余风险是**已派发过这些公开常量**的历史环境是否仍在线 | 已由代码关闭“新部署误用”；存量环境的轮换需运维执行 |
 
 ---
 

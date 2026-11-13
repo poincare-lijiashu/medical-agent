@@ -42,7 +42,7 @@ npm run build
 npm run dev         # http://localhost:5174
 ```
 
-登录 `admin01 / Med@2026`。
+登录 `admin01 / <demo-password>`。
 
 ### 2026-11-03 五路评审结论
 
@@ -91,7 +91,7 @@ npm run typecheck  # vue-tsc --noEmit = 0 错误
 npm run build      # 产物 dist/，已被 .gitignore 排除
 ```
 
-登录 `admin01 / Med@2026`（dev 提示只在 `import.meta.env.DEV` 显示）。浏览器实测已通过：
+登录 `admin01 / <demo-password>`（dev 提示只在 `import.meta.env.DEV` 显示）。浏览器实测已通过：
 登录 → 医嘱工作台检索患者/选就诊/选项目/开立医嘱（列表 3→4、toast 正确）→ 病案首页 34 条 →
 麻精专册 7 条（待回收 3）→ 知识库检索（`degraded=EMBEDDING_UNAVAILABLE` 降级条正常）→
 手术排台 19 间 → 术中收费预览 ¥1,550 三项 → 术前访视表单。
@@ -228,7 +228,7 @@ npm run build      # 产物 dist/，已被 .gitignore 排除
      剩余优先项：#9 UNFIT 改判复核、#14 空安瓿发药二次校验与退药冲销、#20 statusOf 契约测试、
      #26 金额/数量边界用例
   3. **知识库第三批（pgvector）**：`medagent_pg` 是 `postgres:15-alpine`，`pg_available_extensions` 无 `vector`；
-     **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 ljs/<redacted-password>）——
+     **但本机已有 `pgvector/pgvector:0.8.0-pg17` 镜像**（属另一项目 ai_dev，账号 <redacted-account>/<redacted-password>）——
      可**新建一个 PG17 + pgvector 容器**（独立端口/数据卷）先跑迁移与 HNSW，验证后再决定是否整体切换；
      不要直接换 `medagent_pg`（PG15→17 大版本升级需 dump/restore）。生成式问答仍需大模型配置
      （保持 `grounded/citations/refusal` 结构与拒答语义不变）
@@ -1769,7 +1769,7 @@ DK 域 Round 5/6/7 静态 SHA 3/3 一致（`8B870B1B5DD6…`）。新增镜像�
 # 后端
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 # 前端访问：http://127.0.0.1:8001/
-# 演示账号 doctor01 / pharm01 / admin01，密码 Med@2026
+# 演示账号 doctor01 / pharm01 / admin01，密码 <demo-password>
 ```
 
 ## 剩余 backlog（未开始）
@@ -1799,4 +1799,4 @@ python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 ## 关键事实
 - 服务健康检查 http://127.0.0.1:8001/healthz；重启前先 kill 8001 LISTENING PID
 - 429 频发原因：本会话上下文过长 + 工具调用密集（TPM/RPM 账号限流）→ 建议本文件交接后开新会话
-- 演示账号 doctor01/pharm01/admin01 / Med@2026
+- 演示账号 doctor01/pharm01/admin01 / <demo-password>

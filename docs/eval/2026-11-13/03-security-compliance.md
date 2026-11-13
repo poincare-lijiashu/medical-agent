@@ -130,7 +130,7 @@
 # ---- 0. 取 token（唯一一次 POST，登录本身属只读语义）----
 $tk = (Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" -Method Post `
       -ContentType 'application/json' `
-      -Body (@{username='admin01';password='Med@2026'}|ConvertTo-Json) -TimeoutSec 15).data.accessToken
+      -Body (@{username='admin01';password='<demo-password>'}|ConvertTo-Json) -TimeoutSec 15).data.accessToken
 $H = @{Authorization="Bearer $tk"}
 
 # ---- 1. 未授权访问：受保护端点应 401 ----

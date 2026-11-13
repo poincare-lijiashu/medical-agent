@@ -83,7 +83,7 @@ npm run build   # 产物：frontend-console/dist/（vite base=/，资源引用 /
 | 变量 | 生产值 | 说明 |
 | --- | --- | --- |
 | `APP_ENV` | `production` | 关闭 `/docs`；默认 JWT 密钥/关闭鉴权直接拒启 |
-| `AUTH_JWT_SECRET` | 强随机（如 `openssl rand -hex 32`） | 禁止默认值（`dev-secret-change-in-production` 拒启） |
+| `AUTH_JWT_SECRET` | 强随机（如 `openssl rand -hex 32`） | 禁止默认值（`<dev-jwt-secret>` 拒启） |
 | `AUTH_ENABLED` | `true` | 生产拒绝关闭鉴权 |
 | `AUTH_SEED_DEMO` | `false` | 不注入演示账号；config 默认即 false，全新部署零演示足迹（启动日志见 `seed_skipped` 属预期） |
 | `PG_HOST/PG_PORT/PG_USER/PG_PASSWORD/PG_DATABASE` | 真实实例 | 审计/用户/审核双写 PG；启动日志 `pg_ready` 确认 |
@@ -336,7 +336,7 @@ python scripts/run_eval.py --dry-run
 | 中 | `scripts/seed_kb.py` | 硬编码 `C:/Windows/Fonts/msyh.ttc`，Linux/macOS 种子失败 | ✅ 已修：跨平台字体候选 + PyMuPDF 内置 CJK 回退 |
 | 中 | `requirements.txt` | 缺 `pillow` / `rapidocr-onnxruntime` / `pytest`（运行时/测试依赖漏固化） | ✅ 已补齐并锁版本 |
 | 低 | `backend/core/embedder.py` | device 原为隐式 auto（代码内写死判断），缺配置化与 cuda 回退告警 | ✅ 已修：`EMBED_DEVICE` 配置化（auto/cpu/cuda + 回退告警） |
-| 低 | `scripts/*.py`、`docs/MCP.md` | 文档/用法示例内含 `D:\software_work\...` 本机绝对路径 | ✅ 已修（2026-10-31）：README/EVAL/INTEGRATION/MCP/OPERATIONS 与脚本说明统一改为 `python ...`；`platform/README.md` 计划书路径移除 |
+| 低 | `scripts/*.py`、`docs/MCP.md` | 文档/用法示例内含 `<local-toolchain>\...` 本机绝对路径 | ✅ 已修（2026-10-31）：README/EVAL/INTEGRATION/MCP/OPERATIONS 与脚本说明统一改为 `python ...`；`platform/README.md` 计划书路径移除 |
 | 通过 | `backend/`、`frontend/` 全量扫描 | 无 `D:\`/`C:\` 硬编码路径；文件读写显式 `encoding="utf-8"`；路径拼接统一 `os.path.join`/`pathlib` | 无需改动 |
 
 ## 三级部署指南（轮 B2）

@@ -24,7 +24,7 @@
 | 风险 | 现有措施 | 证据文件:行号 | 有效性 |
 |---|---|---|---|
 | 口令存储 | PBKDF2-HMAC-SHA256，600k 迭代（OWASP 2023 建议值），16 字节随机盐，`hmac.compare_digest` 定时安全比较；登录成功后自动透明升级旧迭代数 | `backend/core/auth.py:31,40-54,139-144` | ✅ 强 |
-| 默认密钥 | 默认 `dev-secret-change-in-production` 在生产类环境（production/prod/staging）**拒绝启动**；非生产环境自动换成进程级随机密钥 | `backend/config.py:148,260-277`；`backend/main.py:56-58` | ✅ 强 |
+| 默认密钥 | 默认 `<dev-jwt-secret>` 在生产类环境（production/prod/staging）**拒绝启动**；非生产环境自动换成进程级随机密钥 | `backend/config.py:148,260-277`；`backend/main.py:56-58` | ✅ 强 |
 | 生产环境兜底 | 生产启动校验：默认密钥拒启、`AUTH_ENABLED=false` 拒启、`AUTH_TOKEN_IN_BODY=true` 拒启（防令牌回 JS 面）、`/docs` 关闭 | `backend/main.py:42-51,53-70` | ✅ 强 |
 | 令牌传输 | 令牌只经 httpOnly cookie（`httponly=True`/`SameSite=Lax`/`secure` 仅生产开启）；JS 不可读；响应体默认不回带令牌 | `backend/api/v1/auth/auth_router.py:39-46,79-84` | ✅ 强 |
 | 令牌撤销 | 按用户名登记"撤销时间戳"，签发早于该时间的令牌一律 401；改密/删号即撤销；Redis 共享存储支持多实例 | `backend/api/deps.py:46-77`；`backend/api/v1/auth/auth_router.py:147,165` | ✅ 强（但见 P1-5 降级场景） |
@@ -716,7 +716,7 @@ admin（或被盗 admin）上传一个 2000 页的扫描版 PDF 或构造的畸�
 **证据**
 
 - `docker-compose.yml:26-27` — `MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}` / `MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}`：默认值即弱口令。
-- `docker-compose.yml:65` — `POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-medagent123}`。
+- `docker-compose.yml:65` — `POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-<dev-password>}`。
 - `docker-compose.yml:117` — `NACOS_AUTH_TOKEN` 有**硬编码默认值** `TWVkQXNzaXN0TmFjb3NMb2NhbERldlRva2VuMzJCeXRlcyE=`（Base64 明文），且 `NACOS_AUTH_ENABLE` 默认 `false`（`docker-compose.yml:114`）。
 - `docker-compose.yml:140-141` — app 端口 `"8001:8001"` **绑定 0.0.0.0**（其余服务都绑了 `127.0.0.1`，如 `:41`、`:69`、`:81`）→ API 直接暴露到局域网/宿主机外网，绕过 Ingress 的 TLS 与认证策略。
 - 生产叠加文件已强化：`docker-compose.prod.yml:34-38,65-67` 用 `:?` 强制必填（写法正确），`NACOS_AUTH_ENABLE: "true"`（`:64`）。所以这些默认值主要威胁**单机联调形态**与"直接用基础 compose 上生产"的误用。

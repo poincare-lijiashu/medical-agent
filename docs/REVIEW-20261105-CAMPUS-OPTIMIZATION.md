@@ -533,7 +533,7 @@ emr/insurance 的**合规红线集中在签名与四眼**：CA mock 可伪造可
 
 **4. CI pytest 门禁建库步骤必失败（无 services 声明）**
 - 位置：`.github/workflows/ci.yml` pytest job L42–47
-- 问题：步骤用 `psql -h 127.0.0.1 -U medagent -d medagent`（默认 5432、medagent/medagent123）建 `medagent_test`，但该 job 未声明任何 `services:`（对比 eval-baseline 显式声明 postgres:15-alpine 映射 5433）；托管 runner 上不存在 medagent 角色 → 步骤必失败，要么门禁常红被忽略（门禁失效），要么该 CI 从未按书面配置成功跑过。`tests/conftest.py` 未设 `PG_OFFLINE` 时强改 `PG_DATABASE=medagent_test` 同样无出处；eval-baseline 还 `needs: pytest`，会连坐定时评测。
+- 问题：步骤用 `psql -h 127.0.0.1 -U medagent -d medagent`（默认 5432、medagent/<dev-password>）建 `medagent_test`，但该 job 未声明任何 `services:`（对比 eval-baseline 显式声明 postgres:15-alpine 映射 5433）；托管 runner 上不存在 medagent 角色 → 步骤必失败，要么门禁常红被忽略（门禁失效），要么该 CI 从未按书面配置成功跑过。`tests/conftest.py` 未设 `PG_OFFLINE` 时强改 `PG_DATABASE=medagent_test` 同样无出处；eval-baseline 还 `needs: pytest`，会连坐定时评测。
 - 建议：给 pytest 补 `services: postgres`（与 eval-baseline 同款凭证/端口），或确认测试完全离线后删除该步骤并显式设 `PG_OFFLINE=on`；两选一后跑一次 Actions 验证全绿并留档。
 
 **5. 日志明文口令且 git 可见，可能被 `git add -A` 归档进仓库**
@@ -548,11 +548,11 @@ emr/insurance 的**合规红线集中在签名与四眼**：CA mock 可伪造可
 
 ### [建议]
 
-**7. 默认凭据硬编码进仓库，且临时文件残留**——`release_gate.ps1` L12/L20-32、`platform_loadtest.ps1` L13、`campus_isolation_smoke.ps1` L75/L125 内含 `admin01/Med@2026` 默认值、`SqlOne` 内联 `PGPASSWORD=medagent123`、固定建号口令 `East@2026x`，构成"已知凭据全家桶"；`release_gate` 把含明文口令的登录体写入 `%TEMP%` 的 `$bf` 却只删 `$out`；curl 无 `--max-time`，网关挂起时无限等待。建议口令改必填参数/环境变量、`finally` 删临时文件、curl 统一 `--max-time 15`。
+**7. 默认凭据硬编码进仓库，且临时文件残留**——`release_gate.ps1` L12/L20-32、`platform_loadtest.ps1` L13、`campus_isolation_smoke.ps1` L75/L125 内含 `admin01/<demo-password>` 默认值、`SqlOne` 内联 `PGPASSWORD=<dev-password>`、固定建号口令 `East@2026x`，构成"已知凭据全家桶"；`release_gate` 把含明文口令的登录体写入 `%TEMP%` 的 `$bf` 却只删 `$out`；curl 无 `--max-time`，网关挂起时无限等待。建议口令改必填参数/环境变量、`finally` 删临时文件、curl 统一 `--max-time 15`。
 
 **8. 院区冒烟脚本无 try/finally 清理，且强依赖存量数据**——`campus_isolation_smoke.ps1` 头注承诺"safe to re-run"，实际结尾只打印 RESULT，无任何清理：中途失败即留下 ACTIVE 的 WEST 院区、3 个固定口令 smoke 账号与真实业务数据永久累积；脚本还强依赖存量样本（`free patient found`、`main-campus bill found`），换新库即假失败。建议 try/finally 收尾、存量依赖改自建夹具、断言区分"环境缺数据"与"隔离失效"。
 
-**9. Helm 对 SNAPSHOT 镜像有 fail 守卫，但 secrets.create 无生产强制**——`deploy/helm/medassist-platform/templates/secret.yaml`、`values-dev.yaml` L14–23 明文入库 `postgresPassword: medagent123`、`jwtSecret: dev-only-...`、`internalApiToken: dev-only-...`，而 `values-prod.yaml` 只在注释写"secrets.create 必须为 false"。建议 secret.yaml 增加 `environment=production && secrets.create=true → fail`；dev 密值改由 `--set`/未跟踪 values 注入。
+**9. Helm 对 SNAPSHOT 镜像有 fail 守卫，但 secrets.create 无生产强制**——`deploy/helm/medassist-platform/templates/secret.yaml`、`values-dev.yaml` L14–23 明文入库 `postgresPassword: <dev-password>`、`jwtSecret: dev-only-...`、`internalApiToken: dev-only-...`，而 `values-prod.yaml` 只在注释写"secrets.create 必须为 false"。建议 secret.yaml 增加 `environment=production && secrets.create=true → fail`；dev 密值改由 `--set`/未跟踪 values 注入。
 
 **10. 告警规则无任何备份相关项**——`deploy/observability/alerts/medassist-alerts.yaml` 覆盖 up/重启/5xx/限流等 12+ 条，但无 `kube_job_status_failed` 告警、无备份新鲜度监控、无备份 PVC 容量水位告警；`find -mtime +14 -delete` 静默清理失败无人知晓。建议补 CronJob 失败告警 + "备份超 36h 未成功"告警 + PVC >80% 告警并接线 alertmanager-routes。
 

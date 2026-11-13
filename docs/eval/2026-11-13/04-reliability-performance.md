@@ -187,7 +187,7 @@
 ```powershell
 # 0) 取 token（唯一允许的写型调用：登录）
 $t = (Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" -Method Post `
-      -ContentType 'application/json' -Body (@{username='admin01';password='Med@2026'}|ConvertTo-Json)).data.accessToken
+      -ContentType 'application/json' -Body (@{username='admin01';password='<demo-password>'}|ConvertTo-Json)).data.accessToken
 $h = @{ Authorization = "Bearer $t" }
 
 # 1) 运行态：端口与进程

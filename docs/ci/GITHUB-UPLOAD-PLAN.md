@@ -80,7 +80,7 @@
 | `data/kb_guidelines_v2/*.md`（27 篇） | 已跟踪 | 指南要点摘录，需确认可再分发；否则改为院内部署资产 |
 | `data/kb/tasks/*.json` | 已跟踪，含教材名（如《病理学（第10版）》） | 无原文内容，可保留；如担心版权联想可移出 |
 | `frontend-console/dist/`（206 个文件） | 已跟踪（既定策略：免 node 部署） | 保留；但每次前端改动都会产生大 diff，可在 README 说明 |
-| 演示口令 `Med@2026`、`medagent123` | 出现在 CI、docs、compose 默认值 | 公库可保留（仅演示环境），但在 README 用醒目段落声明"必须改密" |
+| 演示口令 `<demo-password>`、`<dev-password>` | 出现在 CI、docs、compose 默认值 | 公库可保留（仅演示环境），但在 README 用醒目段落声明"必须改密" |
 | **本机绝对路径** | `docs/` 中约 10 处出现 `d:\workspace_AI\...`（评测报告、评审记录、HANDOFF） | **建议替换为相对链接**：只是工作区路径，不涉及个人身份，但会暴露内部目录结构 |
 | `docs/` 中的内部评审与运维记录 | 已跟踪（约 5 万行） | 含内部主机名/路径与历史缺陷，公开前建议抽检 `docs/reviews/`、`docs/eval/` |
 

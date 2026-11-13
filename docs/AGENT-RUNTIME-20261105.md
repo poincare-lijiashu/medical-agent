@@ -354,7 +354,7 @@
 | 并发建议 | 8 线程 × 16 次生成（3 个未引用技能） | 只生成 3 条建议，确定性 id 无重复 |
 | 只读接口并发 | 6 线程 × 30 次 metrics/alerts/trends | 全部 200，无 5xx |
 
-监控对接：新增 [medassist-agent-ops.rules.yml](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/deploy/prometheus/medassist-agent-ops.rules.yml)，规则与后端 G94 阈值一致（回放通过率、未引用技能、候选积压、覆盖率、高危告警），Prometheus 采集 `GET /api/v1/agent/skill-library/metrics/prometheus`（需 Bearer）。
+监控对接：新增 [medassist-agent-ops.rules.yml](deploy/prometheus/medassist-agent-ops.rules.yml)，规则与后端 G94 阈值一致（回放通过率、未引用技能、候选积压、覆盖率、高危告警），Prometheus 采集 `GET /api/v1/agent/skill-library/metrics/prometheus`（需 Bearer）。
 
 **验证**：`tests/test_agent_ops_drill.py` 4 项；全量 pytest 通过。
 
@@ -5197,7 +5197,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_platform_demo.ps
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001
 # 3) 医院业务控制台（5180，构建产物 + /api 代理到网关）
 cd frontend-console; npx vite preview
-# 浏览器打开 http://127.0.0.1:5180 → doctor01 / Med@2026 → 左侧「总览 · AI 临床助手」
+# 浏览器打开 http://127.0.0.1:5180 → doctor01 / <demo-password> → 左侧「总览 · AI 临床助手」
 ```
 
 **浏览器验证结论（真实点击 + 截图）**
@@ -7829,9 +7829,9 @@ YAML：9 份 application.yml 均可被 yaml.safe_load 解析
 **验证（真实浏览器，非模拟）**
 
 ```
-控制台：admin01 / Med@2026 登录 → /dashboard
+控制台：admin01 / <demo-password> 登录 → /dashboard
   · 243 个病区、单次 ward-summary 200；整页 15 个请求全部 200，无 429、控制台无错误
-AI 工作台：doctor01 / Med@2026 登录 → /overview
+AI 工作台：doctor01 / <demo-password> 登录 → /overview
   · 指标卡（待核对 76 / 已处理 1093 / 知识库 2997 条）与最近活动真实渲染
   · 审核中心 1 条真实记录；12 个请求全部 200、控制台无错误
 服务端口：5174 / 8001 / 8080–8089 全部监听；127.0.0.1:5174 返回 200
@@ -7839,7 +7839,7 @@ AI 工作台：doctor01 / Med@2026 登录 → /overview
 
 **演示口径（本次不变更代码，仅记录）**
 
-- AI 工作台：`http://127.0.0.1:8001/`（Python 直出，账号 doctor01 / admin01 / qc01 / pharm01，密码 `Med@2026`）
+- AI 工作台：`http://127.0.0.1:8001/`（Python 直出，账号 doctor01 / admin01 / qc01 / pharm01，密码 `<demo-password>`）
 - 临床控制台：`http://localhost:5174/`（Vite 代理 `/api` → 网关 8080）
 - Java 服务：`powershell -File scripts\run_platform_demo.ps1`（已在跑则自动跳过）
 - 生产形态仍是单域名：`/` AI 工作台、`/console` 控制台（ingress 统一 `/api`）
@@ -7864,7 +7864,7 @@ AI 工作台：doctor01 / Med@2026 登录 → /overview
 
 **演示环境（本机当前状态）**
 
-| 入口 | 地址 | 账号（密码均 `Med@2026`） |
+| 入口 | 地址 | 账号（密码均 `<demo-password>`） |
 |---|---|---|
 | 临床控制台 | http://localhost:5174/ | admin01 / doctor01 / qc01 / pharm01 |
 | AI 工作台 | http://127.0.0.1:8001/ | 同上 |
@@ -14171,7 +14171,7 @@ Python：新增 4 项契约锁（写方法齐全 / 未配置 503 / 不可达 502
 
 **演示入口与账号（不变）**
 
-`http://127.0.0.1:8001/`；账号 `admin01` / `doctor01` / `qc01` / `pharm01`，口令 `Med@2026`。
+`http://127.0.0.1:8001/`；账号 `admin01` / `doctor01` / `qc01` / `pharm01`，口令 `<demo-password>`。
 
 ## 304. 2026-11-13 侧栏点开即被登出 / 多页"加载失败"的根因修复（第 304 批 / 现场问题）
 

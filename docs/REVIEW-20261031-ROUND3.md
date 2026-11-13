@@ -75,7 +75,7 @@
 **MF-10 网关 JWT_SECRET 存在公开默认值，可伪造任意身份令牌**
 - 位置：`platform/gateway/.../application.yml`（`${JWT_SECRET:medassist-local-dev-only-secret-please-override-...}`）。
 - 风险：生产漏设环境变量 → 攻击者用公开密钥自签含任意 permissions claim 的 JWT，整个鉴权体系失效。
-- 建议：与 EMPI FieldCipher 同规格——缺 `JWT_SECRET` 拒绝启动，删除默认值。PG 口令默认回落 `medagent123`（四服务 application.yml）一并纳入"密钥类配置无默认值、缺失即拒启"清单。
+- 建议：与 EMPI FieldCipher 同规格——缺 `JWT_SECRET` 拒绝启动，删除默认值。PG 口令默认回落 `<dev-password>`（四服务 application.yml）一并纳入"密钥类配置无默认值、缺失即拒启"清单。
 
 ### C. 数据库与一致性
 

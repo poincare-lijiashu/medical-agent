@@ -158,7 +158,7 @@ java -jar platform\gateway\target\platform-gateway-0.1.0-SNAPSHOT.jar --server.p
 python scripts/e2e/cell_isolation_suite.py `
   --cell-a http://127.0.0.1:8183 --host-a hospital-a.example `
   --cell-b http://127.0.0.1:8180 --host-b hospital-b.example `
-  --cell-b-username admin01 --cell-b-password Med@2026
+  --cell-b-username admin01 --cell-b-password <demo-password>
 
 # 4) 故障注入（只碰 tenant-002）
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\chaos_cell.ps1

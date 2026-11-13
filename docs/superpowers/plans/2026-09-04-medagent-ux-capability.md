@@ -48,6 +48,6 @@
 
 ### 关键提醒（明日快速恢复）
 - 启动：`cd medical_agent; python -m uvicorn backend.main:app --host 127.0.0.1 --port 8001`（GPU 环境，勿用默认 py312）。
-- 演示账号 doctor01/pharm01/admin01 / Med@2026。
+- 演示账号 doctor01/pharm01/admin01 / <demo-password>。
 - 装/换 torch 前**必须先停后端**（DLL 锁）；5070 需 cu128+，禁 cu124。
 - 计划/进度/回归脚本都在 `medical_agent/`；回归三件套：`pytest tests/` + `scripts/smoke_all.py` + `scripts/run_eval.py`。

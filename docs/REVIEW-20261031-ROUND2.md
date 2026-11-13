@@ -28,26 +28,26 @@
 ### A. 业务正确性与并发（3 项）
 
 **A1. 预交金余额竞态，可把余额做成负数**（业务、DB 两路独立确认，最高优先级）
-- 位置：[InpatientService.java#L255-261](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/InpatientService.java#L255-L261)、[BillingService.java#L115-128](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/BillingService.java#L115-L128)、V4 迁移 deposit 表仅 `CHECK(amount<>0)`。
+- 位置：[InpatientService.java#L255-261](platform/clinical/src/main/java/com/medassist/clinical/service/InpatientService.java#L255-L261)、[BillingService.java#L115-128](platform/clinical/src/main/java/com/medassist/clinical/service/BillingService.java#L115-L128)、V4 迁移 deposit 表仅 `CHECK(amount<>0)`。
 - 问题：退费（refund）锁 admission 行；结算抵扣（settle 的 DEPOSIT 分支）只走 `findActiveAdmissionByVisit`（无 FOR UPDATE，不锁 admission）。两者"读 sum → 校验 → 插负流水"互不串行，DB 又无"余额非负"约束。
 - 触发：窗口 A 预交金结算、窗口 B 同时退预交金，两边都读到旧余额 100、都通过校验 → 余额 -80。出院结算失真。
 - 建议：settle DEPOSIT 分支改为 `lockAdmission`，与退费在 admission 行锁上串行；同时加"余额非负"触发器或改单列原子扣减 `UPDATE ... SET balance=balance-? WHERE balance>=?` 兜底。
 
 **A2. 出院与按日计费并发：人出院了，账挂着**
-- 位置：[InpatientService.java#L197-223](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/InpatientService.java#L197-L223)、[BillingService.java#L153](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/BillingService.java#L153)。
+- 位置：[InpatientService.java#L197-223](platform/clinical/src/main/java/com/medassist/clinical/service/InpatientService.java#L197-L223)、[BillingService.java#L153](platform/clinical/src/main/java/com/medassist/clinical/service/BillingService.java#L153)。
 - 问题：discharge 只锁 admission，检查 `hasUnsettledCharge`/`countUnbilledTempOrders` 与状态 CAS 之间，dailyBill 持 visit 锁可插入当日长嘱费用（它不碰 admission 行）；出院 CAS 照样成功。另 `freeBed`、`updateVisitStatus` 返回值被忽略，失败静默。
 - 触发：出院瞬间护理站跑当日 dailyBill → 患者 DISCHARGED、床已腾，却留一张有金额的 UNPAID 单。
 - 建议：discharge 开头 `lockVisit(visitId)` 与 settle/dailyBill 串行；freeBed/updateVisitStatus 失败必须抛错回滚。
 
 **A3. 取消医嘱与结算并发：已撤销医嘱被收费**
-- 位置：[OrderService.java#L114-130](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/OrderService.java#L114-L130)、[BillingService.java#L87-135](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/BillingService.java#L87-L135)。
+- 位置：[OrderService.java#L114-130](platform/clinical/src/main/java/com/medassist/clinical/service/OrderService.java#L114-L130)、[BillingService.java#L87-135](platform/clinical/src/main/java/com/medassist/clinical/service/BillingService.java#L87-L135)。
 - 问题：cancel 不锁 visit；settle 持 visit 锁后普通 SELECT 读 pending 逐条入账，期间医嘱可被并发置 CANCELLED 仍被收费；`markOrdersCharged` 返回值被忽略，无对账，且无退费路径。
 - 建议：settle 对 pending 医嘱 `FOR UPDATE` 或插入前重核 `status='PLACED'`；断言 markOrdersCharged 条数 = 入账条数，不等即回滚。
 
 ### B. 数据库与迁移（2 项）
 
 **B1. nursing_execution 允许预写未来日期执行记录，DB 层不限医嘱状态**
-- 位置：V6 迁移 L24-35；[NursingService.java#L54-64](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/NursingService.java#L54-L64) 只在应用层校验医嘱有效期，且**未校验 execDate ≤ 当天**（dailyBill 却禁未来日期，口径不对齐）。
+- 位置：V6 迁移 L24-35；[NursingService.java#L54-64](platform/clinical/src/main/java/com/medassist/clinical/service/NursingService.java#L54-L64) 只在应用层校验医嘱有效期，且**未校验 execDate ≤ 当天**（dailyBill 却禁未来日期，口径不对齐）。
 - 触发：护士提前把未来某日记 EXECUTED，当日 dailyBill 自动照记录计费——病历失真 + 医保飞检风险。
 - 建议：应用层加 `execDate ≤ today`；DB 补 `CHECK (exec_date <= created_at::date)`，并用触发器校验医嘱为 `LONG + PLACED`。
 
@@ -59,7 +59,7 @@
 ### C. 安全与权限（2 项）
 
 **C1. 全院欠费患者横向越权**
-- 位置：[InpatientController.java#L190-196](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/web/InpatientController.java#L190-L196)、auth V9（REGISTRAR/NURSE/DOCTOR 均有 `inpatient:finance:read`）、[InpatientFinanceService.java#L50-58](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/platform/clinical/src/main/java/com/medassist/clinical/service/InpatientFinanceService.java#L50-L58)。
+- 位置：[InpatientController.java#L190-196](platform/clinical/src/main/java/com/medassist/clinical/web/InpatientController.java#L190-L196)、auth V9（REGISTRAR/NURSE/DOCTOR 均有 `inpatient:finance:read`）、[InpatientFinanceService.java#L50-58](platform/clinical/src/main/java/com/medassist/clinical/service/InpatientFinanceService.java#L50-L58)。
 - 问题：`GET /inpatient/alerts` 的 `wardId` 由客户端自选、为空即全院；clinical 全部代码不读 X-Org，auth 也无"用户↔病区"绑定。任一病区护士/挂号员可枚举全院在院欠费患者的 patientNo/床号/欠费金额。
 - 建议：服务端按用户绑定病区强制过滤；空 wardId 仅 ADMIN 放行。
 
@@ -70,11 +70,11 @@
 ### D. 部署与离网交付（5 项，全部会在真实交付时爆发）
 
 **D1. prod Argo CD 渲染必失败**
-- 位置：[platform-prod.yaml#L23-31](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/deploy/argocd/applications/platform-prod.yaml#L23-L31) 缺 `clinical.image.tag=1.0.0`，values 默认 `0.1.0-SNAPSHOT`，prod 环境触发 SNAPSHOT fail 守卫 → helm template / Argo 同步直接报错，clinical Deployment 与 V6 迁移 Job 渲染不出。
+- 位置：[platform-prod.yaml#L23-31](deploy/argocd/applications/platform-prod.yaml#L23-L31) 缺 `clinical.image.tag=1.0.0`，values 默认 `0.1.0-SNAPSHOT`，prod 环境触发 SNAPSHOT fail 守卫 → helm template / Argo 同步直接报错，clinical Deployment 与 V6 迁移 Job 渲染不出。
 - 建议：parameters 补 `clinical.image.tag=1.0.0`；补完后跑一次 `helm template prod` 验证。
 
 **D2. 离网脚本漏 clinical**
-- 位置：[load-and-push.sh#L40-45](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/deploy/offline/load-and-push.sh#L40-L45) CHART_IMAGES 无 platform-clinical；offline README §1.1 构建命令与 §2.2 `--set` 同漏。
+- 位置：[load-and-push.sh#L40-45](deploy/offline/load-and-push.sh#L40-L45) CHART_IMAGES 无 platform-clinical；offline README §1.1 构建命令与 §2.2 `--set` 同漏。
 - 触发：院内 Harbor 无 clinical 镜像 → 全部 clinical Pod/迁移 Job ImagePullBackOff。
 - 建议：三处同步补齐。
 
@@ -83,11 +83,11 @@
 - 建议：统一 `imageRegistry=<host>/medassist` + repository=`platform-*`；脚本 src 改用 images.txt 完整 tag。
 
 **D4. pull-and-save 拉不到业务镜像**
-- 位置：[images.txt](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/deploy/offline/images.txt) L18-22 业务镜像写死 `harbor.hospital.local/*`，联网机 `docker pull` 该域名必失败，脚本对失败项 exit 1 → 5 个业务 tar 全缺失。
+- 位置：[images.txt](deploy/offline/images.txt) L18-22 业务镜像写死 `harbor.hospital.local/*`，联网机 `docker pull` 该域名必失败，脚本对失败项 exit 1 → 5 个业务 tar 全缺失。
 - 建议：业务镜像跳过 pull，直接 `docker save` 本机构建产物。
 
 **D5. 迁移 Job 未继承 prod Flyway 开关**
-- 位置：[job-migrate-clinical.yaml#L45-52](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/deploy/helm/medassist/templates/job-migrate-clinical.yaml#L45-L52)、job-migrate-auth 同；prod 的 `FLYWAY_BASELINE_ON_MIGRATE=false` 对 PreSync Job 不生效，Job 仍按 application.yml 默认 true 执行。
+- 位置：[job-migrate-clinical.yaml#L45-52](deploy/helm/medassist/templates/job-migrate-clinical.yaml#L45-L52)、job-migrate-auth 同；prod 的 `FLYWAY_BASELINE_ON_MIGRATE=false` 对 PreSync Job 不生效，Job 仍按 application.yml 默认 true 执行。
 - 触发：院内遗留手工 schema 被 baseline 静默掩盖。
 - 建议：Job 注入组件 env 或 args 显式 `--spring.flyway.baseline-on-migrate=false`。
 
@@ -193,7 +193,7 @@
 | D3 镜像路径三层 | ✅ | values/staging/prod 的 repository 统一为 `platform-*`，imageRegistry 只到 `.../medassist`；dev 显式 `imageRegistry: medassist`；README 去掉重复 `--set` |
 | D4 业务镜像拉不到 | ✅ | `pull-and-save.ps1` 先 `docker image inspect`，本地存在直接 save；业务镜像清单改为 `medassist/*` |
 | D5 迁移 Job 不继承 Flyway 开关 | ✅ | `commonEnv` 的 flyway 分支注入 `FLYWAY_BASELINE_ON_MIGRATE`，values 新增 `migration.baselineOnMigrate: false` |
-| E1 E2E 未入库 | ✅ | 新增 [platform_smoke.ps1](file:///d:/workspace_AI/workspace_traecode/xiangmu_traecode/medical_agent/scripts/e2e/platform_smoke.ps1)（ASCII，经网关 60 项断言） |
+| E1 E2E 未入库 | ✅ | 新增 [platform_smoke.ps1](scripts/e2e/platform_smoke.ps1)（ASCII，经网关 60 项断言） |
 | E2 SQL 层零验证 | ❌ 未做 | 离线 Maven 仓库只有 `testcontainers-bom`，缺 `testcontainers-postgresql` 实体模块，离网环境无法引入。需在有网构建机首次拉取依赖后再补；当前以"真实库直插反例"和端到端脚本部分替代 |
 | E3 Web 层权限零测试 | ✅ | 新增 `InpatientControllerPermissionTest`（9 项：403/422/放行/审计透传）；`GatewayRouteConfigTest` 增 denyPaths 与限流顺序断言 |
 

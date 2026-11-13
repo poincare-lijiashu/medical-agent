@@ -231,7 +231,7 @@
 19. 测试基线三处不一致：`ARCHITECTURE.md:82`"491+"、`DEPLOY.md:112`"602+"、`HANDOFF.md:55`"846"。
 20. **前端缺口**：`frontend-vue/src/api/index.js:10` 的 `baseURL=/api/v1`，12 个视图全属 AI 中台，**零对接 `/api/v2`**；HANDOFF 提的"临床工作台七页"未做。9 个 Java 服务交付后无可落地前端。
 21. **双栈账号**：`backend/main.py:182`（Python 用户表）与 `platform-auth`（`auth_svc`）两套账号/令牌并存，网关双路由放行 → 一套禁用的用户仍可走另一套，审计口径分裂。建议定 v1 收敛/下线时间表。
-22. **弱凭据默认值**：`platform/clinical/application.yml:13` 默认 `PG_PASSWORD: medagent123`；`docker-compose.yml:117` 公开默认 `NACOS_AUTH_TOKEN`。建议删默认值改启动 fail-fast。
+22. **弱凭据默认值**：`platform/clinical/application.yml:13` 默认 `PG_PASSWORD: <dev-password>`；`docker-compose.yml:117` 公开默认 `NACOS_AUTH_TOKEN`。建议删默认值改启动 fail-fast。
 
 ---
 

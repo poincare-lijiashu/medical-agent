@@ -8,7 +8,7 @@
   - 只读运行取证：网关 `http://127.0.0.1:8001/api/v2/**` 携带 `admin01` Bearer Token 的 **GET** 接口调用（未对业务数据执行任何 POST/PUT/DELETE，未执行迁移、未构建、未提交）；
   - 只读数据库取证：`docker exec medagent_pg psql -U medagent -d medagent -c "SELECT ..."`（全部为 SELECT）；
   - 指标口径核对：`docs/COMMERCIAL-READINESS-100-PLAN.md` 的 G1/G3 门槛与 §5.2 临床质量指标，与 `mdm_svc.metric_definition` 实际定义、实际快照数据交叉比对。
-- 取证基线：`admin01` / `Med@2026`（演示库 tenant-001，orgCode D013）。数据快照时间：2026-11-05 种子数据 + 2026-11-11/13 的功能验证数据。
+- 取证基线：`admin01` / `<demo-password>`（演示库 tenant-001，orgCode D013）。数据快照时间：2026-11-05 种子数据 + 2026-11-11/13 的功能验证数据。
 - **重要声明**：本报告不采信 `COMMERCIAL-READINESS-100-PLAN.md` 的自述评分。附录 B 中 G1 的 6 个复选项经独立取证后的真实状态见第 4 节与第 5 节。
 
 ---
@@ -130,7 +130,7 @@
 ```powershell
 # ---- 0) 取 token（只读演示账号）----
 $r = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" -Method Post -ContentType 'application/json' `
-     -Body (@{username='admin01';password='Med@2026'}|ConvertTo-Json)
+     -Body (@{username='admin01';password='<demo-password>'}|ConvertTo-Json)
 $t = $r.data.accessToken; $h = @{ Authorization = "Bearer $t" }
 
 # ---- 1) 输血闭环（六段一次取回，A 级）----

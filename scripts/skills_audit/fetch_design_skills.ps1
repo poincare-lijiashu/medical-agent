@@ -2,7 +2,7 @@
 # 原则：raw 文件逐字节下载；合并文档只加元信息头，正文不做任何改写。
 
 $ErrorActionPreference = 'Stop'
-$root = '<repo>'
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $outDir = Join-Path $root 'docs\skills-audit'
 $outRaw = Join-Path $outDir 'raw'
 New-Item -ItemType Directory -Force -Path $outRaw | Out-Null

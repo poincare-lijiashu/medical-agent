@@ -144,7 +144,7 @@ E6 域加权得分 = 3.34 / 5.00（满分 5）
 
 ```powershell
 # ── 0. 登录取令牌（AI 中台/网关同端口 8001）
-$body = @{username='admin01';password='Med@2026'} | ConvertTo-Json
+$body = @{username='admin01';password='<demo-password>'} | ConvertTo-Json
 $r = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" -Method Post -ContentType 'application/json' -Body $body
 $t = $r.data.accessToken
 

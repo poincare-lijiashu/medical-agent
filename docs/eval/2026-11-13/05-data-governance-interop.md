@@ -4,7 +4,7 @@
 - 评测时间：2026-11-13
 - 评测范围：`platform/masterdata`、`platform/fhir`、`platform/empi`、`platform/migration`、`platform/clinical`（HL7/集成台账）、`platform/tech`（PACS/DIMSE/LIS 入站）、`backend/integration`（Python HL7/MLLP 适配）、`deploy/imaging`；运行态 8001 网关 + 8081–8095 业务服务 + PostgreSQL 5433 + Orthanc 8042/4242
 - 方法与工具：
-  - 只读 HTTP 取证：登录 `POST /api/v2/auth/login`（admin01/Med@2026）取 Bearer token，后续全部为 **GET** 调用 `http://127.0.0.1:8001/api/v2/**`
+  - 只读 HTTP 取证：登录 `POST /api/v2/auth/login`（admin01/<demo-password>）取 Bearer token，后续全部为 **GET** 调用 `http://127.0.0.1:8001/api/v2/**`
   - 只读 SQL：`docker exec medagent_pg psql -U medagent -d medagent -c "SELECT ..."`（仅 SELECT / \d，无任何写操作）
   - 运行态底座核查：`Get-NetTCPConnection -State Listen`、`docker ps`、Orthanc HTTP 只读探测
   - 代码审计：`Grep`/`Read` 定位 `platform/**` 与 `backend/**`，未执行 mvn/pytest/git 写入
@@ -155,7 +155,7 @@
 ```powershell
 # 0) 取 token（唯一一次写操作是登录；后续全部 GET）
 $r = Invoke-RestMethod -Uri "http://127.0.0.1:8001/api/v2/auth/login" -Method Post `
-     -ContentType 'application/json' -Body (@{username='admin01';password='Med@2026'}|ConvertTo-Json)
+     -ContentType 'application/json' -Body (@{username='admin01';password='<demo-password>'}|ConvertTo-Json)
 $tok = $r.data.accessToken
 $h = @{ Authorization = "Bearer $tok" }
 
