@@ -152,3 +152,67 @@ def test_docs_record_the_batch():
     assert "## 296." in runtime and "AI 临床验证与模型治理" in runtime
     plan = _read(PLAN)
     assert "§296" in plan
+
+
+# ---------------------------------------------------------------- 评测 D-13
+BINDING = GOV / "runtime_binding.py"
+MAIN = REPO / "backend/main.py"
+
+
+def test_runtime_model_binding_detects_drift(monkeypatch):
+    """登记 deepseek-chat、运行 deepseek-v4-flash 时必须判定不一致。"""
+    from backend.agents.governance import runtime_binding
+
+    monkeypatch.setattr(runtime_binding.llm_config, "active_provider",
+                        lambda kind: ({"id": "p1", "model_id": "deepseek-v4-flash"}
+                                      if kind == "chat" else None))
+    monkeypatch.setattr(runtime_binding.versions, "list_versions",
+                        lambda **kw: ([{"versionId": "mv1", "version": "v1",
+                                        "provider": "p1", "model": "deepseek-chat"}]
+                                      if kw.get("status") == "ACTIVE"
+                                      and kw.get("kind") == "MODEL" else []))
+
+    result = runtime_binding.check()
+
+    assert result["checked"] is True
+    assert result["consistent"] is False
+    assert result["registryCount"] == 1
+    mismatch = result["mismatches"][0]
+    assert mismatch["field"] == "model"
+    assert mismatch["registered"] == "deepseek-chat"
+    assert mismatch["runtime"] == "deepseek-v4-flash"
+    # 快照只允许 provider/model/format，不得带出 api_key
+    assert result["runtime"] == {"provider": "p1", "model": "deepseek-v4-flash",
+                                 "format": None}
+
+
+def test_runtime_model_binding_consistent_and_production_fail_closed(monkeypatch):
+    from backend.agents.governance import runtime_binding
+
+    monkeypatch.setattr(runtime_binding.llm_config, "active_provider",
+                        lambda kind: ({"id": "p1", "model_id": "deepseek-v4-flash"}
+                                      if kind == "chat" else None))
+    monkeypatch.setattr(runtime_binding.versions, "list_versions",
+                        lambda **kw: ([{"versionId": "mv1", "version": "v1",
+                                        "provider": "p1", "model": "deepseek-v4-flash"}]
+                                      if kw.get("status") == "ACTIVE"
+                                      and kw.get("kind") == "MODEL" else []))
+    assert runtime_binding.check()["consistent"] is True
+
+    # 生产类环境不一致 → 抛 RuntimeBindingMismatch（fail-closed）
+    monkeypatch.setattr(runtime_binding.versions, "list_versions",
+                        lambda **kw: ([{"versionId": "mv1", "version": "v1",
+                                        "provider": "p1", "model": "deepseek-chat"}]
+                                      if kw.get("status") == "ACTIVE"
+                                      and kw.get("kind") == "MODEL" else []))
+    monkeypatch.setattr("backend.config.is_production_env", lambda env=None: True)
+    import pytest
+    with pytest.raises(runtime_binding.RuntimeBindingMismatch):
+        runtime_binding.assert_consistent()
+
+    # 启动期与接口都已接入
+    assert "runtime_binding.assert_consistent()" in _read(MAIN)
+    router = _read(ROUTER)
+    assert '"/binding"' in router and '"/versions/from-runtime"' in router
+    facade = _read(FACADE)
+    assert "runtimeModelMatchesRegistry" in facade and "runtimeBinding" in facade

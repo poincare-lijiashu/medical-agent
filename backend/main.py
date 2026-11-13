@@ -207,6 +207,24 @@ async def lifespan(app: FastAPI):
                         detail="未配置 PLATFORM_LICENSE_BASE_URL/INTERNAL_API_TOKEN：不上报 AI 用量")
     except Exception as exc:  # noqa: BLE001 —— 上报失败不阻断启动
         logger.warning("medical_agent.startup.ai_usage_failed", error=str(exc)[:120])
+    # 评测 D-13：必须放在 PG/模型配置初始化**之后**——早期校验时 llm_config 还没读盘，
+    # 比出来是"运行时为空"，生产环境的 fail-closed 会被空值绕过。
+    try:
+        from backend.agents.governance import runtime_binding
+        binding = runtime_binding.assert_consistent()
+        if binding["consistent"] is False:
+            models = ",".join(f"{m.get('component')}:{m.get('registered')}->{m.get('runtime')}"
+                              for m in binding["mismatches"])
+            logger.warning("medical_agent.startup.model_binding_mismatch", detail=models)
+        else:
+            logger.info("medical_agent.startup.model_binding",
+                        consistent=str(binding["consistent"]),
+                        runtime=str((binding.get("runtime") or {}).get("model")),
+                        registry_count=str(binding.get("registryCount")))
+    except Exception as exc:  # noqa: BLE001
+        if exc.__class__.__name__ == "RuntimeBindingMismatch":
+            raise
+        logger.warning("medical_agent.startup.model_binding_failed", error=str(exc)[:160])
     logger.info("medical_agent.startup.done")
     yield
     logger.info("medical_agent.shutdown")

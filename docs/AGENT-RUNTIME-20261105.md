@@ -14225,3 +14225,45 @@ Python：新增 4 项契约锁（写方法齐全 / 未配置 503 / 不可达 502
   → `INTERNAL_API_TOKEN` 是否同值 → 再看业务接口；
 - 前端不再因 AI 通道 401 全局登出，配置不一致时表现为"AI 页面报错、其余页面可用"，
   不会整站瘫痪。
+
+## 305. 2026-11-13 评测整改第二批：告警闭环 / 模型绑定 / 值班与升级 / 临床质量规则（第 305 批）
+
+对应 `docs/eval/2026-11-13/09-REMEDIATION.md` §4（D-09/D-13/D-14/D-23/D-26/D-29 + D-02 本地门禁）。
+
+**改了什么**
+
+- **告警闭环（D-09）**：`render_alertmanager_tenants.py` 新增平台通道参数，渲染出
+  带 Bearer 的 `continue` 路由，所有告警同时进 `POST /api/v2/ops/hooks/alerts/{sourceCode}`
+  （平台按 fingerprint 去重、节流并自动开单）；`--require-platform` 让产线渲染缺通道即失败。
+  配套 `scripts/ops/verify_alert_pipeline.ps1` 做端到端验证（建源→渲染→firing→resolved→事件）。
+- **模型绑定（D-13）**：新增 `backend/agents/governance/runtime_binding.py`，把运行时
+  active provider 与**全部能力域**的 ACTIVE MODEL 版本比对；生产类环境不一致拒绝启动，
+  开发只告警；`GET /api/v1/agent/governance/binding` 可查，`POST /versions/from-runtime`
+  把运行时上报为 DRAFT（四眼审批后才生效）。启动校验放在 PG/模型配置初始化之后。
+- **值班与升级（D-14）**：`OnCallScheduler` 启动即补齐 + 每日 00:10 滚动生成 14 天；
+  `TicketService.scan` 消费 `sla_policy.escalation_minutes`，超时未首响升级一档并记录当日值班人。
+- **临床质量规则（D-23）**：`masterdata/V4__clinical_dq_rules.sql` 落 4 条临床探针
+  （已收费无执行、执行孤儿、危急值未通知、药品医嘱缺剂量/频次）；周期扫描追加超期未闭环提醒。
+- **AI 合规分级（D-29）**：`common/security/ModelProviderPolicy` + `kb/config/EmbeddingProviderGuard`，
+  与 Python 中台同一张域名表；生产环境启用向量化但指向境外/未知端点时拒绝启动。
+- **开放平台文档（D-26）**：`docs/openplatform/API.md`（鉴权流、17 scope、端点、错误码、限流）。
+- **本地门禁（D-02 部分）**：`.githooks/pre-push`（受保护分支/冲突标记/密钥/ruff）+
+  `scripts/ci/install_hooks.ps1` + `docs/ci/BRANCH-PROTECTION.md`（11 个 required checks 与 gh 命令）。
+
+**验证（2026-11-13 夜）**
+
+```
+Java  mvn -pl common,ops,masterdata,kb -am test → BUILD SUCCESS（common 4 / kb 5 / ops 87 新增用例全过）
+Python ruff All checks passed；治理与告警契约测试 15 passed
+迁移  migration_safety_lint scanned=310 new=0 PASS；ops V9、masterdata V4 已应用
+运行  /ops/oncall/today items=11（原 []）；值班表 11 组 / 158 班次
+      4 条临床规则可执行：100.0/0/50.0/1.1494，失败自动开单 2 张
+      /agent/governance/binding consistent=false（drug: deepseek-chat vs deepseek-v4-flash）
+      告警全链路 firing→created=1、resolved→resolved=1、事件留痕 2 条
+```
+
+**注意**
+
+- 值班表是按服务目录支撑组引导生成的（成员 `admin01`），**上线前必须替换为院内值班表**；
+- 远端分支保护、PHI 字段加密、备份/演练台账、MLLP 入站、医嘱执行回写等仍在
+  `09-REMEDIATION.md` §3 的未完成清单里，未从清单移走。

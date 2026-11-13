@@ -15,7 +15,8 @@ import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.agents.governance import common, drift, incidents, overview, validation, versions
+from backend.agents.governance import (common, drift, incidents, overview, runtime_binding,
+                                       validation, versions)
 from backend.api.deps import rate_limit, require_role
 
 router = APIRouter(dependencies=[Depends(rate_limit)])
@@ -93,6 +94,30 @@ async def create_version(req: dict, user: dict = Depends(require_role("admin")))
     await _audit(user, "version_create", {
         "versionId": item["versionId"], "component": item["component"],
         "kind": item["kind"], "version": item["version"]})
+    return item
+
+
+# ---------------------------------------------- 运行时绑定（评测 D-13）
+
+@router.get("/binding")
+def runtime_binding_status(user: dict = Depends(require_role(*READ))):
+    """运行时实际模型 vs 治理库 ACTIVE 版本：不一致时看板/生产启动都会报。"""
+    try:
+        return runtime_binding.check()
+    except Exception as e:  # noqa: BLE001
+        raise _http(e)
+
+
+@router.post("/versions/from-runtime")
+async def capture_runtime_version(user: dict = Depends(require_role("admin"))):
+    """把运行时模型上报为 DRAFT 版本（仍需四眼审批后激活，不能自我生效）。"""
+    try:
+        item = runtime_binding.capture(_actor(user))
+    except Exception as e:  # noqa: BLE001
+        raise _http(e)
+    await _audit(user, "version_capture_runtime", {
+        "versionId": item["versionId"], "version": item["version"],
+        "model": item.get("model")})
     return item
 
 

@@ -10,9 +10,9 @@
 """
 from __future__ import annotations
 
-from backend.agents.governance import common, drift, incidents, validation, versions
+from backend.agents.governance import common, drift, incidents, runtime_binding, validation, versions
 
-__all__ = ["common", "versions", "validation", "drift", "incidents", "overview"]
+__all__ = ["common", "versions", "validation", "drift", "incidents", "runtime_binding", "overview"]
 
 
 def overview() -> dict:
@@ -32,11 +32,14 @@ def overview() -> dict:
 
     active_model = any(i.get("kind") == "MODEL" for i in active)
     active_prompt = any(i.get("kind") == "PROMPT" for i in active)
+    # 评测 D-13：登记 ≠ 生效。ACTIVE 版本必须与运行时实际模型一致，否则"可追溯"只是台账。
+    binding = runtime_binding.check()
     checks = {
         "activeModelVersion": active_model,
         "activePromptVersion": active_prompt,
         "approvedValidationMeetsAcceptance": bool(meets),
         "driftBaselineConfigured": bool(baselines),
+        "runtimeModelMatchesRegistry": binding["consistent"] is True,
     }
     passed = sum(1 for v in checks.values() if v)
 
@@ -62,6 +65,7 @@ def overview() -> dict:
             "thresholds": dict(drift.THRESHOLDS),
         },
         "incidents": incident_summary,
+        "runtimeBinding": binding,
         "readiness": {
             "passed": passed,
             "total": len(checks),

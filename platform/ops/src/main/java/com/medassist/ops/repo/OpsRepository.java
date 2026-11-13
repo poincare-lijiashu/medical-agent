@@ -454,6 +454,38 @@ public class OpsRepository {
                 """, UUID.class, limit);
     }
 
+    /**
+     * 升级候选：未首响、策略配置了升级时限、已超过「创建时间 + 升级时限」且从未升级过。
+     *
+     * <p>为什么不用 {@link #findBreachCandidates}：升级时限通常早于响应时限（如 P2 30 分钟升级、
+     * 响应时限 30 分钟，但 P3 是 240 分钟升级 / 120 分钟响应，两者不成固定比例），
+     * 混在违约扫描里会让"超时"和"该升级"两种事实互相掩盖。
+     */
+    public List<UUID> findEscalationCandidates(int limit) {
+        return plain.queryForList("""
+                SELECT t.id FROM ops_svc.ops_ticket t
+                  JOIN ops_svc.ops_sla_policy p ON p.id = t.sla_policy_id
+                 WHERE t.status NOT IN ('RESOLVED', 'CLOSED', 'CANCELLED')
+                   AND t.sla_paused_at IS NULL
+                   AND t.first_response_at IS NULL
+                   AND p.escalation_minutes > 0
+                   AND t.created_at + make_interval(mins => p.escalation_minutes) < now()
+                   AND NOT EXISTS (SELECT 1 FROM ops_svc.ops_ticket_event e
+                                    WHERE e.ticket_id = t.id AND e.action = 'ESCALATE')
+                 ORDER BY t.created_at
+                 LIMIT ?
+                """, UUID.class, limit);
+    }
+
+    /** 某个工单是否已有指定动作的事件（升级幂等：同一工单只升级一次）。 */
+    public boolean hasEvent(UUID ticketId, String action) {
+        Long count = plain.queryForObject("""
+                SELECT count(*) FROM ops_svc.ops_ticket_event
+                 WHERE ticket_id = ? AND action = ?
+                """, Long.class, ticketId, action);
+        return count != null && count > 0;
+    }
+
     public String nextTicketNo() {
         Long seq = plain.queryForObject("SELECT nextval('ops_svc.ops_ticket_no_seq')", Long.class);
         return com.medassist.ops.support.TicketNumbers.ticket(seq == null ? 1 : seq);

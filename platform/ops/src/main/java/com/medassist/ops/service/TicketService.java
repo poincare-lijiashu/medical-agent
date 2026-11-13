@@ -448,11 +448,79 @@ public class TicketService {
             summary.put("scanned", candidates.size());
             summary.put("responseBreached", response);
             summary.put("resolveBreached", resolve);
+            summary.put("escalated", escalate(actor));
             audit(actor, "SLA_SCAN", "sla", summary, clientIp, traceId);
             return summary;
         } catch (org.springframework.dao.DataAccessException e) {
             throw new BusinessException(ErrorCode.OPS_SLA_SCAN_FAILED);
         }
+    }
+
+    /**
+     * 消费 SLA 策略的 {@code escalation_minutes}：超时仍未首响的工单自动升级一档优先级，
+     * 并把当日值班人记入事件（通知对象可追溯，但不由系统替人"接单"）。
+     *
+     * <p>幂等靠事件：同一工单只要已有 ESCALATE 事件就不再升级，重复扫描不会连跳两档。
+     * 升级只提优先级、不改截止时间——不能因为拖延而把 SLA 悄悄放宽。
+     */
+    private int escalate(String actor) {
+        int escalated = 0;
+        for (UUID id : repo.findEscalationCandidates(1000)) {
+            Ticket ticket = repo.findTicket(id).orElse(null);
+            if (ticket == null || ticket.firstResponseAt() != null) {
+                continue;
+            }
+            if (repo.hasEvent(id, "ESCALATE")) {
+                continue;
+            }
+            String from = ticket.priority();
+            String to = escalatePriority(from);
+            if (to.equals(from)) {
+                continue;
+            }
+            if (!repo.updateFields(id, ticket.version(), Map.of("priority", to))) {
+                // 并发变更（他人已改优先级）：下一轮再判定，不覆盖别人的动作
+                continue;
+            }
+            String oncall = oncallPrimary(ticket.assigneeGroup());
+            Map<String, Object> detail = new LinkedHashMap<>();
+            detail.put("fromPriority", from);
+            detail.put("toPriority", to);
+            detail.put("assigneeGroup", ticket.assigneeGroup() == null ? "" : ticket.assigneeGroup());
+            detail.put("oncallPrimary", oncall);
+            detail.put("notified", !oncall.isEmpty());
+            appendEvent(ticket, actor, "ESCALATE", ticket.status(), ticket.status(),
+                    "超过升级时限未首次响应，自动升级 " + from + "→" + to
+                            + (oncall.isEmpty() ? "（未匹配到当日值班人）" : "，通知值班人 " + oncall),
+                    detail);
+            escalated++;
+        }
+        return escalated;
+    }
+
+    /** 升级一档：P4→P3→P2→P1；P1 已最高，不再变动。 */
+    static String escalatePriority(String priority) {
+        return switch (priority == null ? "" : priority) {
+            case "P4" -> "P3";
+            case "P3" -> "P2";
+            case "P2" -> "P1";
+            default -> priority == null ? "" : priority;
+        };
+    }
+
+    /** 当日值班人：按工单的支撑组匹配值班组；没有值班表时返回空串（事件里写明未匹配）。 */
+    private String oncallPrimary(String groupCode) {
+        if (groupCode == null || groupCode.isBlank()) {
+            return "";
+        }
+        var today = com.medassist.common.time.BusinessTime.today();
+        for (Map<String, Object> shift : repo.shiftsOn(today, groupCode)) {
+            Object primary = shift.get("primary_user");
+            if (primary != null && !primary.toString().isBlank()) {
+                return primary.toString();
+            }
+        }
+        return "";
     }
 
     // ------------------------------------------------------------------ 内部

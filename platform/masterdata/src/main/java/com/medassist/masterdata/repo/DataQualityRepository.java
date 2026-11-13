@@ -349,6 +349,21 @@ public class DataQualityRepository {
         return n == null ? 0 : n;
     }
 
+    /**
+     * 超期未闭环问题（OPEN/ACKNOWLEDGED 且超过 hours 未更新）。
+     *
+     * <p>提醒必须看得见具体单号，否则"有 3 单超期"这种提示没人能跟进。
+     */
+    public List<String> listStaleOpenIssueNos(int hours, int limit) {
+        return plain.queryForList("""
+                SELECT issue_no FROM mdm_svc.md_dq_issue
+                 WHERE status IN ('OPEN', 'ACKNOWLEDGED')
+                   AND updated_at < now() - make_interval(hours => ?)
+                 ORDER BY updated_at
+                 LIMIT ?
+                """, String.class, hours, limit);
+    }
+
     public void insertIssue(Issue issue) {
         jdbc.update("""
                 INSERT INTO mdm_svc.md_dq_issue

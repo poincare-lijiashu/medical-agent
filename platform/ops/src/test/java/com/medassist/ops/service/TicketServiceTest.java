@@ -237,6 +237,49 @@ class TicketServiceTest {
         assertThat(list.get(0).resolveState()).isEqualTo("CANCELLED");
     }
 
+    @Test
+    @DisplayName("升级：超过 escalation_minutes 未首响 → 优先级升一档并记录当日值班人")
+    void escalateOverdueTicket() {
+        UUID id = UUID.randomUUID();
+        when(repo.findEscalationCandidates(1000)).thenReturn(List.of(id));
+        when(repo.findTicket(id)).thenReturn(Optional.of(ticket(OpsModel.NEW, 1, null,
+                NOW.plusSeconds(600), null, null, 0, null, 0)));
+        when(repo.hasEvent(id, "ESCALATE")).thenReturn(false);
+        when(repo.updateFields(eq(id), eq(1L), anyMap())).thenReturn(true);
+        when(repo.shiftsOn(any(), eq("CLINICAL_ONCALL"))).thenReturn(List.of(
+                Map.of("group_code", "CLINICAL_ONCALL", "primary_user", "doctor01")));
+
+        Map<String, Object> summary = service.scanSla("scheduler-test", null, null);
+
+        assertThat(summary).containsEntry("escalated", 1);
+        ArgumentCaptor<Map<String, Object>> fields = ArgumentCaptor.forClass(Map.class);
+        verify(repo).updateFields(eq(id), eq(1L), fields.capture());
+        assertThat(fields.getValue()).containsEntry("priority", "P1");
+        ArgumentCaptor<TicketEvent> event = ArgumentCaptor.forClass(TicketEvent.class);
+        verify(repo).insertEvent(event.capture());
+        assertThat(event.getValue().action()).isEqualTo("ESCALATE");
+        assertThat(event.getValue().detail())
+                .containsEntry("fromPriority", "P2")
+                .containsEntry("toPriority", "P1")
+                .containsEntry("oncallPrimary", "doctor01")
+                .containsEntry("notified", true);
+    }
+
+    @Test
+    @DisplayName("升级：已有 ESCALATE 事件不再重复升级（幂等）")
+    void escalateIsIdempotent() {
+        UUID id = UUID.randomUUID();
+        when(repo.findEscalationCandidates(1000)).thenReturn(List.of(id));
+        when(repo.findTicket(id)).thenReturn(Optional.of(ticket(OpsModel.NEW, 1, null,
+                NOW.plusSeconds(600), null, null, 0, null, 0)));
+        when(repo.hasEvent(id, "ESCALATE")).thenReturn(true);
+
+        Map<String, Object> summary = service.scanSla("scheduler-test", null, null);
+
+        assertThat(summary).containsEntry("escalated", 0);
+        verify(repo, never()).updateFields(any(), anyLong(), anyMap());
+    }
+
     private void stubTicket(Ticket ticket) {
         when(repo.findTicket(TICKET_ID)).thenReturn(Optional.of(ticket));
     }

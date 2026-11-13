@@ -13,6 +13,7 @@
 # 占位符（渲染器替换，勿在注释里写花括号形式，避免被渲染器误替换）：
 #   DEFAULT_WEBHOOK / CRITICAL_WEBHOOK / IM_WEBHOOK
 #   TENANT_ROUTES / TENANT_RECEIVERS
+#   PLATFORM_ROUTE / PLATFORM_RECEIVER（平台工单通道，评测 D-09；未配置时渲染为空）
 # ============================================================================
 global:
   resolve_timeout: 5m
@@ -25,6 +26,7 @@ route:
   repeat_interval: 4h
   routes:
 {{TENANT_ROUTES}}
+{{PLATFORM_ROUTE}}
     - matchers: ['severity="critical"']
       receiver: medassist-critical
       group_wait: 10s
@@ -58,3 +60,4 @@ receivers:
       - url: "{{IM_WEBHOOK}}"
         send_resolved: true
 {{TENANT_RECEIVERS}}
+{{PLATFORM_RECEIVER}}

@@ -1,0 +1,73 @@
+#!/bin/sh
+# ============================================================================
+# pre-push 本地门禁（评测 D-02）
+#
+# 背景：远端 Actions 自 2026-09-15 起没有对当前代码运行过，分支保护也没建，
+#       结果是"红着也能推"。在拿到远端管理员权限之前，先把**能在本地验证**的
+#       底线放在推送前：受保护分支直推、冲突标记、疑似密钥、ruff。
+#
+# 启用（一次性）：
+#   git config core.hooksPath .githooks
+#   或 powershell -File scripts/ci/install_hooks.ps1
+#
+# 紧急绕过（会写操作日志）：git push --no-verify
+# ============================================================================
+set -u
+
+REMOTE="${1:-origin}"
+URL="${2:-}"
+fail=0
+
+say() { printf '%s\n' "$*"; }
+bad() { printf '[BLOCK] %s\n' "$*" >&2; fail=1; }
+
+# ---------- 1. 禁止直推受保护分支 ----------
+case "$URL" in
+  refs/heads/main|refs/heads/master|refs/heads/release/*)
+    bad "禁止直接推送到受保护分支 $URL：请开分支 + PR，由 required checks 通过后合并"
+    ;;
+esac
+
+# ---------- 2. 冲突标记 ----------
+if git diff --cached --check >/dev/null 2>&1; then :; else
+  bad "暂存区存在空白错误或冲突标记（git diff --check）"
+fi
+if git grep -n -E '^(<<<<<<<|>>>>>>>|=======)$' -- . ':!*.md' >/dev/null 2>&1; then
+  bad "工作树存在未解决的合并冲突标记"
+fi
+
+# ---------- 3. 疑似密钥（只看最近待推送的 20 个提交，避免把已公开的历史一遍遍重扫） ----------
+if git rev-parse --verify --quiet "$REMOTE" >/dev/null 2>&1; then
+  range="$REMOTE..HEAD"
+else
+  range="HEAD"
+fi
+for commit in $(git rev-list "$range" 2>/dev/null | head -n 20); do
+  if git show "$commit" --format= --no-color -- '*.yml' '*.yaml' '*.properties' '*.env' '*.env.*' 2>/dev/null \
+      | grep -E '^\+.*(medassist-dev-internal-token|dev-secret-change-in-production|medassist-local-dev-only-secret)' >/dev/null 2>&1; then
+    bad "提交 $commit 在配置文件中写入了仓库公开的开发密钥/令牌字面量（生产会 fail-fast，但不应入库）"
+    break
+  fi
+done
+
+# ---------- 4. ruff（未安装则只告警：本地环境不该因为缺工具完全阻断） ----------
+if command -v ruff >/dev/null 2>&1; then
+  if ! ruff check . >/dev/null 2>&1; then
+    bad "ruff check 未通过：先执行 ruff check . --fix 处理"
+  fi
+elif python -m ruff --version >/dev/null 2>&1; then
+  if ! python -m ruff check . >/dev/null 2>&1; then
+    bad "ruff check 未通过：先执行 python -m ruff check . --fix 处理"
+  fi
+else
+  say "[WARN] 未安装 ruff，跳过 Python 静态检查（CI 会执行，勿依赖本地跳过）"
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo "" >&2
+  echo "推送被本地门禁拦截（pre-push）。确认无误后可 git push --no-verify 临时绕过。" >&2
+  exit 1
+fi
+
+say "[ OK ] pre-push 本地门禁通过"
+exit 0
