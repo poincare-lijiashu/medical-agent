@@ -342,6 +342,12 @@ const router = createRouter({
           component: () => import('@/views/MetricDictionaryView.vue'),
         },
         {
+          // 第 299 批：数据质量（规则/执行/问题闭环；mdm:quality:*）
+          path: 'quality',
+          name: 'data-quality',
+          component: () => import('@/views/DataQualityView.vue'),
+        },
+        {
           // 第 294 批：传染病上报与漏报监测（clinical:infection:*）
           path: 'infections',
           name: 'infection-report',

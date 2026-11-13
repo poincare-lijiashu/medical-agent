@@ -127,6 +127,8 @@ const messages: Record<MessageKey, string> = {
   'nav.tenant.hint': 'One hospital, one cell · instance and entry point · capacity quotas · suspend means offline · change history',
   'nav.metric-dictionary.title': 'Metric Dictionary',
   'nav.metric-dictionary.hint': 'One definition per metric · versioned publishing · upstream and downstream lineage · impact analysis',
+  'nav.data-quality.title': 'Data Quality',
+  'nav.data-quality.hint': 'Quality rules with read-only probes · run history and observed values · auto issues on failure · resolution and waivers',
   'nav.infection-report.title': 'Notifiable Disease Reporting',
   'nav.infection-report.hint': 'Diagnosis auto-matching · class A 2h / B-C 24h · submit, accept and return · overdue and missed reporting',
   'nav.document-sharing.title': 'Document Sharing',

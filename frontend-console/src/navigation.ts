@@ -590,6 +590,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['mdm:read'],
   },
   {
+    // 第 299 批：数据质量（规则/执行/问题闭环；mdm:quality:*）
+    name: 'data-quality',
+    path: '/quality',
+    title: '数据质量',
+    hint: '质量规则与只读探针 · 执行记录与观测值 · 失败自动开单 · 问题闭环与豁免',
+    icon: 'qc',
+    group: '质量与知识',
+    permissions: ['mdm:quality:read'],
+  },
+  {
     // 第 294 批：传染病上报（诊断自动匹配、时限、受理/退回、漏报监测）
     name: 'infection-report',
     path: '/infections',

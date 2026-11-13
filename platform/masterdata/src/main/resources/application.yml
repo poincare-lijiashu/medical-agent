@@ -51,6 +51,10 @@ medassist:
     sync-stale-days: ${MDM_SYNC_STALE_DAYS:7}
     audit-list-default: ${MDM_AUDIT_LIST_DEFAULT:50}
     audit-list-max: ${MDM_AUDIT_LIST_MAX:200}
+    # §299 数据质量扫描：默认每 6 小时执行全部启用规则；首次延迟 5 分钟
+    dq-scan-enabled: ${MDM_DQ_SCAN_ENABLED:true}
+    dq-scan-ms: ${MDM_DQ_SCAN_MS:21600000}
+    dq-scan-initial-delay-ms: ${MDM_DQ_SCAN_INITIAL_DELAY_MS:300000}
 
 management:
   endpoints:

@@ -136,6 +136,8 @@ const messages = {
   'nav.tenant.hint': '一院一 Cell · 实例与入口 · 容量配额 · 停用即下线 · 变更留痕',
   'nav.metric-dictionary.title': '指标字典',
   'nav.metric-dictionary.hint': '同一指标一个口径 · 版本发布 · 上下游血缘 · 修订影响分析',
+  'nav.data-quality.title': '数据质量',
+  'nav.data-quality.hint': '质量规则与只读探针 · 执行记录与观测值 · 失败自动开单 · 问题闭环与豁免',
   'nav.infection-report.title': '传染病上报',
   'nav.infection-report.hint': '诊断自动匹配 · 甲类2小时/乙丙24小时 · 提交受理退回 · 逾期漏报监测',
   'nav.document-sharing.title': '文档共享',

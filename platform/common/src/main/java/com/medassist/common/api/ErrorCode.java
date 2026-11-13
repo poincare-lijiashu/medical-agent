@@ -491,6 +491,19 @@ public enum ErrorCode {
     MDM_REASON_REQUIRED(50420, "变更或驳回必须填写原因（至少 2 个字符）"),
     MDM_ACTOR_REQUIRED(50421, "主数据变更必须带真实操作人，禁止匿名写入"),
 
+    // ---- 数据质量与指标稽核（50xxx 续，§299）----
+    MDM_DQ_RULE_NOT_FOUND(50422, "未找到该质量规则，或规则已停用"),
+    MDM_DQ_RULE_DUPLICATE(50423, "质量规则编码已存在，请换一个编码"),
+    MDM_DQ_RULE_INVALID(50424, "质量规则不合法（维度/阈值/比较符/单位有误）"),
+    MDM_DQ_SQL_UNSAFE(50425, "质量探针只允许只读 SELECT/WITH，禁止写入、DDL 与系统目录"),
+    MDM_DQ_SQL_FAILED(50426, "质量探针执行失败，请检查 SQL 与目标表后重试"),
+    MDM_DQ_RUN_NOT_FOUND(50427, "未找到该质量执行记录"),
+    MDM_DQ_ISSUE_NOT_FOUND(50428, "未找到该质量问题"),
+    MDM_DQ_ISSUE_STATUS_INVALID(50429, "当前质量问题状态不允许该操作"),
+    MDM_DQ_ISSUE_RESOLUTION_REQUIRED(50430, "关闭质量问题必须填写解决方案"),
+    MDM_DQ_ISSUE_WAIVER_REASON_REQUIRED(50431, "豁免质量问题必须填写原因"),
+    MDM_DQ_ACTOR_REQUIRED(50432, "质量治理操作必须带真实操作人，禁止匿名写入"),
+
     // ---- 历史数据迁移（51xxx，§270）----
     MIG_TARGET_NOT_FOUND(51401, "未找到该迁移目标，或该目标已停用"),
     MIG_BATCH_NOT_FOUND(51402, "未找到该迁移批次"),

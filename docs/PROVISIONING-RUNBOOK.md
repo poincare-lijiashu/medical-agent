@@ -939,3 +939,71 @@ curl -s -X POST ".../ops/impl/projects/<pid>/accept" -H "$H" \
 - 实施与培训数据属于运营数据，纳入日常备份；恢复后检查项目状态与成绩是否连续；
 - 培训材料与验收证据只存地址，不存大文件；
 - 题库答案键仅对实施管理员可见，导出前按院内制度管理。
+
+## 21. 数据质量与指标稽核（§299）
+
+### 21.1 数据与口径
+
+- 规则：`mdm_svc.md_dq_rule`；执行：`md_dq_run`；问题：`md_dq_issue`；
+- 探针只允许单条 SELECT/WITH，5 秒超时，结果取第一列数值；
+- 比较符：`LTE/GTE/EQ/BETWEEN`；FAILED 自动开单，ERROR 只记录不开单；
+- 同一规则只保留一个未闭环问题，重复失败累加次数；
+- 周期扫描默认每 6 小时，首次延迟 5 分钟。
+
+### 21.2 上线前最小动作
+
+1. 确认内置 4 条规则可执行（主数据映射、指标发布、指标血缘、主数据同步时效）；
+2. 按院方口径补充临床/集成/财务质量规则（只读 SQL）；
+3. 执行「全部执行」，确认 PASS/FAIL 与预期一致；
+4. 对 FAILED 建单问题分派负责人，解决必须写方案；确需接受的走豁免（数据治理负责人）；
+5. 观察 24h 通过率与未闭环问题，纳入数据治理例会。
+
+### 21.3 常用命令
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+H="Authorization: Bearer $TOKEN"
+
+# 看板与规则
+curl -s ".../mdm/quality/dashboard" -H "$H" | jq .data
+curl -s ".../mdm/quality/rules?status=ACTIVE" -H "$H" | jq
+
+# 新建规则（只读 SQL）
+curl -s -X POST ".../mdm/quality/rules" -H "$H" -H 'Content-Type: application/json' -d '{
+  "code":"DQ-OPS-ORDER","name":"超时未处理工单数","domain":"CLINICAL",
+  "dimension":"TIMELINESS",
+  "sqlText":"SELECT count(*) FROM ops_svc.ops_ticket WHERE status = ''NEW'' AND created_at < now() - interval ''2 days''",
+  "comparator":"LTE","threshold":0,"unit":"COUNT","severity":"HIGH",
+  "owner":"data-steward","status":"ACTIVE"}'
+
+# 执行单条 / 全部
+curl -s -X POST ".../mdm/quality/rules/<ruleId>/run" -H "$H" | jq .data
+curl -s -X POST ".../mdm/quality/rules/run-all" -H "$H" | jq .data
+
+# 问题闭环
+curl -s ".../mdm/quality/issues?status=OPEN" -H "$H" | jq
+curl -s -X POST ".../mdm/quality/issues/<issueId>/acknowledge" -H "$H" -d '{"note":"已分派"}'
+curl -s -X POST ".../mdm/quality/issues/<issueId>/resolve" -H "$H" \
+  -d '{"resolution":"补齐映射并重新同步"}'
+curl -s -X POST ".../mdm/quality/issues/<issueId>/waive" -H "$H" \
+  -d '{"reason":"历史数据无法回溯，院方确认接受"}'
+```
+
+### 21.4 排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 保存规则 422 / 50425 | SQL 含写入/DDL/分号/注释/系统目录 | 改为单条 SELECT/WITH；不要访问 pg_catalog |
+| 执行 ERROR / 50426 | 表或列不存在 / 结果多列 / 超时 | 检查 SQL；结果只能一列；大表加条件或预聚合 |
+| 执行 ERROR 但无问题单 | ERROR 不自动开单（防止规则错误刷屏） | 先修规则；业务失败才开单 |
+| FAILED 后没有新问题 | 已有未闭环问题 | 查看同一规则的问题并累加次数 |
+| 豁免返回 403 | 当前账号没有 `mdm:approve` | 由数据治理负责人操作 |
+| 24h 通过率低但问题很少 | 规则重复失败只累加同一问题 | 看「执行记录」定位具体观测值 |
+
+### 21.5 数据与备份
+
+- 质量规则与执行记录属于治理数据，纳入日常备份；恢复后检查未闭环问题是否连续；
+- 探针 SQL 可能含内部表名，导出前按院内制度脱敏；
+- 生产建议使用只读库账号执行探针，并限制规则维护权限到数据管家。

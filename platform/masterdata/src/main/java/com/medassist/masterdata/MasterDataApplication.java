@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * 主数据与字典映射治理服务（§269 / 计划书 W4.1）。
@@ -27,6 +28,7 @@ import org.springframework.context.annotation.Bean;
  * 映射解析结果由调用方在业务事务中快照使用，避免"映射改了历史单据跟着变"。
  */
 @SpringBootApplication
+@EnableScheduling
 @EnableConfigurationProperties(MasterDataProperties.class)
 public class MasterDataApplication {
 
