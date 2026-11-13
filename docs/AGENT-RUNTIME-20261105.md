@@ -14000,3 +14000,67 @@ Python：新增 6 项契约锁；迁移安全 lint：scanned=304 known=11 new=0 
 
 SLO 快照自动采集适配器（Prometheus/OpenTelemetry）、错误预算耗尽时发布评审强制阻断、
 按服务/科室的可靠性趋势与月度可靠性报告。
+
+## 301. 2026-11-13 HL7 v2 联调测试台（第 301 批 / 计划书 G2）
+
+**目标**
+
+把 ADT/ORM/ORU 的联调从"手工用工具发一条看一眼"变成可重复、可留痕的测试：
+端点与用例配置化，执行前做本地结构校验，发送后解析 ACK 并与期望比对，
+失败可回放定位。这样院内接口验收不再依赖某个人的临时脚本。
+
+**数据模型（clinical_svc，V74）**
+
+| 表 | 作用 | 关键约束 |
+| --- | --- | --- |
+| `hl7_endpoint` | MLLP 端点 | host/port/超时；停用后不可执行 |
+| `hl7_case` | 测试用例 | 报文、消息类型/触发事件、期望 ACK（AA/AE/AR）、必填段 |
+| `hl7_run` | 执行记录 | ACK 码/控制号/耗时/报文摘要/校验原因 |
+
+**规则**
+
+1. **先校验再发送**：MSH 必须是首段、MSH-9 与用例一致、MSH-10 非空、必填段齐全；
+   校验失败不发送报文，执行记录为 ERROR。
+2. **ACK 断言**：解析 MSA-1，兼容 CA/CE/CR（归一为 AA/AE/AR）；与期望一致 PASSED，
+   否则 FAILED；缺少 MSA 或 ACK 码非法 → ERROR。
+3. **MLLP**：`0x0B + 报文 + 0x1C 0x0D`；ACK 上限 64KB；连接/超时失败 → ERROR。
+4. **留痕**：保留 ACK 码、回执控制号、耗时与请求/响应摘要（各 2000 字符）；
+   摘要仅用于定位，不作为业务数据；日志不打印完整报文。
+5. **安全提示**：用例必须使用合成患者数据；页面与文档均明确提示。
+
+**接口与权限**
+
+- `/api/v2/clinical/integration/hl7`：`/dashboard`、`/endpoints`、`/cases`、`/run`、`/runs`；
+- 读 `integration:hl7:read`；端点/用例维护 `integration:hl7:manage`；执行 `integration:hl7:run`；
+- 角色：INTEGRATION 全量；OPS_AGENT 只读+执行；RELEASE_MANAGER/QC 只读。
+- 错误码：`HL7_*`（58401–58409）；发送失败按 422 返回（业务重试由人决定，不触发客户端自动重试）。
+
+**前端**
+
+- 新页「HL7 联调测试」（`/integration/hl7`，导航「系统管理」）：KPI、端点/用例/执行记录三页签；
+- 用例弹窗内置报文编辑（换行自动转 \r）、必填段与期望 ACK；
+- 执行详情展示校验、ACK 码/控制号、请求与回执摘要。
+
+**验证**
+
+```
+Java：Hl7LabServiceTest 5 项（校验/AA 通过/AE 失败/不可达 ERROR）；clinical 全量 715 项通过
+Python：新增 6 项契约锁；迁移安全 lint：scanned=306 known=11 new=0 PASS
+前端：typecheck 通过；build 通过（入口 gzip 102.84 KB）
+真实栈（网关 8080 → clinical 8083 + 本地 MLLP mock）：
+  内置 ADT/ORM/ORU 3 条用例
+  建立 AA/AE/无 MSA 三个端点 → ADT 用例分别 PASSED / FAILED / ERROR
+  缺 PID 用例校验拦截（不发送）→ ERROR
+  看板 passed=1 failed=1 error=2；执行历史按用例可查
+```
+
+**已知边界**
+
+- 测试台只做协议结构校验与 ACK 断言，不替代对方系统的业务校验；
+- 报文摘要可能含测试患者信息，导出前需脱敏；生产验收请使用院内测试环境；
+- 未实现 TLS/MLLP over TLS、批量用例套件与定时回归（后续可扩展）。
+
+**下一批建议（§302）**
+
+HL7 用例套件与定时回归（夜间批量执行 + 趋势）、MLLP over TLS 与双向证书、
+FHIR R4 资源/搜索参数 Connectathon 场景包。

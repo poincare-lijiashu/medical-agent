@@ -663,6 +663,17 @@ public enum ErrorCode {
     XDS_SOURCE_INVALID(57410, "来源数据不满足生成条件（如报告未签发、就诊未住院）"),
     XDS_ACTOR_REQUIRED(57411, "共享文档操作必须带真实操作人，禁止匿名写入"),
 
+    // ---- HL7 v2 联调测试台（58xxx，§301 / 计划书 G2）----
+    HL7_ENDPOINT_NOT_FOUND(58401, "未找到该 HL7 联调端点，或端点已停用"),
+    HL7_ENDPOINT_INVALID(58402, "HL7 端点参数不合法（地址/端口/超时）"),
+    HL7_CASE_NOT_FOUND(58403, "未找到该 HL7 测试用例，或用例已停用"),
+    HL7_CASE_INVALID(58404, "HL7 用例不合法（报文/消息类型/期望 ACK/必填段）"),
+    HL7_MESSAGE_INVALID(58405, "HL7 报文校验未通过（MSH/消息类型/控制号/必填段）"),
+    HL7_SEND_FAILED(58406, "HL7 发送失败（连接/超时/对端未响应），请检查端点后重试"),
+    HL7_ACK_INVALID(58407, "HL7 回执不合法（缺少 MSA 或 ACK 码异常）"),
+    HL7_RUN_NOT_FOUND(58408, "未找到该 HL7 执行记录"),
+    HL7_ACTOR_REQUIRED(58409, "HL7 联调操作必须带真实操作人，禁止匿名写入"),
+
     // ---- 租户与实例隔离（56xxx，§281 / ADR-001 全院级全栈隔离）----
     /*
      * 租户 = 一家医院（独立 Cell），院区 = 同一医院内的多院区。

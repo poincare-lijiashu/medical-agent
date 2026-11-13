@@ -281,6 +281,8 @@ const messages: Record<MessageKey, string> = {
   'nav.his-workbench.hint': 'Integration self-check: adapter status, patient index and order reads, inline read-only AI review',
   'nav.integration.title': 'Integration Operations',
   'nav.integration.hint': 'Outbound ledger, inbound idempotency, backoff and DEAD letters, retry and reconciliation',
+  'nav.hl7-lab.title': 'HL7 Test Lab',
+  'nav.hl7-lab.hint': 'MLLP endpoints · ADT/ORM/ORU cases · structural validation · ACK assertions · run history',
   'nav.system.title': 'System Administration',
   'nav.system.hint': 'Accounts and roles, organization and department binding, cross-domain audit log',
   'nav.print-history.title': 'Print Audit Trail',

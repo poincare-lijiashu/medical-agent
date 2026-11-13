@@ -551,6 +551,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['integration:message:read'],
   },
   {
+    // 第 301 批：HL7 v2 联调测试台（端点/用例/MLLP 执行/ACK 断言）
+    name: 'hl7-lab',
+    path: '/integration/hl7',
+    title: 'HL7 联调测试',
+    hint: 'MLLP 端点 · ADT/ORM/ORU 用例 · 结构校验 · ACK 断言 · 执行留痕',
+    icon: 'link',
+    group: '系统管理',
+    permissions: ['integration:hl7:read'],
+  },
+  {
     name: 'system',
     path: '/system',
     title: '系统管理',

@@ -1071,3 +1071,65 @@ curl -s ".../ops/slo/<sloId>" -H "$H" | jq .data.evaluation
 - SLO 与快照属于运营治理数据，纳入日常备份；恢复后检查窗口连续性；
 - 快照只存计数，不含用户/患者标识；
 - 生产建议 exporter 使用独立只读账号与固定周期上报，避免人工口径漂移。
+
+## 23. HL7 v2 联调测试台（§301）
+
+### 23.1 数据与口径
+
+- 端点：`clinical_svc.hl7_endpoint`；用例：`hl7_case`；执行：`hl7_run`；
+- 执行链路：本地结构校验 → MLLP 发送 → 解析 MSA → 与期望 ACK 比对；
+- 校验失败不发送（ERROR）；ACK 不一致（FAILED）；网络/回执异常（ERROR）；
+- 摘要各保留 2000 字符，日志不打印完整报文。
+
+### 23.2 联调前最小动作
+
+1. 在内网建立可访问的 MLLP 测试端点（host/port）；
+2. 确认内置 ADT/ORM/ORU 用例符合院内接口规范，必要时自建；
+3. 先对测试端点执行，确认 ACK 码与期望一致；
+4. 对失败项看「执行详情」的校验/ACK/错误，修正后复测；
+5. 联调通过后再切换到院方集成引擎地址，保留执行记录作为验收证据。
+
+### 23.3 常用命令
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+H="Authorization: Bearer $TOKEN"
+
+# 看板/用例/端点
+curl -s ".../clinical/integration/hl7/dashboard" -H "$H" | jq
+curl -s ".../clinical/integration/hl7/cases" -H "$H" | jq
+curl -s ".../clinical/integration/hl7/endpoints" -H "$H" | jq
+
+# 新建端点
+curl -s -X POST ".../clinical/integration/hl7/endpoints" -H "$H" \
+  -H 'Content-Type: application/json' -d '{
+    "code":"HIS-TEST","name":"HIS 测试环境","host":"192.0.2.20","port":2575,
+    "timeoutMs":3000,"status":"ACTIVE"}'
+
+# 执行用例
+curl -s -X POST ".../clinical/integration/hl7/run" -H "$H" \
+  -H 'Content-Type: application/json' -d '{"caseId":"<caseId>","endpointId":"<endpointId>"}' | jq
+
+# 执行历史
+curl -s ".../clinical/integration/hl7/runs?caseCode=ADT-A01" -H "$H" | jq
+```
+
+### 23.4 排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| ERROR：报文必须以 MSH 段开始 | 报文被粘贴成普通文本/首段不是 MSH | 修正首段与分段符 |
+| ERROR：MSH-9 与用例不一致 | 类型/触发事件填错 | 改用例或报文，保持一致 |
+| ERROR：缺少必填段 | 必填段配置过严或报文缺段 | 补段或调整必填段（保留 MSH） |
+| ERROR：发送失败/超时 | 端点不可达、端口错、防火墙 | 核对 host/port 与网络策略 |
+| ERROR：ACK 缺少 MSA | 对端不是 HL7 或返回非标准 | 用对端集成引擎日志核对 |
+| FAILED：ACK 码不一致 | 对端业务拒绝（AE/AR） | 按 MSA-3/ERR 段排查业务原因 |
+| 页面无执行记录 | 未点执行或权限不足 | 确认 `integration:hl7:run` |
+
+### 23.5 安全与数据
+
+- 用例必须使用合成患者；生产患者数据不得粘贴到测试台；
+- 报文摘要可能含姓名/就诊号，导出与截图前按院内制度脱敏；
+- 执行记录属于集成验收证据，纳入备份；恢复后检查最近一次回归结果。

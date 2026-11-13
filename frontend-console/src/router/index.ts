@@ -262,6 +262,12 @@ const router = createRouter({
           name: 'integration',
           component: () => import('@/views/IntegrationView.vue'),
         },
+        {
+          // 第 301 批：HL7 v2 联调测试台（端点/用例/MLLP 执行/ACK 断言）
+          path: 'integration/hl7',
+          name: 'hl7-lab',
+          component: () => import('@/views/Hl7LabView.vue'),
+        },
         { path: 'system', name: 'system', component: () => import('@/views/SystemView.vue') },
         {
           // 第 231 批：打印留痕（质控 / 管理员按单号核查补打次数）

@@ -284,6 +284,8 @@ const messages = {
   'nav.his-workbench.hint': '对接自检：适配器状态 · 患者主索引/医嘱读取 · 就地 AI 审方（只读）',
   'nav.integration.title': '集成运维',
   'nav.integration.hint': '出站台账 · 入站幂等 · 指数退避与 DEAD · 人工重投与对账',
+  'nav.hl7-lab.title': 'HL7 联调测试',
+  'nav.hl7-lab.hint': 'MLLP 端点 · ADT/ORM/ORU 用例 · 结构校验 · ACK 断言 · 执行留痕',
   'nav.system.title': '系统管理',
   'nav.system.hint': '账号与角色 · 机构与科室绑定 · 跨域审计日志',
   'nav.print-history.title': '打印留痕',
