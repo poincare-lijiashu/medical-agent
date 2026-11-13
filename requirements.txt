@@ -23,7 +23,7 @@ sentence-transformers==3.3.1
 # （EMBED_DEVICE=auto 自动回落；OCR 纯 CPU 无需 GPU；LLM/VL 为远程 API）
 pymupdf==1.24.14
 biopython==1.84
-pillow==12.3.0
+pillow==13.0.0
 # 任务C 扫描版 PDF/图片 OCR（kb_ingest/ocr.py 运行时依赖，此前漏固化）
 rapidocr-onnxruntime==1.4.4
 mcp>=1.8,<2
