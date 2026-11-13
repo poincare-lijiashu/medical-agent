@@ -4,16 +4,13 @@
 > 历史：`frontend-vue/` 已在第 212 批删除，本文中涉及它的段落仅作迁移期记录。
 > 目标：让人在 8 小时工作里**看得清、扫得快、敢下手**；不是让页面"像设计过"。
 
-v4 不是 v3 的调色，而是把 v3 的“技能外观”全部拆掉。依据不是个人偏好，而是：
+v4 不是 v3 的调色，而是把 v3 的“技能外观”全部拆掉。依据不是个人偏好，而是公开设计技能中
+关于"生成式套路"与"界面真实感"的通用结论（`app-screens` / `tells` / `craft-floor` /
+`web-design-guidelines` / `accessibility-checklist` / `ui-ux-pro-max` 六份材料的要点）。
 
-- `docs/skills-audit/full/08-taste-skill/references/app-screens.md`（23 个真实产品界面）
-- `docs/skills-audit/full/08-taste-skill/references/tells.md`（生成式套路清单）
-- `docs/skills-audit/full/09-impeccable/reference/craft-floor.md`
-- `docs/skills-audit/full/17-web-design-guidelines/command.md`
-- `docs/skills-audit/full/06-frontend-ui-engineering/references/accessibility-checklist.md`
-- `docs/skills-audit/full/03-ui-ux-pro-max/references/quick-reference.md`
-
-补读清单与逐条对照见 [FULL-READ.md](./skills-audit/FULL-READ.md)。
+> 上游技能原文为第三方作品（逐字复制、许可条款各不相同），已按合规要求移出本仓库，
+> 仅在本机 `docs/skills-audit/`（`.gitignore` 排除）保留供内部参考。
+> 本设计系统的结论可独立复核：每条规则都对应到 `tokens.css` 与组件实现，不依赖原文。
 
 ---
 

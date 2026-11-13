@@ -1,0 +1,85 @@
+# NOTICE · 第三方组件与素材许可
+
+本文件列出 MedAssist（铭医）仓库中直接使用的第三方组件与素材，以及各自的许可条款。
+完整依赖树请以 `platform/pom.xml`、`requirements.txt`、`frontend-console/package.json` 为准。
+
+> 本项目自身的代码为**专有软件**（见 `LICENSE`）。以下第三方组件仍归各自版权人所有，
+> 按各自许可条款使用，不因本项目的专有许可而改变。
+
+---
+
+## 1. 后端（Java 21 / Spring Boot 4）
+
+| 组件 | 版本 | 许可 |
+|---|---|---|
+| Spring Boot / Spring Framework | 4.x | Apache-2.0 |
+| Spring Cloud Gateway | 4.x | Apache-2.0 |
+| Spring Security | 6.x | Apache-2.0 |
+| Flyway | 10.x | Apache-2.0（Community） |
+| PostgreSQL JDBC Driver | 42.x | BSD-2-Clause |
+| HikariCP | 5.x | Apache-2.0 |
+| Alibaba Sentinel | 1.8.x | Apache-2.0 |
+| Jackson | 2.x | Apache-2.0 |
+| JUnit 5 / AssertJ / Mockito | — | EPL-2.0 / Apache-2.0 / MIT |
+| JaCoCo | 0.8.x | EPL-2.0 |
+
+## 2. AI 中台（Python 3.11）
+
+| 组件 | 版本 | 许可 |
+|---|---|---|
+| FastAPI | 0.117.1 | MIT |
+| Uvicorn | — | BSD-3-Clause |
+| Pydantic | 2.11.4 | MIT |
+| LangChain | 1.2.10 | MIT |
+| asyncpg | 0.30.0 | Apache-2.0 |
+| PyMilvus | 2.4.9 | Apache-2.0 |
+| redis-py | 5.2.1 | MIT |
+| pytest | 8.3.4 | MIT |
+| PyYAML | — | MIT |
+
+## 3. 前端（Vue 3.5 / TypeScript 5.7）
+
+| 组件 | 版本 | 许可 |
+|---|---|---|
+| Vue | 3.5.13 | MIT |
+| Vue Router | 4.5.0 | MIT |
+| Vite | 6.3.0 | MIT |
+| TypeScript | 5.7.3 | Apache-2.0 |
+| vue-tsc | 2.2.0 | MIT |
+| IBM Plex Sans / IBM Plex Mono（`@fontsource`） | 5.x | SIL Open Font License 1.1 |
+
+## 4. 基础设施镜像
+
+| 组件 | 许可 |
+|---|---|
+| PostgreSQL 15 | PostgreSQL License |
+| Redis | BSD-3-Clause（7.x 起 RSALv2/SSPL 双许可，本仓库使用 7.x 之前的许可版本或等价替代） |
+| Milvus | Apache-2.0 |
+| MinIO | AGPL-3.0（仅作为独立服务进程部署，不与本项目代码链接） |
+| Orthanc | GPL-3.0（同上，独立服务进程） |
+| Nacos | Apache-2.0 |
+| Prometheus / Grafana / Alertmanager / Loki | Apache-2.0 / AGPL-3.0 / Apache-2.0 / AGPL-3.0 |
+| SkyWalking | Apache-2.0 |
+
+> **AGPL/GPL 组件的使用边界**：MinIO、Orthanc、Grafana、Loki 均以**独立进程**通过 HTTP
+> 接口被调用，不进行代码链接或静态合并，因此不构成本项目代码的衍生作品。
+> 若贵方分发方式发生变化（例如内嵌为库），需重新评估许可义务。
+
+## 5. 内容与素材
+
+| 素材 | 来源 | 说明 |
+|---|---|---|
+| `frontend-console/dist/assets/*.woff2` | IBM Plex（SIL OFL 1.1） | 随构建产物分发，保留原许可 |
+| `docs/showcase/screenshots/*.png` | 本项目演示环境自截图 | 合成数据，无真实患者信息 |
+| `docs/showcase/assets/hero-*.png`、`arch*.svg` | 本项目自绘 | 版权归本项目所有 |
+| `data/kb_guidelines_v2/*.md` | 公开指南的**要点摘录**（非原文转载） | 引用处标注指南名称与年份；不构成原文再分发 |
+
+## 6. 已移除的第三方内容
+
+`docs/skills-audit/` 曾包含 10 个上游仓库的**逐字复制正文**（用于设计评审内部参考）。
+由于各上游许可条款不一且未随附 LICENSE 全文，该目录已从本仓库移除并加入 `.gitignore`，
+不在任何公开发布物中分发。
+
+---
+
+若您是版权人并认为本仓库有不当使用，请通过 Issue 联系，我们会在核实后立即处理。

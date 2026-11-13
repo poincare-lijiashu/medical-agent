@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="420"
+     viewBox="0 0 1160 420" role="img" aria-label="MedAssist 架构总览">
+  <defs>
+    <linearGradient id="abg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#08120f"/>
+      <stop offset="100%" stop-color="#0e2420"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0 0 L9 4.5 L0 9 z" fill="#2f9e83"/>
+    </marker>
+  </defs>
+  <rect width="1160" height="420" rx="16" fill="url(#abg)"/>
+
+  <!-- clients -->
+  <g font-family="'Microsoft YaHei','PingFang SC',sans-serif">
+    <rect x="40" y="40" width="248" height="76" rx="12" fill="#0d211c" stroke="#22463b"/>
+    <text x="60" y="70" font-size="12" fill="#5f8a7d" font-family="'Cascadia Mono',monospace"
+          letter-spacing="2">CLIENT</text>
+    <text x="60" y="96" font-size="16" fill="#eaf5f1">医生 · 药师 · 医技 · 信息科</text>
+
+    <!-- edge -->
+    <rect x="40" y="148" width="248" height="76" rx="12" fill="#0d211c" stroke="#22463b"/>
+    <text x="60" y="178" font-size="12" fill="#5f8a7d" font-family="'Cascadia Mono',monospace"
+          letter-spacing="2">EDGE</text>
+    <text x="60" y="204" font-size="16" fill="#eaf5f1">Vue3 控制台 · 网关 :8080</text>
+
+    <!-- ai core -->
+    <rect x="40" y="256" width="248" height="76" rx="12" fill="#0d211c" stroke="#2f9e83"/>
+    <text x="60" y="286" font-size="12" fill="#7fd8bf" font-family="'Cascadia Mono',monospace"
+          letter-spacing="2">AI CORE</text>
+    <text x="60" y="312" font-size="16" fill="#eaf5f1">FastAPI · RAG · Agent 治理</text>
+
+    <!-- domain -->
+    <rect x="368" y="40" width="360" height="292" rx="14" fill="#0b1c17" stroke="#22463b"/>
+    <text x="392" y="70" font-size="12" fill="#5f8a7d" font-family="'Cascadia Mono',monospace"
+          letter-spacing="2">DOMAIN SERVICES · 16</text>
+  </g>
+  <g font-family="'Cascadia Mono',Consolas,monospace" font-size="12.5" fill="#9fc0b4">
+    <text x="392" y="102">auth · empi · clinical · pharmacy</text>
+    <text x="392" y="130">tech · emr · insurance · kb</text>
+    <text x="392" y="158">material · fhir · masterdata · migration</text>
+    <text x="392" y="186">ops · release · license · gateway</text>
+  </g>
+  <g font-family="'Microsoft YaHei','PingFang SC',sans-serif" font-size="12" fill="#5f8a7d">
+    <text x="392" y="224">每个服务：独立 schema + 独立 Flyway 历史</text>
+    <text x="392" y="248">幂等键 · 乐观锁 · 追加式审计 · 四眼审批</text>
+    <text x="392" y="272">非法状态跃迁 409 · fail-closed 启动守卫</text>
+    <text x="392" y="302" fill="#7fd8bf">PORT 8081 – 8095</text>
+  </g>
+
+  <!-- data -->
+  <g font-family="'Microsoft YaHei','PingFang SC',sans-serif">
+    <rect x="800" y="40" width="320" height="292" rx="14" fill="#0d211c" stroke="#22463b"/>
+    <text x="824" y="70" font-size="12" fill="#5f8a7d" font-family="'Cascadia Mono',monospace"
+          letter-spacing="2">DATA LAYER</text>
+    <text x="824" y="108" font-size="15" fill="#eaf5f1">PostgreSQL 15</text>
+    <text x="824" y="130" font-size="12.5" fill="#5f8a7d">15 schema · 334 表 · 312 迁移</text>
+    <text x="824" y="168" font-size="15" fill="#eaf5f1">Redis</text>
+    <text x="824" y="190" font-size="12.5" fill="#5f8a7d">会话 · 限流 · 缓存</text>
+    <text x="824" y="228" font-size="15" fill="#eaf5f1">Milvus · MinIO · Orthanc</text>
+    <text x="824" y="250" font-size="12.5" fill="#5f8a7d">向量 · 对象 · DICOM</text>
+    <text x="824" y="300" font-size="12" fill="#7fd8bf">审计表：触发器拒绝 UPDATE/DELETE</text>
+  </g>
+
+  <!-- external -->
+  <g font-family="'Microsoft YaHei','PingFang SC',sans-serif">
+    <rect x="368" y="352" width="752" height="44" rx="10" fill="#0b1c17" stroke="#1e3a32"/>
+    <text x="392" y="380" font-size="14" fill="#9fc0b4">
+      外部系统 ↔ FHIR R4 · HL7 v2 · IHE XDS · OAuth2（17 个只读 scope）
+    </text>
+  </g>
+
+  <!-- arrows -->
+  <g stroke="#2f9e83" stroke-width="1.6" fill="none" marker-end="url(#arrow)" opacity="0.9">
+    <path d="M288 78 L360 78"/>
+    <path d="M288 186 L360 186"/>
+    <path d="M288 294 L360 280"/>
+    <path d="M728 186 L792 186"/>
+  </g>
+</svg>

@@ -107,3 +107,6 @@ artifacts/
 
 # 上传前脱敏：示例指南 PDF（18.75MB，版权不明）不再入库；运行时原件由部署方自备
 data/kb/*.pdf
+
+# 第三方技能原文（逐字复制、无 LICENSE）——不入公开仓库，仅本地参考
+docs/skills-audit/
