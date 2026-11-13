@@ -11,6 +11,11 @@ import com.medassist.masterdata.domain.MasterDataModel.ImportRow;
 import com.medassist.masterdata.domain.MasterDataModel.Item;
 import com.medassist.masterdata.domain.MasterDataModel.ItemVersion;
 import com.medassist.masterdata.domain.MasterDataModel.MappingVersion;
+import com.medassist.masterdata.domain.MasterDataModel.MetricDefinition;
+import com.medassist.masterdata.domain.MasterDataModel.MetricDomainCount;
+import com.medassist.masterdata.domain.MasterDataModel.MetricLineage;
+import com.medassist.masterdata.domain.MasterDataModel.MetricSummary;
+import com.medassist.masterdata.domain.MasterDataModel.MetricVersion;
 import com.medassist.masterdata.domain.MasterDataModel.QualityIssue;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -1030,6 +1035,267 @@ public class MasterDataRepository {
         }
         return objectMapper.writeValueAsString(value);
     }
+
+    // ------------------------------------------------------------------ 指标字典（§293）
+
+    /** 指标检索条件（空字符串表示不限）。 */
+    public record MetricFilter(String domain, String status, String keyword) {
+    }
+
+    private static final RowMapper<MetricDefinition> METRIC_MAPPER = (rs, n) ->
+            new MetricDefinition(
+                    rs.getString("code"), rs.getString("name"), rs.getString("domain"),
+                    rs.getString("definition"), rs.getString("formula"),
+                    rs.getString("aggregation"), rs.getString("unit"),
+                    rs.getString("time_window"), rs.getString("granularity"),
+                    rs.getString("source_schema"), readStringList(rs.getString("source_tables")),
+                    rs.getString("owner_dept"), rs.getString("owner_role"),
+                    rs.getString("status"), rs.getLong("version"),
+                    rs.getObject("published_version") == null ? null : rs.getLong("published_version"),
+                    instant(rs, "published_at"),
+                    rs.getString("published_by"), rs.getString("created_by"),
+                    rs.getString("updated_by"), instant(rs, "created_at"),
+                    instant(rs, "updated_at"));
+
+    private static final RowMapper<MetricVersion> METRIC_VERSION_MAPPER = (rs, n) ->
+            new MetricVersion(rs.getLong("id"), rs.getString("metric_code"),
+                    rs.getLong("version_no"), rs.getString("change_type"),
+                    readMap(rs.getString("snapshot")), rs.getString("checksum"),
+                    rs.getString("actor"), instant(rs, "created_at"));
+
+    private static final RowMapper<MetricLineage> METRIC_LINEAGE_MAPPER = (rs, n) ->
+            new MetricLineage(rs.getObject("id", UUID.class), rs.getString("metric_code"),
+                    rs.getString("direction"), rs.getString("ref_type"),
+                    rs.getString("ref_code"), rs.getString("description"),
+                    rs.getString("created_by"), instant(rs, "created_at"));
+
+    private static final String METRIC_COLUMNS = """
+            code, name, domain, definition, formula, aggregation, unit, time_window,
+            granularity, source_schema, source_tables::text AS source_tables, owner_dept,
+            owner_role, status, version, published_version, published_at, published_by,
+            created_by, updated_by, created_at, updated_at
+            """;
+
+    public List<MetricDefinition> listMetrics(MetricFilter filter, int limit) {
+        MapSqlParameterSource params = new MapSqlParameterSource()
+                .addValue("domain", filter == null || filter.domain() == null
+                        ? "" : filter.domain())
+                .addValue("status", filter == null || filter.status() == null
+                        ? "" : filter.status())
+                .addValue("keyword", filter == null || filter.keyword() == null
+                        ? "" : filter.keyword().trim())
+                .addValue("limit", limit);
+        return jdbc.query("SELECT " + METRIC_COLUMNS + """
+                          FROM mdm_svc.metric_definition
+                         WHERE (CAST(:domain AS text) = '' OR domain = CAST(:domain AS text))
+                           AND (CAST(:status AS text) = '' OR status = CAST(:status AS text))
+                           AND (CAST(:keyword AS text) = ''
+                                OR code ILIKE '%' || CAST(:keyword AS text) || '%'
+                                OR name ILIKE '%' || CAST(:keyword AS text) || '%')
+                         ORDER BY domain, code
+                         LIMIT :limit
+                        """, params, METRIC_MAPPER);
+    }
+
+    public Optional<MetricDefinition> findMetric(String code) {
+        return jdbc.query("SELECT " + METRIC_COLUMNS
+                        + " FROM mdm_svc.metric_definition WHERE code = :code",
+                new MapSqlParameterSource().addValue("code", code), METRIC_MAPPER)
+                .stream().findFirst();
+    }
+
+    public boolean insertMetric(MetricDefinition m) {
+        try {
+            jdbc.update("""
+                            INSERT INTO mdm_svc.metric_definition
+                                (code, name, domain, definition, formula, aggregation, unit,
+                                 time_window, granularity, source_schema, source_tables,
+                                 owner_dept, owner_role, status, version, created_by, updated_by)
+                            VALUES (:code, :name, :domain, :definition, :formula, :aggregation,
+                                    :unit, :timeWindow, :granularity, :sourceSchema,
+                                    CAST(:sourceTables AS jsonb), :ownerDept, :ownerRole,
+                                    'DRAFT', 1, :by, :by)
+                            """,
+                    new MapSqlParameterSource()
+                            .addValue("code", m.code()).addValue("name", m.name())
+                            .addValue("domain", m.domain()).addValue("definition", m.definition())
+                            .addValue("formula", m.formula()).addValue("aggregation", m.aggregation())
+                            .addValue("unit", m.unit()).addValue("timeWindow", m.timeWindow())
+                            .addValue("granularity", m.granularity())
+                            .addValue("sourceSchema", m.sourceSchema())
+                            .addValue("sourceTables", json(m.sourceTables()))
+                            .addValue("ownerDept", m.ownerDept())
+                            .addValue("ownerRole", m.ownerRole()).addValue("by", m.createdBy()));
+            return true;
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    /** 修改草稿（只有 DRAFT + 版本一致才允许）。 */
+    public boolean updateMetric(MetricDefinition m) {
+        return jdbc.update("""
+                        UPDATE mdm_svc.metric_definition
+                           SET name = :name, domain = :domain, definition = :definition,
+                               formula = :formula, aggregation = :aggregation, unit = :unit,
+                               time_window = :timeWindow, granularity = :granularity,
+                               source_schema = :sourceSchema,
+                               source_tables = CAST(:sourceTables AS jsonb),
+                               owner_dept = :ownerDept, owner_role = :ownerRole,
+                               updated_by = :by, updated_at = now(), version = version + 1
+                         WHERE code = :code AND status = 'DRAFT' AND version = :version
+                        """,
+                new MapSqlParameterSource()
+                        .addValue("code", m.code()).addValue("name", m.name())
+                        .addValue("domain", m.domain()).addValue("definition", m.definition())
+                        .addValue("formula", m.formula()).addValue("aggregation", m.aggregation())
+                        .addValue("unit", m.unit()).addValue("timeWindow", m.timeWindow())
+                        .addValue("granularity", m.granularity())
+                        .addValue("sourceSchema", m.sourceSchema())
+                        .addValue("sourceTables", json(m.sourceTables()))
+                        .addValue("ownerDept", m.ownerDept())
+                        .addValue("ownerRole", m.ownerRole()).addValue("by", m.updatedBy())
+                        .addValue("version", m.version())) > 0;
+    }
+
+    /** 发布：版本不变，记录 published_version/时间/人。 */
+    public boolean publishMetric(String code, long version, String actor) {
+        return jdbc.update("""
+                        UPDATE mdm_svc.metric_definition
+                           SET status = 'PUBLISHED', published_version = :version,
+                               published_at = now(), published_by = :by,
+                               updated_by = :by, updated_at = now()
+                         WHERE code = :code AND status = 'DRAFT' AND version = :version
+                        """,
+                new MapSqlParameterSource().addValue("code", code)
+                        .addValue("version", version).addValue("by", actor)) > 0;
+    }
+
+    /** 修订已发布指标：head 进入下一版本 DRAFT，published_version 保持不动。 */
+    public boolean reviseMetric(String code, long version, String actor) {
+        return jdbc.update("""
+                        UPDATE mdm_svc.metric_definition
+                           SET status = 'DRAFT', version = version + 1,
+                               updated_by = :by, updated_at = now()
+                         WHERE code = :code AND status = 'PUBLISHED' AND version = :version
+                        """,
+                new MapSqlParameterSource().addValue("code", code)
+                        .addValue("version", version).addValue("by", actor)) > 0;
+    }
+
+    /** 停用：草稿或已发布都可停用；停用后不再对外提供口径。 */
+    public boolean disableMetric(String code, long version, String actor) {
+        return jdbc.update("""
+                        UPDATE mdm_svc.metric_definition
+                           SET status = 'DISABLED', updated_by = :by, updated_at = now(),
+                               version = version + 1
+                         WHERE code = :code AND status IN ('DRAFT', 'PUBLISHED')
+                           AND version = :version
+                        """,
+                new MapSqlParameterSource().addValue("code", code)
+                        .addValue("version", version).addValue("by", actor)) > 0;
+    }
+
+    public void insertMetricVersion(MetricVersion v) {
+        jdbc.update("""
+                        INSERT INTO mdm_svc.metric_version
+                            (metric_code, version_no, change_type, snapshot, checksum, actor)
+                        VALUES (:code, :versionNo, :changeType, CAST(:snapshot AS jsonb),
+                                :checksum, :actor)
+                        """,
+                new MapSqlParameterSource().addValue("code", v.metricCode())
+                        .addValue("versionNo", v.versionNo())
+                        .addValue("changeType", v.changeType())
+                        .addValue("snapshot", json(v.snapshot()))
+                        .addValue("checksum", v.checksum())
+                        .addValue("actor", v.actor()));
+    }
+
+    public List<MetricVersion> listMetricVersions(String code, int limit) {
+        return jdbc.query("""
+                        SELECT id, metric_code, version_no, change_type, snapshot::text AS snapshot,
+                               checksum, actor, created_at
+                          FROM mdm_svc.metric_version
+                         WHERE metric_code = :code
+                         ORDER BY version_no DESC, id DESC
+                         LIMIT :limit
+                        """,
+                new MapSqlParameterSource().addValue("code", code).addValue("limit", limit),
+                METRIC_VERSION_MAPPER);
+    }
+
+    /** 注册血缘（同指标同方向同引用幂等）；返回是否新增。 */
+    public boolean insertMetricLineage(MetricLineage l) {
+        return jdbc.update("""
+                        INSERT INTO mdm_svc.metric_lineage
+                            (id, metric_code, direction, ref_type, ref_code, description, created_by)
+                        VALUES (:id, :code, :direction, :refType, :refCode, :description, :by)
+                        ON CONFLICT (metric_code, direction, ref_type, ref_code) DO NOTHING
+                        """,
+                new MapSqlParameterSource().addValue("id", l.id())
+                        .addValue("code", l.metricCode()).addValue("direction", l.direction())
+                        .addValue("refType", l.refType()).addValue("refCode", l.refCode())
+                        .addValue("description", l.description())
+                        .addValue("by", l.createdBy())) > 0;
+    }
+
+    public List<MetricLineage> listMetricLineage(String code) {
+        return jdbc.query("""
+                        SELECT id, metric_code, direction, ref_type, ref_code, description,
+                               created_by, created_at
+                          FROM mdm_svc.metric_lineage
+                         WHERE metric_code = :code
+                         ORDER BY direction, ref_type, ref_code
+                        """,
+                new MapSqlParameterSource().addValue("code", code), METRIC_LINEAGE_MAPPER);
+    }
+
+    public int countMetricLineage(String code, String direction) {
+        Integer n = jdbc.queryForObject("""
+                        SELECT count(*) FROM mdm_svc.metric_lineage
+                         WHERE metric_code = :code AND direction = :direction
+                        """,
+                new MapSqlParameterSource().addValue("code", code)
+                        .addValue("direction", direction), Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    public int countMetricVersions(String code) {
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM mdm_svc.metric_version WHERE metric_code = :code",
+                new MapSqlParameterSource().addValue("code", code), Integer.class);
+        return n == null ? 0 : n;
+    }
+
+    /** 字典汇总：状态计数 + 按域统计（SQL 内完成，不把全量字典拉内存）。 */
+    public MetricSummary metricSummary() {
+        long total = count("SELECT count(*) FROM mdm_svc.metric_definition");
+        long draft = count("SELECT count(*) FROM mdm_svc.metric_definition WHERE status = 'DRAFT'");
+        long published = count(
+                "SELECT count(*) FROM mdm_svc.metric_definition WHERE status = 'PUBLISHED'");
+        long disabled = count(
+                "SELECT count(*) FROM mdm_svc.metric_definition WHERE status = 'DISABLED'");
+        long revision = count("""
+                SELECT count(*) FROM mdm_svc.metric_definition
+                 WHERE status = 'DRAFT' AND published_version IS NOT NULL
+                """);
+        List<MetricDomainCount> domains = jdbc.query("""
+                        SELECT domain, count(*) AS total,
+                               count(*) FILTER (WHERE status = 'PUBLISHED') AS published
+                          FROM mdm_svc.metric_definition
+                         GROUP BY domain
+                         ORDER BY domain
+                        """, Map.of(), (rs, n) -> new MetricDomainCount(
+                rs.getString("domain"), rs.getLong("total"), rs.getLong("published")));
+        return new MetricSummary(total, draft, published, disabled, revision, domains);
+    }
+
+    private long count(String sql) {
+        Long n = plain.queryForObject(sql, Long.class);
+        return n == null ? 0 : n;
+    }
+
+    // ------------------------------------------------------------------ 指标字典结束
 
     private static Map<String, Object> readMap(String json) {
         if (json == null || json.isBlank()) {

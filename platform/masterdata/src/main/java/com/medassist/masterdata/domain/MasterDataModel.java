@@ -343,4 +343,96 @@ public final class MasterDataModel {
             String clientIp,
             String traceId) {
     }
+
+    // ---------------------------------------------------------------- 指标字典（§293）
+
+    /**
+     * 指标定义（head）。
+     *
+     * <p>只有 DRAFT 可编辑；PUBLISHED 必须 revise 出新版本后再发布，
+     * 避免"口径被静默改掉、报表历史无法解释"。
+     */
+    public record MetricDefinition(
+            String code,
+            String name,
+            String domain,
+            String definition,
+            String formula,
+            String aggregation,
+            String unit,
+            String timeWindow,
+            String granularity,
+            String sourceSchema,
+            List<String> sourceTables,
+            String ownerDept,
+            String ownerRole,
+            String status,
+            long version,
+            Long publishedVersion,
+            Instant publishedAt,
+            String publishedBy,
+            String createdBy,
+            String updatedBy,
+            Instant createdAt,
+            Instant updatedAt) {
+
+        public static final String DRAFT = "DRAFT";
+        public static final String PUBLISHED = "PUBLISHED";
+        public static final String DISABLED = "DISABLED";
+
+        public boolean draft() {
+            return DRAFT.equals(status);
+        }
+
+        public boolean published() {
+            return PUBLISHED.equals(status);
+        }
+
+        /** 已发布过但当前 head 是修订草稿。 */
+        public boolean revisionInProgress() {
+            return DRAFT.equals(status) && publishedVersion != null;
+        }
+    }
+
+    /** 指标版本事件（追加式，带快照与 SHA-256）。 */
+    public record MetricVersion(long id, String metricCode, long versionNo, String changeType,
+                                Map<String, Object> snapshot, String checksum, String actor,
+                                Instant createdAt) {
+
+        public static final String CREATE = "CREATE";
+        public static final String UPDATE = "UPDATE";
+        public static final String PUBLISH = "PUBLISH";
+        public static final String REVISE = "REVISE";
+        public static final String DISABLE = "DISABLE";
+    }
+
+    /** 指标血缘：UPSTREAM 源表/接口，DOWNSTREAM 报表/看板/派生指标。 */
+    public record MetricLineage(UUID id, String metricCode, String direction, String refType,
+                                String refCode, String description, String createdBy,
+                                Instant createdAt) {
+
+        public static final String UPSTREAM = "UPSTREAM";
+        public static final String DOWNSTREAM = "DOWNSTREAM";
+    }
+
+    /** 指标详情：定义 + 版本链 + 血缘。 */
+    public record MetricDetail(MetricDefinition metric, List<MetricVersion> versions,
+                               List<MetricLineage> lineage) {
+    }
+
+    /** 指标影响分析：上下游数量、版本数与修订状态。 */
+    public record MetricImpact(String metricCode, String name, String status, long version,
+                               Long publishedVersion, boolean revisionInProgress,
+                               int upstreamCount, int downstreamCount, int versionCount,
+                               Instant lastPublishedAt) {
+    }
+
+    /** 指标字典汇总。 */
+    public record MetricSummary(long total, long draft, long published, long disabled,
+                                long revisionInProgress, List<MetricDomainCount> domains) {
+    }
+
+    /** 按域统计。 */
+    public record MetricDomainCount(String domain, long total, long published) {
+    }
 }

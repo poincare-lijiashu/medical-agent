@@ -317,6 +317,12 @@ const router = createRouter({
           name: 'tenant',
           component: () => import('@/views/TenantView.vue'),
         },
+        {
+          // 第 293 批：指标字典与口径治理（mdm:read；编辑 mdm:write；发布 mdm:approve）
+          path: 'metrics',
+          name: 'metric-dictionary',
+          component: () => import('@/views/MetricDictionaryView.vue'),
+        },
         { path: 'forbidden', name: 'forbidden', component: () => import('@/views/ForbiddenView.vue') },
       ],
     },

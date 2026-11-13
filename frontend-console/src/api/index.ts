@@ -80,6 +80,11 @@ import type {
   InsuranceAllocationView,
   InsuranceSettlementAllocation,
   InsuranceRealtimeSettlement,
+  MetricDefinition,
+  MetricDetail,
+  MetricImpact,
+  MetricSummary,
+  MetricUpsertInput,
   ChargeMapping,
   GroupSimulation,
   InpatientTrendView,
@@ -1601,6 +1606,31 @@ export const insuranceOpsApi = {
     post<InsuranceAllocationView>(`/insurance/allocations/bills/${billId}`, { items }),
   refundAllocation: (id: string, body: { amount: number; reason: string }) =>
     post<InsuranceSettlementAllocation>(`/insurance/allocations/${id}/refund`, body),
+}
+
+/**
+ * 指标字典与口径治理（§293，需 mdm:read / mdm:write / mdm:approve）。
+ * 发布/停用属于审批动作，前端按权限隐藏按钮。
+ */
+export const metricDictionaryApi = {
+  list: (params: { domain?: string; status?: string; q?: string; limit?: number } = {}) =>
+    get<MetricDefinition[]>('/mdm/metrics', params),
+  summary: () => get<MetricSummary>('/mdm/metrics/summary'),
+  detail: (code: string) => get<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}`),
+  impact: (code: string) => get<MetricImpact>(`/mdm/metrics/${encodeURIComponent(code)}/impact`),
+  create: (body: MetricUpsertInput) => post<MetricDetail>('/mdm/metrics', body),
+  update: (code: string, body: MetricUpsertInput) =>
+    put<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}`, body),
+  revise: (code: string, version: number) =>
+    post<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}/revise`, { version }),
+  publish: (code: string, version: number) =>
+    post<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}/publish`, { version }),
+  disable: (code: string, version: number) =>
+    post<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}/disable`, { version }),
+  addLineage: (
+    code: string,
+    body: { direction: string; refType: string; refCode: string; description?: string },
+  ) => post<MetricDetail>(`/mdm/metrics/${encodeURIComponent(code)}/lineage`, body),
 }
 
 export const insuranceGroupingApi = {

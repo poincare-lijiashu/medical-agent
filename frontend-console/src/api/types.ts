@@ -3010,6 +3010,126 @@ export interface InsuranceAllocationBillList {
   items: InsuranceAllocationBill[]
 }
 
+// ---------------------------------------------------------------- 指标字典（§293）
+
+export type MetricDomain =
+  | 'CLINICAL'
+  | 'FINANCE'
+  | 'PHARMACY'
+  | 'TECH'
+  | 'INSURANCE'
+  | 'QUALITY'
+  | 'AI'
+  | 'OPS'
+
+export type MetricStatus = 'DRAFT' | 'PUBLISHED' | 'DISABLED'
+
+export type MetricAggregation = 'SUM' | 'COUNT' | 'COUNT_DISTINCT' | 'AVG' | 'RATIO' | 'MAX' | 'MIN'
+
+export type MetricTimeWindow = 'POINT' | 'DAY' | 'WEEK' | 'MONTH' | 'QUARTER' | 'YEAR' | 'ROLLING_30D'
+
+export type MetricGranularity = 'HOSPITAL' | 'CAMPUS' | 'DEPT' | 'PATIENT' | 'VISIT'
+
+/** 指标定义（head）：只有 DRAFT 可编辑，PUBLISHED 必须修订。 */
+export interface MetricDefinition {
+  code: string
+  name: string
+  domain: MetricDomain
+  definition: string
+  formula: string
+  aggregation: MetricAggregation
+  unit: string
+  timeWindow: MetricTimeWindow
+  granularity: MetricGranularity
+  sourceSchema: string | null
+  sourceTables: string[]
+  ownerDept: string
+  ownerRole: string | null
+  status: MetricStatus
+  version: number
+  publishedVersion: number | null
+  publishedAt: string | null
+  publishedBy: string | null
+  createdBy: string
+  updatedBy: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface MetricVersion {
+  id: number
+  metricCode: string
+  versionNo: number
+  changeType: 'CREATE' | 'UPDATE' | 'PUBLISH' | 'REVISE' | 'DISABLE'
+  snapshot: Record<string, unknown>
+  checksum: string
+  actor: string
+  createdAt: string
+}
+
+export interface MetricLineage {
+  id: string
+  metricCode: string
+  direction: 'UPSTREAM' | 'DOWNSTREAM'
+  refType: 'TABLE' | 'API' | 'REPORT' | 'DASHBOARD' | 'METRIC'
+  refCode: string
+  description: string | null
+  createdBy: string
+  createdAt: string
+}
+
+export interface MetricDetail {
+  metric: MetricDefinition
+  versions: MetricVersion[]
+  lineage: MetricLineage[]
+}
+
+export interface MetricImpact {
+  metricCode: string
+  name: string
+  status: MetricStatus
+  version: number
+  publishedVersion: number | null
+  revisionInProgress: boolean
+  upstreamCount: number
+  downstreamCount: number
+  versionCount: number
+  lastPublishedAt: string | null
+}
+
+export interface MetricDomainCount {
+  domain: MetricDomain
+  total: number
+  published: number
+}
+
+export interface MetricSummary {
+  total: number
+  draft: number
+  published: number
+  disabled: number
+  revisionInProgress: number
+  domains: MetricDomainCount[]
+}
+
+/** 新建/修改指标请求体（code 仅新建必填，version 仅修改必填）。 */
+export interface MetricUpsertInput {
+  code?: string
+  name: string
+  domain: MetricDomain
+  definition: string
+  formula: string
+  aggregation: MetricAggregation
+  unit: string
+  timeWindow: MetricTimeWindow
+  granularity: MetricGranularity
+  sourceSchema?: string
+  sourceTables?: string[]
+  ownerDept: string
+  ownerRole?: string
+  version?: number
+}
+
 // ---------------------------------------------------------------- DRG/DIP 分组
 
 /** 支付方案：DRG 按权重×费率，DIP 按分值×点值。 */

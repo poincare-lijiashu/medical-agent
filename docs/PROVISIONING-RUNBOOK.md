@@ -492,3 +492,62 @@ curl -X POST http://127.0.0.1:8080/api/v2/insurance/allocations/bills/<billId> \
 - `insurance:payer:manage`：ADMIN / INSURANCE_OFFICER（窗口不可见）；
 - `medassist_insurance_payer_action_total{action,result}`：
   `create_payer / update_payer / enable_payer / disable_payer / allocate / refund`。
+
+## 15. 指标字典与口径治理（§293 / 计划书 W4.5）
+
+### 15.1 为什么必须治理
+
+同一指标在驾驶舱、月报、医保对账、绩效里各算各的（口径、时间窗、分母不同），
+出数后无法回答“这个数按什么口径算的、谁负责、改了会影响哪些报表”。
+指标字典把指标变成**有版本、有责任人、有上下游血缘**的治理对象：
+发布后的口径不可被静默覆盖，修订必须走新版本，影响面可查。
+
+### 15.2 操作流程
+
+1. 系统管理 →「指标字典」→ 新建指标（状态为**草稿**）；
+2. 补全口径定义、公式、单位、时间窗、统计粒度、责任科室与**至少一个上游源表**；
+3. 信息科/质控审批后「发布」：系统落 PUBLISH 版本快照（SHA-256），对外口径生效；
+4. 已发布指标不能直接编辑：点「修订」生成下一版本草稿，旧口径继续生效；
+5. 新版本发布后替换生效版本；不再使用的指标「停用」，历史版本保留；
+6. 报表/看板接入时，在详情里登记**下游血缘**（REPORT/DASHBOARD/METRIC），
+   修订前先看影响分析（上下游数量、版本事件、是否修订中）。
+
+```bash
+# 查询指标字典（需 mdm:read）
+curl "http://127.0.0.1:8080/api/v2/mdm/metrics?domain=FINANCE&status=PUBLISHED" \
+  -H "Authorization: Bearer <token>"
+# 新建草稿（需 mdm:write）
+curl -X POST http://127.0.0.1:8080/api/v2/mdm/metrics \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"code":"OUTPATIENT_VISIT_COUNT","name":"门诊就诊人次","domain":"CLINICAL",
+       "definition":"统计期内实际发生就诊的人次，不含取消挂号","formula":"count(distinct visit.id)",
+       "aggregation":"COUNT_DISTINCT","unit":"人次","timeWindow":"DAY","granularity":"DEPT",
+       "sourceSchema":"clinical_svc","sourceTables":["visit"],"ownerDept":"医务科"}'
+# 发布（需 mdm:approve；version 必须等于当前 head）
+curl -X POST http://127.0.0.1:8080/api/v2/mdm/metrics/OUTPATIENT_VISIT_COUNT/publish \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"version":2}'
+```
+
+### 15.3 口径与安全规则
+
+| 规则 | 说明 |
+| --- | --- |
+| 草稿可编辑 | 只有 DRAFT 能修改；修改走版本 CAS，冲突返回 409 |
+| 发布需完整 | 定义 ≥10 字、公式、单位、时间窗、粒度、责任人、至少一个上游源表/接口 |
+| 发布即快照 | PUBLISH 事件写入版本链与 SHA-256，事后可还原“当时口径” |
+| 修订不破历史 | revise 后 head 变 DRAFT（版本 +1），`published_version` 不动，旧口径仍生效 |
+| 血缘只增不改 | metric_version / metric_lineage 禁止 UPDATE/DELETE（触发器兜底） |
+| 审计同链 | 指标动作写入 `mdm_svc.md_change_log`，不另建审计表 |
+
+### 15.4 权限与排障
+
+- `mdm:read`：查询、版本链、血缘、影响分析；
+- `mdm:write`：新建/修改草稿、修订、登记血缘；
+- `mdm:approve`：发布与停用（口径上线/下线）。
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 发布报“至少登记一个上游源表或接口” | 草稿没有源表且没有 UPSTREAM 血缘 | 补源表或登记上游接口 |
+| 修改报 409 | 他人已修改/发布，版本不一致 | 刷新后重试 |
+| 修改报“已发布指标不能直接修改” | 试图直接改生效口径 | 先「修订」，再编辑草稿 |
+| 详情没有下游 | 报表/看板尚未登记血缘 | 在详情页登记 DOWNSTREAM |

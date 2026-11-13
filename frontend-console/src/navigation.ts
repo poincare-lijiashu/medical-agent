@@ -560,6 +560,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['tenant:read'],
   },
   {
+    // 第 293 批：指标字典与口径治理（定义/公式/责任/血缘/版本发布）
+    name: 'metric-dictionary',
+    path: '/metrics',
+    title: '指标字典',
+    hint: '同一指标一个口径 · 版本发布 · 上下游血缘 · 修订影响分析',
+    icon: 'database',
+    group: '系统管理',
+    permissions: ['mdm:read'],
+  },
+  {
     // 第 231 批：打印留痕（按单号核查补打次数与打印人；按院区收敛）
     name: 'print-history',
     path: '/print-events',

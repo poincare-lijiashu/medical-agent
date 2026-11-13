@@ -125,6 +125,8 @@ const messages: Record<MessageKey, string> = {
   'nav.license.hint': 'Editions and module entitlements · quota usage · signed license import · renewal and revocation',
   'nav.tenant.title': 'Tenants',
   'nav.tenant.hint': 'One hospital, one cell · instance and entry point · capacity quotas · suspend means offline · change history',
+  'nav.metric-dictionary.title': 'Metric Dictionary',
+  'nav.metric-dictionary.hint': 'One definition per metric · versioned publishing · upstream and downstream lineage · impact analysis',
   'nav.open-platform.title': 'Open Platform',
   'nav.open-platform.hint': 'Third-party client_credentials · read-only scope catalog · secret rotation and disable · integration examples',
   'nav.release-console.title': 'Release Management',

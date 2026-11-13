@@ -130,6 +130,8 @@ const messages = {
   'nav.license.hint': '版本与模块权益 · 配额使用 · 授权书导入验签 · 续期与吊销',
   'nav.tenant.title': '租户管理',
   'nav.tenant.hint': '一院一 Cell · 实例与入口 · 容量配额 · 停用即下线 · 变更留痕',
+  'nav.metric-dictionary.title': '指标字典',
+  'nav.metric-dictionary.hint': '同一指标一个口径 · 版本发布 · 上下游血缘 · 修订影响分析',
   'nav.open-platform.title': '开放平台',
   'nav.open-platform.hint': '第三方 client_credentials · 只读范围目录 · 密钥轮换与停用 · 接入示例',
   'nav.group.系统管理': '系统管理',
