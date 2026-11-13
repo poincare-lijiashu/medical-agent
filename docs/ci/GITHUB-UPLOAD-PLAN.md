@@ -273,7 +273,44 @@ git log --all --oneline -- data/consults.json data/prescriptions.json data/case_
 
 ## 8. 诚实边界
 
-- 本计划已实际执行扫描，但**未执行历史重写**：`filter-repo` 不可逆且会改变所有 commit ID，
-  必须由你确认后再做（§5 决策 1）；
-- 私有信息判定依赖模式匹配 + 人工抽检，无法保证 100% 覆盖（例如图片/PDF 中的文字）；
+- 历史重写**已执行**（见 §9），该操作不可逆：全部 commit ID 已变化；
+  旧备份 bundle 仍含旧历史，**不要**把旧 bundle 推送到任何远端；
+- 私有信息判定依赖模式匹配 + 人工审计，无法保证 100% 覆盖（例如图片/PDF 中的文字）；
 - 若曾把真实 Key 写进过任何**聊天工具、工单、邮件**，GitHub 清理不影响那些副本，需一并轮换。
+
+---
+
+## 9. 执行结果（2026-11-14，已完成）
+
+用户确认按推荐方案执行（保留演进 + 先私有 + 移出 PDF + dist 继续入库）。已完成：
+
+| 步骤 | 结果 | 验证 |
+|---|---|---|
+| 文档逐份审计 | 159 个 Markdown 分两批全量审计（含 `docs/` 全部子目录、`deploy/`、`platform/README.md`） | 发现 1 个真实口令、3 类个人标识、6 类内部路径、若干演示口令 |
+| 文档脱敏 | 45 个文件被改写：本机路径→`<repo>`/`<backup-dir>`、主机名→`<host>`、个人 GitHub 账号→`<github-owner>`、真实口令→`<redacted-password>`、演示/开发口令→`<demo-password>`/`<dev-password>`、内网地址→`192.0.2.x` | `git grep` 复核：`ljs123456`/`LIJIASHU`/`poincare-lijiashu`/本机路径 均为 0 命中 |
+| 示例 PDF 移出 | `data/kb/sample_guideline.pdf`（18.75MB）停止跟踪并加入 `.gitignore`，本机文件保留 | `git log --all -- data/kb/sample_guideline.pdf` → 0 |
+| 历史重写 | `git filter-repo`：移除 4 类路径 + 替换 16 类标识字符串；**831 个提交**全部重写 | 病例文件历史 0；PDF 历史 0；真实口令/主机名/账号历史 0 |
+| 远端 | `filter-repo` 已移除旧 `origin`（本地 bundle），当前**无远端**，等待创建私有仓库后再添加 | `git remote -v` 为空 |
+
+### 9.1 必须你本人完成的一件事
+
+审计发现 `docs/HANDOFF.md` 曾记录**另一个项目**（`ai_dev`）的容器账号口令 `ljs/ljs123456`。
+本仓库已删除该文本并重写历史，但**该口令已经暴露过**，请在 `ai_dev` 项目里改密——
+这不受本仓库控制，也无法由本仓库验证。
+
+### 9.2 仍待你决策（不阻塞私有仓库上传）
+
+| 项 | 现状 | 影响 |
+|---|---|---|
+| `docs/skills-audit/`（68 个文件） | 含 10 个上游仓库的**逐字复制正文**，且未随附 LICENSE | 私有仓无碍；**转公开前**建议只保留 `manifest.json` 与摘要索引 |
+| `docs/reviews/`、`docs/EVAL-*/`、`docs/eval/`（约 6,000 行内部负面评审） | 已脱敏（无个人信息），但含"可被利用的漏洞"等定性结论 | 私有仓可留；公开前需商务/法务确认 |
+| 演示口令 | 文档中统一为 `<demo-password>`，README 与 CI 保留可运行值 | 公库可接受，但必须在部署检查表保留"上线改密"否定项 |
+
+### 9.3 上传时的最短路径
+
+```powershell
+git remote add origin https://github.com/<owner>/<repo>.git
+git push -u origin main
+```
+
+推送后按 §4 第 5 步开启 Secret scanning / Push protection / 分支保护 / Dependabot。
