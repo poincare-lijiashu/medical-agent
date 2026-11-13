@@ -24,7 +24,8 @@
   <a href="docs/openplatform/API.md">开放平台</a> ·
   <a href="docs/DEPLOY.md">部署</a> ·
   <a href="docs/eval/2026-11-13/SUMMARY.md">第三方评测</a> ·
-  <a href="docs/ci/GITHUB-UPLOAD-PLAN.md">上传说明</a>
+  <a href="docs/ci/GITHUB-UPLOAD-PLAN.md">上传说明</a> ·
+  <a href="docs/showcase/index.html">完整展示页</a>
 </p>
 
 ---
@@ -99,6 +100,67 @@ flowchart LR
 | 运维 | 工单、SLA、值班、事件、SLO、上线指挥台 | 升级时限自动消费、SKIP≠PASS 的门禁语义 |
 | 许可与发布 | 授权签发/校验、发布审批、证据包 | 院方构建禁止自签、演示实例码生产拒绝启动 |
 | AI 中台 | 分诊/用药/文献/影像/MDT、RAG、Agent 治理 | 证据边界、拒答、漂移监测、模型卡 |
+
+---
+
+## 界面一览
+
+完整画廊（50 张、可点击放大）见 **[docs/showcase/index.html](docs/showcase/index.html)**；以下按业务域各取代表。
+
+### 入口与总览
+
+<table>
+<tr>
+<td width="50%"><img src="docs/showcase/screenshots/03-ops-cockpit.png" alt="运营驾驶舱"></td>
+<td width="50%"><img src="docs/showcase/screenshots/02-ai-workbench.png" alt="AI 临床助手总览"></td>
+</tr>
+<tr>
+<td><b>运营驾驶舱</b><br>门诊挂号、实收、在院患者、待审处方、医技待办、耗材库存六大 KPI 与趋势</td>
+<td><b>AI 临床助手总览</b><br>待复核 76 / 已处理 1093 / 知识库 2997 / 审计 298，六个能力入口</td>
+</tr>
+</table>
+
+### AI 中台与治理
+
+<table>
+<tr>
+<td width="50%"><img src="docs/showcase/screenshots/13-ai-chat-evidence.png" alt="AI 对话文献循证"></td>
+<td width="50%"><img src="docs/showcase/screenshots/17-ai-agent-catalog.png" alt="智能体编排"></td>
+</tr>
+<tr>
+<td><b>证据优先的问答</b><br>置信度 0.91 + 来源 + 证据链；无证据时输出"资料不足"而不是编造</td>
+<td><b>智能体编排</b><br>智能体目录 + 工具注册表 + 技能清单</td>
+</tr>
+</table>
+
+### 临床业务闭环
+
+<table>
+<tr>
+<td width="50%"><img src="docs/showcase/screenshots/33-critical-value.png" alt="危急值闭环"></td>
+<td width="50%"><img src="docs/showcase/screenshots/36-review-center.png" alt="审核中心"></td>
+</tr>
+<tr>
+<td><b>危急值闭环</b><br>血钾 6.8 mmol/L 超时危急值逐条确认，不靠人肉巡检</td>
+<td><b>审核中心</b><br>AI 高风险结论二人复核：待核对 77 / 开药待审 7</td>
+</tr>
+</table>
+
+### 运营与平台治理
+
+<table>
+<tr>
+<td width="50%"><img src="docs/showcase/screenshots/60-data-quality.png" alt="数据质量"></td>
+<td width="50%"><img src="docs/showcase/screenshots/63-tenant.png" alt="租户与 Cell"></td>
+</tr>
+<tr>
+<td><b>数据质量</b><br>16 条只读 SQL 探针 + 24h 执行/通过/异常统计</td>
+<td><b>租户与 Cell</b><br>多租户台账、实例码、Cell 入口与变更记录</td>
+</tr>
+</table>
+
+> 截图来自演示环境，患者标识均为合成数据（`P2026…` / `Gxx Patient xxxxx`）；
+> 完整清单与每张图的说明见 `docs/showcase/manifest.json`。
 
 ---
 

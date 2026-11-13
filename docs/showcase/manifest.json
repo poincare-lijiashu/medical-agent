@@ -1,0 +1,452 @@
+[
+  {
+    "file": "01-login.png",
+    "domain": "入口与总览",
+    "title": "登录",
+    "desc": "院内账号登录，httpOnly 会话令牌，登录即写审计",
+    "bytes": 66813,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "02-ai-workbench.png",
+    "domain": "入口与总览",
+    "title": "AI 临床助手总览",
+    "desc": "待复核 / 已处理 / 知识库 / 审计四维指标 + 六个能力入口",
+    "bytes": 413264,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "03-ops-cockpit.png",
+    "domain": "入口与总览",
+    "title": "运营驾驶舱",
+    "desc": "门诊挂号、实收、在院患者、待审处方、医技待办、耗材库存六大 KPI 与趋势",
+    "bytes": 276337,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "04-ops-metrics.png",
+    "domain": "入口与总览",
+    "title": "运营指标明细",
+    "desc": "每日指标明细表 + 药事/物资趋势 + 门诊分账与住院周转",
+    "bytes": 261178,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "05-ops-insight.png",
+    "domain": "入口与总览",
+    "title": "运营洞察下钻",
+    "desc": "同比科室 / 病区经营下钻，区间选择器下钻到病区",
+    "bytes": 287569,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "10-ai-observability.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 运营看板",
+    "desc": "待双人核对、已签发、已驳回、知识库、审计事件与运行时长",
+    "bytes": 382468,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "11-ai-audit.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 审计与日志",
+    "desc": "审计流水可按操作者/事件/动作检索并导出 CSV",
+    "bytes": 679269,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "12-ai-chat-agents.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 对话 · 能力域路由",
+    "desc": "八大能力域智能体自动路由与示例问题",
+    "bytes": 366292,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "13-ai-chat-evidence.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 对话 · 文献循证",
+    "desc": "置信度 0.91、来源与证据链（妊娠期高血压诊治指南 2020）",
+    "bytes": 399705,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "14-ai-chat-multi.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 对话 · 多轮问诊",
+    "desc": "多轮会话 + 深度会诊/专科问答/文献循证三类标签",
+    "bytes": 376445,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "15-ai-imaging.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 病例影像",
+    "desc": "上传影像后生成结构化分析，必须人工复核后入审核队列",
+    "bytes": 434988,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "16-ai-qc.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 病历质控",
+    "desc": "病历七栏自动拆分并输出质检结果，可跳审核中心",
+    "bytes": 291609,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "17-ai-agent-catalog.png",
+    "domain": "AI 中台与治理",
+    "title": "智能体编排",
+    "desc": "智能体目录 + 工具注册表 + 技能清单",
+    "bytes": 385850,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "18-ai-agent-routing.png",
+    "domain": "AI 中台与治理",
+    "title": "能力开关与路由",
+    "desc": "能力开关、智能体、可用工具、合规模型与联网白名单计数",
+    "bytes": 381859,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "19-ai-model-compliance.png",
+    "domain": "AI 中台与治理",
+    "title": "模型合规检查",
+    "desc": "模型分级结论 + 联网来源白名单 + 双模型第二意见复核",
+    "bytes": 311696,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "20-ai-lab.png",
+    "domain": "AI 中台与治理",
+    "title": "智能体实验台",
+    "desc": "记忆体检与有界工具循环沙盒",
+    "bytes": 299982,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "21-ai-bot-memory.png",
+    "domain": "AI 中台与治理",
+    "title": "Bot 与记忆",
+    "desc": "Bot 列表含能力域、模型绑定、版本、技能卡与记忆范围",
+    "bytes": 290933,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "22-ai-skillcards.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 技能卡",
+    "desc": "高危联用拦截、指南优先裁决、病案首页缺陷分级三张卡",
+    "bytes": 319096,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "23-ai-model-config.png",
+    "domain": "AI 中台与治理",
+    "title": "模型配置与密钥盘点",
+    "desc": "模型注册表单 + 密钥加解密盘点（只统计 keyId，不含密钥材料）",
+    "bytes": 270456,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "24-ai-command-palette.png",
+    "domain": "AI 中台与治理",
+    "title": "全局命令面板",
+    "desc": "⌘K 直达任意页面，减少层级跳转",
+    "bytes": 388434,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "25-ai-kb.png",
+    "domain": "AI 中台与治理",
+    "title": "AI 知识库",
+    "desc": "指南文档上传向量化，2997 个向量片段可检索",
+    "bytes": 305281,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "30-registration.png",
+    "domain": "临床业务闭环",
+    "title": "挂号收费",
+    "desc": "按科室与日期挂号、导源、就诊记录与门诊日结",
+    "bytes": 229699,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "31-inpatient.png",
+    "domain": "临床业务闭环",
+    "title": "住院工作台",
+    "desc": "病区在院患者、入院登记、床位看板与欠费预警",
+    "bytes": 252634,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "32-tech-workbench.png",
+    "domain": "临床业务闭环",
+    "title": "医护工作台",
+    "desc": "待采集 / 待接收 / 执行中 / 危急值待闭环四态 + 检验申请队列",
+    "bytes": 366978,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "33-critical-value.png",
+    "domain": "临床业务闭环",
+    "title": "危急值闭环",
+    "desc": "血钾 6.8 mmol/L 等超时危急值逐条确认闭环",
+    "bytes": 324802,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "34-pharmacy.png",
+    "domain": "临床业务闭环",
+    "title": "药房工作台",
+    "desc": "处方审核、发药分拣、库存预警与计费状态",
+    "bytes": 364128,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "35-pharmacy-config.png",
+    "domain": "临床业务闭环",
+    "title": "药事配置",
+    "desc": "药品字典 342 种、相互作用规则 307 条（高危 131）",
+    "bytes": 302307,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "36-review-center.png",
+    "domain": "临床业务闭环",
+    "title": "审核中心",
+    "desc": "AI 高风险结论二人复核：待核对 77 / 开药待审 7",
+    "bytes": 375609,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "37-consultation.png",
+    "domain": "临床业务闭环",
+    "title": "会诊工作台",
+    "desc": "发起会诊与状态流转（待受理 / 会诊中 / 已完成 / 已结束）",
+    "bytes": 353970,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "38-clinical-pathway.png",
+    "domain": "临床业务闭环",
+    "title": "临床路径",
+    "desc": "按路径模板执行每日任务，在径/出径与模板版本管理",
+    "bytes": 332182,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "39-handover.png",
+    "domain": "临床业务闭环",
+    "title": "交班报告",
+    "desc": "班次说明、在院患者交班清单、待办事项与交班签字",
+    "bytes": 287207,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "40-handover-todo.png",
+    "domain": "临床业务闭环",
+    "title": "交班待办",
+    "desc": "AI 待核对 77 / 出院受阻 31 / 未交班病区 153",
+    "bytes": 291656,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "41-pacs.png",
+    "domain": "临床业务闭环",
+    "title": "影像阅片",
+    "desc": "PACS 阅片队列，序列与胶片调阅",
+    "bytes": 338958,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "42-consent-print.png",
+    "domain": "临床业务闭环",
+    "title": "手术知情同意书",
+    "desc": "CA 签署与打印预览，签署轨迹可追溯",
+    "bytes": 232595,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "43-surgery-schedule.png",
+    "domain": "临床业务闭环",
+    "title": "手术排台",
+    "desc": "手术间台次甘特图、本间利用率与台次详情",
+    "bytes": 336731,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "44-consent-reprint.png",
+    "domain": "临床业务闭环",
+    "title": "知情同意书补打",
+    "desc": "补打原因留痕（质量问题 / 患者要求 / 信息变更）",
+    "bytes": 375026,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "45-consent-template.png",
+    "domain": "临床业务闭环",
+    "title": "同意书模板",
+    "desc": "模板管理与签署状态统计",
+    "bytes": 318709,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "46-emergency.png",
+    "domain": "临床业务闭环",
+    "title": "急诊分诊与留观",
+    "desc": "预检分诊 1-2 级绿色通道与留观床位三级联动",
+    "bytes": 308901,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "47-infection.png",
+    "domain": "临床业务闭环",
+    "title": "传染病院上报",
+    "desc": "感染病例上报目录、及时率与立即扫描",
+    "bytes": 233705,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "48-nursing-roster.png",
+    "domain": "临床业务闭环",
+    "title": "护理排班",
+    "desc": "排班发布状态、护士工作量覆盖与夜班统计",
+    "bytes": 264508,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "49-health-exam.png",
+    "domain": "临床业务闭环",
+    "title": "体检中心",
+    "desc": "套餐快照、项目数、总价与发布状态",
+    "bytes": 299933,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "50-device-qc.png",
+    "domain": "临床业务闭环",
+    "title": "设备质控",
+    "desc": "设备台账、质控记录与维修/报废状态",
+    "bytes": 324843,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "60-data-quality.png",
+    "domain": "运营与平台治理",
+    "title": "数据质量",
+    "desc": "16 条只读 SQL 质量规则 + 24h 执行/通过/异常统计",
+    "bytes": 398710,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "61-release.png",
+    "domain": "运营与平台治理",
+    "title": "发布管理",
+    "desc": "组件版本发布、30 天部署成功率与回滚操作",
+    "bytes": 340935,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "62-system-admin.png",
+    "domain": "运营与平台治理",
+    "title": "系统管理",
+    "desc": "账号 / 角色 / 院区 / 审计的统一管理面",
+    "bytes": 347490,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "63-tenant.png",
+    "domain": "运营与平台治理",
+    "title": "租户与 Cell",
+    "desc": "多租户台账、实例码、Cell 入口与变更记录",
+    "bytes": 359076,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "64-license.png",
+    "domain": "运营与平台治理",
+    "title": "授权与许可",
+    "desc": "授权状态、模块授权、配额使用（床位/账号/AI 调用）",
+    "bytes": 354658,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "65-material.png",
+    "domain": "运营与平台治理",
+    "title": "物资耗材",
+    "desc": "耗材目录、库存金额、近效期批次与批次领用",
+    "bytes": 339373,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "66-receipt.png",
+    "domain": "运营与平台治理",
+    "title": "收费票据",
+    "desc": "票据开具/重打/作废留痕与电子票据对账推送",
+    "bytes": 290082,
+    "width": 1600,
+    "height": 917
+  },
+  {
+    "file": "67-xds.png",
+    "domain": "运营与平台治理",
+    "title": "文档共享",
+    "desc": "IHE XDS 文档注册与查询（出院小结/检验报告 CDA）",
+    "bytes": 250190,
+    "width": 1600,
+    "height": 917
+  }
+]
