@@ -239,6 +239,12 @@ const router = createRouter({
           component: () => import('@/views/DrDrillView.vue'),
         },
         {
+          // 第 298 批：实施交付（模板/项目任务/上线就绪/培训考核）
+          path: 'ops/impl',
+          name: 'impl-delivery',
+          component: () => import('@/views/ImplementationView.vue'),
+        },
+        {
           // 第 172 批：HIS 深度整合自检（适配器状态 / 患者与医嘱读取 / 就地审方）
           path: 'his-workbench',
           name: 'his-workbench',

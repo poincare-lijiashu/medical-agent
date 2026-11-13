@@ -559,6 +559,26 @@ public enum ErrorCode {
     OPS_DR_EVIDENCE_REQUIRED(52440, "演练通过或步骤通过必须填写证据（日志/截图/还原结果）"),
     OPS_DR_INVALID(52441, "演练内容不合法（范围/环境/目标/关联备份/步骤有误）"),
 
+    // ---- 实施交付与培训考核（52xxx 续，§298）----
+    IMPL_TEMPLATE_NOT_FOUND(52442, "未找到该实施模板，或模板已停用"),
+    IMPL_TEMPLATE_INVALID(52443, "实施模板不合法（阶段权重之和必须为 100、任务为空或编号重复）"),
+    IMPL_PROJECT_NOT_FOUND(52444, "未找到该实施项目"),
+    IMPL_PROJECT_STATUS_INVALID(52445, "当前实施项目状态不允许该操作"),
+    IMPL_PROJECT_TRANSITION_INVALID(52446, "实施项目状态流转不合法（计划 → 实施 → 上线 → 验收，可取消）"),
+    IMPL_TASK_NOT_FOUND(52447, "未找到该实施任务"),
+    IMPL_TASK_STATUS_INVALID(52448, "当前实施任务状态不允许该操作"),
+    IMPL_TASK_EVIDENCE_REQUIRED(52449, "任务完成必须填写证据（签字件/截图/报告地址）"),
+    IMPL_TASK_BLOCKED_REASON_REQUIRED(52450, "标记任务阻塞必须填写原因"),
+    IMPL_TASK_WAIVER_REASON_REQUIRED(52451, "任务豁免必须填写原因"),
+    IMPL_NOT_READY(52452, "实施项目尚未达到上线就绪条件（必填任务或培训通过率未达标）"),
+    IMPL_SELF_APPROVAL(52453, "项目负责人不能自己批准上线或验收，请由另一名负责人复核"),
+    IMPL_COURSE_NOT_FOUND(52454, "未找到该培训课程，或课程已停用"),
+    IMPL_COURSE_INVALID(52455, "培训课程或题库不合法（选项/答案/分值有误）"),
+    IMPL_EXAM_NOT_FOUND(52456, "未找到该考试"),
+    IMPL_EXAM_INVALID(52457, "考试不合法（课程未启用、重复开考或及格分有误）"),
+    IMPL_ATTEMPT_INVALID(52458, "考试成绩不合法（答题不完整或选项越界）"),
+    IMPL_ATTEMPT_CLOSED(52459, "考试已关闭，不能再录入成绩"),
+
     // ---- 版本与补丁（53xxx，§273）----
     REL_COMPONENT_NOT_FOUND(53401, "未找到该发布组件"),
     REL_VERSION_NOT_FOUND(53402, "未找到该组件版本"),

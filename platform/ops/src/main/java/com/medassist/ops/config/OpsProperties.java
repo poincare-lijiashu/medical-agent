@@ -17,6 +17,10 @@ public class OpsProperties {
     private int maxPageSize = 200;
     private int auditListDefault = 50;
     private int auditListMax = 200;
+    /** 实施上线就绪的最低加权得分（§298）；未达到不能批准上线。 */
+    private int implMinScore = 90;
+    /** 培训考核通过率门槛（百分比，§298）；按唯一学员统计。 */
+    private int implTrainingThreshold = 95;
 
     public long getSlaScanMs() {
         return slaScanMs;
@@ -56,5 +60,21 @@ public class OpsProperties {
 
     public void setAuditListMax(int auditListMax) {
         this.auditListMax = auditListMax;
+    }
+
+    public int getImplMinScore() {
+        return implMinScore;
+    }
+
+    public void setImplMinScore(int implMinScore) {
+        this.implMinScore = implMinScore;
+    }
+
+    public int getImplTrainingThreshold() {
+        return implTrainingThreshold;
+    }
+
+    public void setImplTrainingThreshold(int implTrainingThreshold) {
+        this.implTrainingThreshold = implTrainingThreshold;
     }
 }

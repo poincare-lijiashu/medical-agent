@@ -1,5 +1,6 @@
 package com.medassist.ops.web;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -229,5 +230,101 @@ public final class OpsDtos {
 
     public record DrDrillReasonReq(
             @NotBlank @Size(min = 2, max = 1000) String reason) {
+    }
+
+    // ------------------------------------------------------------------ 实施交付与培训（§298）
+
+    public record ImplTemplateReq(
+            @NotBlank @Size(max = 64) String code,
+            @NotBlank @Size(max = 128) String name,
+            @Size(max = 1000) String description,
+            @NotEmpty List<@Valid ImplPhaseReq> phases) {
+    }
+
+    public record ImplPhaseReq(
+            @Min(1) @Max(20) int phaseNo,
+            @NotBlank @Size(max = 128) String name,
+            @Min(1) @Max(100) int weight,
+            @Size(max = 500) String description,
+            @NotEmpty List<@Valid ImplTaskReq> tasks) {
+    }
+
+    public record ImplTaskReq(
+            @Min(1) @Max(999) int taskNo,
+            @NotBlank @Size(max = 200) String title,
+            @Size(max = 1000) String description,
+            Boolean required,
+            @Size(max = 64) String ownerRole,
+            @Size(max = 500) String evidenceHint) {
+    }
+
+    public record ImplProjectCreateReq(
+            @NotBlank @Size(max = 64) String templateCode,
+            @Size(max = 64) String tenantCode,
+            @NotBlank @Size(max = 128) String hospitalName,
+            @Size(max = 64) String owner,
+            LocalDate startDate,
+            LocalDate targetDate,
+            List<@Size(max = 64) String> requiredCourseCodes) {
+    }
+
+    public record ImplTaskUpdateReq(
+            @NotBlank @Pattern(regexp = "PENDING|IN_PROGRESS|BLOCKED|DONE") String status,
+            @Size(max = 64) String assignee,
+            LocalDate dueDate,
+            @Size(max = 1000) String evidence,
+            @Size(max = 1000) String blockedReason,
+            @Size(max = 1000) String note) {
+    }
+
+    public record ImplWaiverReq(
+            @NotBlank @Size(min = 2, max = 1000) String reason) {
+    }
+
+    public record ImplApprovalReq(
+            @Size(max = 1000) String note) {
+    }
+
+    public record ImplStatusReq(
+            @NotBlank @Pattern(regexp = "ACTIVE|INACTIVE") String status) {
+    }
+
+    public record ImplAcceptReq(
+            @NotBlank @Size(min = 2, max = 1000) String evidence,
+            @Size(max = 1000) String note) {
+    }
+
+    public record ImplCancelReq(
+            @NotBlank @Size(min = 2, max = 1000) String reason) {
+    }
+
+    public record ImplCourseReq(
+            @NotBlank @Size(max = 64) String code,
+            @NotBlank @Size(max = 128) String title,
+            @NotBlank @Pattern(regexp = "ROLE|SYSTEM|PROCESS") String category,
+            Boolean required,
+            @Min(1) @Max(1440) Integer durationMinutes,
+            @Size(max = 1000) String description,
+            @Pattern(regexp = "ACTIVE|INACTIVE") String status,
+            List<@Valid ImplQuestionReq> questions) {
+    }
+
+    public record ImplQuestionReq(
+            @Min(1) @Max(999) int questionNo,
+            @NotBlank @Size(max = 1000) String stem,
+            @NotEmpty Map<@NotBlank @Size(max = 16) String, @NotBlank @Size(max = 500) String> options,
+            @NotBlank @Size(max = 16) String answerKey,
+            @Min(1) @Max(100) Integer score) {
+    }
+
+    public record ImplExamReq(
+            @NotBlank @Size(max = 64) String courseCode,
+            @Min(1) @Max(100) Integer passScore,
+            @Size(max = 200) String title) {
+    }
+
+    public record ImplAttemptReq(
+            @NotBlank @Size(max = 64) String trainee,
+            @NotEmpty Map<@NotBlank @Size(max = 64) String, @NotBlank @Size(max = 16) String> answers) {
     }
 }

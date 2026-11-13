@@ -511,6 +511,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['ops:dr:read'],
   },
   {
+    // 第 298 批：实施交付（模板 / 项目任务 / 上线就绪 / 培训考核）
+    name: 'impl-delivery',
+    path: '/ops/impl',
+    title: '实施交付',
+    hint: '实施模板可复制 · 项目任务与证据 · 上线就绪评分 · 培训考核通过率',
+    icon: 'clipboard',
+    group: '平台运维',
+    permissions: ['ops:impl:read'],
+  },
+  {
     name: 'his-workbench',
     path: '/his-workbench',
     title: 'HIS 集成工作台',

@@ -47,6 +47,9 @@ medassist:
     max-page-size: ${OPS_MAX_PAGE_SIZE:200}
     audit-list-default: ${OPS_AUDIT_LIST_DEFAULT:50}
     audit-list-max: ${OPS_AUDIT_LIST_MAX:200}
+    # §298 实施上线就绪：加权得分下限与培训通过率门槛（按唯一学员）
+    impl-min-score: ${OPS_IMPL_MIN_SCORE:90}
+    impl-training-threshold: ${OPS_IMPL_TRAINING_THRESHOLD:95}
 
 management:
   endpoints:

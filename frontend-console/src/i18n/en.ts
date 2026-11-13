@@ -139,6 +139,8 @@ const messages: Record<MessageKey, string> = {
   'nav.release-console.hint': 'Components & immutable versions · release trains · compatibility matrix · patch approval · freeze windows · deploy & rollback',
   'nav.dr-drill.title': 'DR Drill',
   'nav.dr-drill.hint': 'Backup policies · idempotent backup runs · drill steps with RTO/RPO · four-eyes verification · release gate',
+  'nav.impl-delivery.title': 'Implementation Delivery',
+  'nav.impl-delivery.hint': 'Reusable implementation templates · project tasks with evidence · go-live readiness score · training pass rate',
   'nav.group.系统管理': 'Administration',
 
   /* ---------- Navigation items ---------- */

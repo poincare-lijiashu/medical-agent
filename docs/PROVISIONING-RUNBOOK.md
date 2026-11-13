@@ -863,3 +863,79 @@ curl -s ".../ops/dr/gate?scope=ALL&environment=PROD&days=90" -H "$H" | jq .data
 - 演练与备份台账属于运营数据，纳入日常备份；恢复后检查状态机与审计流是否连续；
 - 证据文本可能含内部地址，导出前按院内制度脱敏；
 - 备份策略的 `last_run_at` 只反映最近一次上报，不代表备份软件真实调度状态。
+
+## 20. 实施交付与培训考核（§298）
+
+### 20.1 数据与口径
+
+- 模板：`ops_svc.impl_template*`；项目与任务：`impl_project` / `impl_project_task`；
+  培训：`impl_course` / `impl_question` / `impl_exam` / `impl_attempt`；
+- 项目创建时复制模板任务快照，模板后续修改不影响在建项目；
+- 任务 `DONE` 必须有证据，`BLOCKED` 必须写原因，例外只能 `WAIVED`（写原因 + 复核人）；
+- 就绪分 = Σ(阶段权重 × 阶段完成率)，门槛默认 90；培训通过率门槛默认 95%；
+- 通过率按唯一学员最新成绩统计：同一考试重考覆盖成绩并累加次数。
+
+### 20.2 上线前最小动作
+
+1. 确认内置模板 `STD-HOSP-v1` 或自建模板的阶段权重合计为 100；
+2. 从模板创建项目，指定医院、负责人、目标上线日与必修课程；
+3. 开始实施，逐项完成任务并上传证据；阻塞项写原因，确实无法完成的走豁免；
+4. 为每门必修课程开考并录入成绩，确认通过率达到 95%；
+5. 在项目详情确认"具备上线条件"，由非负责人执行"批准上线"；
+6. 上线后完成验收签署（验收证据必填）。
+
+### 20.3 常用命令
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+H="Authorization: Bearer $TOKEN"
+
+# 模板与课程
+curl -s ".../ops/impl/templates?onlyActive=true" -H "$H" | jq
+curl -s ".../ops/impl/courses?onlyActive=true" -H "$H" | jq
+
+# 创建项目（从模板快照任务）
+curl -s -X POST ".../ops/impl/projects" -H "$H" -H 'Content-Type: application/json' -d '{
+  "templateCode":"STD-HOSP-v1","tenantCode":"tenant-001","hospitalName":"示范医院",
+  "startDate":"2026-11-20","targetDate":"2027-01-20",
+  "requiredCourseCodes":["SYS-BASIC","ROLE-DOCTOR"]}' | jq .data.projectNo
+
+# 开始实施 / 登记任务
+curl -s -X POST ".../ops/impl/projects/<pid>/start" -H "$H"
+curl -s -X POST ".../ops/impl/projects/<pid>/tasks/<taskId>" -H "$H" \
+  -H 'Content-Type: application/json' -d '{"status":"DONE","assignee":"ops01","evidence":"签字件地址"}'
+
+# 开考 + 录成绩（answers 的键是题目 id）
+curl -s -X POST ".../ops/impl/projects/<pid>/exams" -H "$H" \
+  -H 'Content-Type: application/json' -d '{"courseCode":"SYS-BASIC","passScore":80}'
+curl -s -X POST ".../ops/impl/exams/<examId>/attempts" -H "$H" \
+  -H 'Content-Type: application/json' -d '{"trainee":"nurse01","answers":{"<qid>":"B"}}'
+
+# 就绪报告 → 第二人批准上线 → 验收
+curl -s ".../ops/impl/projects/<pid>/readiness" -H "$H" | jq .data
+curl -s -X POST ".../ops/impl/projects/<pid>/go-live" -H "$H" \
+  -H 'Content-Type: application/json' -d '{"note":"复核通过"}'
+curl -s -X POST ".../ops/impl/projects/<pid>/accept" -H "$H" \
+  -H 'Content-Type: application/json' -d '{"evidence":"验收报告编号","note":"院方签署"}'
+```
+
+### 20.4 排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 批准上线按钮禁用 | 就绪分不足 / 必填任务未完成 / 培训通过率不足 / 自己是负责人 | 看就绪报告逐项补齐；换非负责人复核 |
+| 上线返回 409 / 52452 | 就绪条件未满足 | 补齐必填任务或豁免；确认培训通过率 ≥95% |
+| 上线返回 409 / 52453 | 操作人 = 项目负责人 | 由运营经理或其他负责人复核 |
+| 任务登记返回 422 / 52449 | 完成未填证据 | 填签字件/截图/报告地址 |
+| 任务登记返回 422 / 52450 | 阻塞未填原因 | 写清阻塞点与协调对象 |
+| 开考报 422 / 52457 | 课程无题目 / 重复开考 / 课程停用 | 先补题；一项目一课程只开一场 |
+| 录成绩报 422 / 52458 | 漏答或选项越界 | 完整作答；选项必须是题目给出的键 |
+| 通过率一直是 0 | 未开考或未录成绩 | 按课程开考并录入成绩 |
+
+### 20.5 数据与备份
+
+- 实施与培训数据属于运营数据，纳入日常备份；恢复后检查项目状态与成绩是否连续；
+- 培训材料与验收证据只存地址，不存大文件；
+- 题库答案键仅对实施管理员可见，导出前按院内制度管理。
