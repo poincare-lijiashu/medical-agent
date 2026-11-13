@@ -1,0 +1,35 @@
+Copyright (c) 2026 MedAssist (铭医) — All Rights Reserved.
+
+PROPRIETARY SOFTWARE LICENSE
+
+This source code and all associated documentation, assets, screenshots and data
+(collectively, the "Software") are proprietary and confidential.
+
+1. NO LICENSE GRANTED
+   No right or license is granted to use, copy, modify, merge, publish,
+   distribute, sublicense, sell, deploy, or create derivative works of the
+   Software, in whole or in part, without prior written permission from the
+   copyright holder.
+
+2. VIEWING PERMISSION
+   The Software is made available for viewing and evaluation purposes only.
+   Viewing this repository does not constitute a grant of any usage rights.
+
+3. MEDICAL SAFETY NOTICE
+   The Software is NOT a certified medical device. It does not provide medical
+   advice, diagnosis, or treatment. Any clinical use requires independent
+   validation, regulatory clearance where applicable, and supervision by
+   licensed healthcare professionals. The copyright holder accepts no liability
+   for clinical decisions made using, or with reference to, the Software.
+
+4. NO WARRANTY
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING
+   FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF THE SOFTWARE.
+
+5. THIRD-PARTY COMPONENTS
+   Third-party components remain under their respective licenses; see NOTICE.
+
+For licensing enquiries, please open an issue in this repository.
