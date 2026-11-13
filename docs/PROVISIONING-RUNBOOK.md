@@ -390,3 +390,54 @@ curl -H "X-Permissions: license:read" http://127.0.0.1:8095/license/status
 
 超过 `maxAiCallsPerDay` **只告警不阻断**（与床位/账号一致，临床连续性优先）。
 首次跨越上限会写一条 `USAGE_AI_QUOTA_EXCEEDED` 审计；运营据此扩容或与院方结算。
+
+## 13. 医保日结/月结对账（§291 / 计划书 W2.5）
+
+### 13.1 什么时候做
+
+- **日结**：每日终了，核对当天就诊业务日期的已确认清单与省局回传；
+- **月结**：次月 1–3 日，核对完整自然月；关闭后作为当月医保结算结论留档。
+
+### 13.2 口径
+
+| 维度 | 口径 |
+| --- | --- |
+| 期间归属 | 就诊业务日期 `service_date`（不是确认时间、不是提交时间） |
+| 清单范围 | `CONFIRMED` + `VOIDED` 但省局已 `SETTLED` 的清单 |
+| 本地金额 | 清单快照的总额/基金/个人自付；作废单不计入本地收入 |
+| 省局金额 | 最近一笔 `SETTLE` 响应中的 `output.fund_pay_sumamt` / `output.psn_pay` |
+| 不可验证 | 省局未回传金额 → 只计数，不伪造差异 |
+| 差额 | 金额不一致按基金/个人分别求绝对差；未结算/失败按本地基金；作废后已结算按基金+自付 |
+
+### 13.3 操作流程
+
+1. 医保运维 →「结算对账」→ 选日结/月结 → 生成批次；
+2. 看差异列表：`未结算 / 结算失败 / 金额不一致 / 作废后已结算`；
+3. 逐条处理：补提交结算、联系省局冲销、或标记「已解决 / 已知悉并接受」（说明必填）；
+4. 全部 OPEN 处理完后「关闭批次」；关闭后不可重算，结论留档。
+
+```bash
+# 生成日结（需 insurance:recon:manage）
+curl -X POST http://127.0.0.1:8080/api/v2/insurance/recon/batches \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"periodType":"DAY","periodFrom":"2026-11-12","periodTo":"2026-11-12"}'
+# 查看批次与差异（需 insurance:recon:read）
+curl "http://127.0.0.1:8080/api/v2/insurance/recon/batches?limit=20" -H "Authorization: Bearer <token>"
+```
+
+### 13.4 权限与范围
+
+- `insurance:recon:read`：ADMIN / INSURANCE_OFFICER / OPS_MANAGER；
+- `insurance:recon:manage`：ADMIN / INSURANCE_OFFICER；
+- **院区受限账号不能生成/查看对账**（全院财务动作，避免拿部分数据当全量结论）；
+- 窗口（REGISTRAR）不授予 manage：出单与对账结论分离。
+
+### 13.5 指标与排障
+
+- `medassist_insurance_recon_action_total{action=compute|resolve|close,result}`；
+- `medassist_insurance_recon_open_diffs`：最近一次操作的未处理差异数；
+- 常见问题：
+  - 生成报「期间内清单超过上限」→ 改为按月或缩小日期；
+  - 差异关闭不了 → 仍有 OPEN 差异，先处理或标记忽略；
+  - 重算报 409 → 他人已重算/关闭，刷新后再操作；
+  - 大量「不可验证」→ 省局回执未回传金额，需与省局确认字段口径。

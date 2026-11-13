@@ -277,4 +277,29 @@ public final class InsuranceDtos {
                                          String responsePayload, String createdBy,
                                          Instant createdAt, Instant settledAt, long version) {
     }
+
+    // ---------------------------------------------------------------- 结算对账（§291）
+
+    /**
+     * 生成/重算对账批次。
+     *
+     * <p>DAY 时 periodFrom 必须等于 periodTo；MONTH 时必须覆盖完整自然月。
+     * 期间按就诊业务日期归属，不接受院区受限视角。
+     */
+    public record ReconComputeReq(
+            @NotBlank @Pattern(regexp = "DAY|MONTH", message = "期间类型只支持 DAY 或 MONTH")
+            String periodType,
+            @NotBlank String periodFrom,
+            @NotBlank String periodTo) {
+    }
+
+    /** 处理差异：RESOLVED（已解决）/ IGNORED（已知悉并接受），说明必填。 */
+    public record ReconResolveReq(
+            @NotBlank @Pattern(regexp = "RESOLVED|IGNORED", message = "只能标记为 RESOLVED 或 IGNORED")
+            String status,
+            @NotBlank @Size(min = 2, max = 500) String note) {
+    }
+
+    public record ReconBatchList(List<com.medassist.insurance.domain.InsuranceModel.ReconBatch> items) {
+    }
 }

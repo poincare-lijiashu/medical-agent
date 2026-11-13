@@ -23,6 +23,9 @@ import com.medassist.insurance.domain.InsuranceModel.PaymentGroup;
 import com.medassist.insurance.domain.InsuranceModel.PaymentGroupRule;
 import com.medassist.insurance.domain.InsuranceModel.PaymentScheme;
 import com.medassist.insurance.domain.InsuranceModel.RealtimeSettlement;
+import com.medassist.insurance.domain.InsuranceModel.ReconBatch;
+import com.medassist.insurance.domain.InsuranceModel.ReconBillRow;
+import com.medassist.insurance.domain.InsuranceModel.ReconDiff;
 import com.medassist.insurance.domain.InsuranceModel.SchemeRate;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import org.springframework.jdbc.core.RowMapper;
@@ -1735,6 +1738,355 @@ public class InsuranceRepository {
     /** jsonb 列读回为 null 时按空数组处理，避免拼出 "null" 字符串。 */
     private static String orEmpty(String json) {
         return json == null ? "[]" : json;
+    }
+
+    // ---------------------------------------------------------------- 结算对账（§291）
+
+    private static final RowMapper<ReconBatch> RECON_BATCH_MAPPER = (rs, i) -> new ReconBatch(
+            rs.getObject("id", UUID.class), rs.getString("period_type"),
+            rs.getDate("period_from").toLocalDate(), rs.getDate("period_to").toLocalDate(),
+            rs.getString("status"), rs.getInt("bill_count"), rs.getInt("settled_count"),
+            rs.getInt("not_settled_count"), rs.getInt("failed_count"),
+            rs.getInt("mismatch_count"), rs.getInt("voided_after_settle_count"),
+            rs.getInt("unverified_count"), rs.getInt("open_diff_count"),
+            rs.getBigDecimal("local_total"), rs.getBigDecimal("local_insurance"),
+            rs.getBigDecimal("local_self_pay"), rs.getBigDecimal("counterparty_insurance"),
+            rs.getBigDecimal("counterparty_self_pay"), rs.getBigDecimal("diff_amount"),
+            rs.getString("computed_by"), rs.getTimestamp("computed_at").toInstant(),
+            rs.getString("closed_by"),
+            rs.getTimestamp("closed_at") == null ? null : rs.getTimestamp("closed_at").toInstant(),
+            rs.getLong("version"));
+
+    private static final String RECON_BATCH_COLUMNS = """
+            id, period_type, period_from, period_to, status, bill_count, settled_count,
+            not_settled_count, failed_count, mismatch_count, voided_after_settle_count,
+            unverified_count, open_diff_count, local_total, local_insurance, local_self_pay,
+            counterparty_insurance, counterparty_self_pay, diff_amount, computed_by, computed_at,
+            closed_by, closed_at, version
+            """;
+
+    private static final RowMapper<ReconDiff> RECON_DIFF_MAPPER = (rs, i) -> new ReconDiff(
+            rs.getObject("id", UUID.class), rs.getObject("batch_id", UUID.class),
+            rs.getObject("bill_id", UUID.class), rs.getString("bill_no"),
+            rs.getObject("visit_id", UUID.class), rs.getString("category"),
+            rs.getBigDecimal("local_insurance"), rs.getBigDecimal("local_self_pay"),
+            rs.getBigDecimal("counterparty_insurance"), rs.getBigDecimal("counterparty_self_pay"),
+            rs.getBigDecimal("diff_amount"), rs.getString("detail"), rs.getString("status"),
+            rs.getString("resolved_by"),
+            rs.getTimestamp("resolved_at") == null
+                    ? null : rs.getTimestamp("resolved_at").toInstant(),
+            rs.getString("resolve_note"), rs.getTimestamp("created_at").toInstant());
+
+    private static final String RECON_DIFF_COLUMNS = """
+            id, batch_id, bill_id, bill_no, visit_id, category, local_insurance, local_self_pay,
+            counterparty_insurance, counterparty_self_pay, diff_amount, detail, status,
+            resolved_by, resolved_at, resolve_note, created_at
+            """;
+
+    private static final RowMapper<ReconBillRow> RECON_ROW_MAPPER = (rs, i) -> new ReconBillRow(
+            rs.getObject("bill_id", UUID.class), rs.getString("bill_no"),
+            rs.getObject("visit_id", UUID.class), rs.getDate("service_date").toLocalDate(),
+            rs.getString("bill_status"), rs.getBigDecimal("total_amount"),
+            rs.getBigDecimal("insurance_amount"), rs.getBigDecimal("self_pay_amount"),
+            rs.getString("settle_status"), rs.getInt("attempts"), rs.getString("last_error"),
+            rs.getString("response_payload"));
+
+    /**
+     * 对账读取：期间内已确认清单 + 作废但已结算成功的清单（用于 VOIDED_AFTER_SETTLE）。
+     *
+     * <p>期间按 service_date 归属；无院区过滤——对账是全院财务动作，
+     * 调用方必须持有全院视角（由服务层校验）。
+     */
+    public List<ReconBillRow> listReconBills(LocalDate from, LocalDate to, int limit) {
+        return jdbc.sql("""
+                        SELECT b.id AS bill_id, b.bill_no, b.visit_id, b.service_date,
+                               b.status AS bill_status, b.total_amount, b.insurance_amount,
+                               b.self_pay_amount,
+                               r.status AS settle_status, COALESCE(r.attempts, 0) AS attempts,
+                               r.last_error, r.response_payload::text AS response_payload
+                          FROM insurance_svc.settlement_bill b
+                          LEFT JOIN LATERAL (
+                                SELECT t.status, t.attempts, t.last_error, t.response_payload
+                                  FROM insurance_svc.realtime_settlement t
+                                 WHERE t.bill_id = b.id AND t.biz_type = 'SETTLE'
+                                 ORDER BY t.created_at DESC
+                                 LIMIT 1) r ON true
+                         WHERE b.service_date BETWEEN :from AND :to
+                           AND (b.status = 'CONFIRMED'
+                                OR (b.status = 'VOIDED' AND r.status = 'SETTLED'))
+                         ORDER BY b.bill_no
+                         LIMIT :limit
+                        """)
+                .param("from", from).param("to", to).param("limit", limit)
+                .query(RECON_ROW_MAPPER).list();
+    }
+
+    /** 期间内参与对账的清单数（先计数再决定是否允许生成，避免超大期间拖垮服务）。 */
+    public long countReconBills(LocalDate from, LocalDate to) {
+        return jdbc.sql("""
+                        SELECT count(*)
+                          FROM insurance_svc.settlement_bill b
+                          LEFT JOIN LATERAL (
+                                SELECT t.status
+                                  FROM insurance_svc.realtime_settlement t
+                                 WHERE t.bill_id = b.id AND t.biz_type = 'SETTLE'
+                                 ORDER BY t.created_at DESC
+                                 LIMIT 1) r ON true
+                         WHERE b.service_date BETWEEN :from AND :to
+                           AND (b.status = 'CONFIRMED'
+                                OR (b.status = 'VOIDED' AND r.status = 'SETTLED'))
+                        """)
+                .param("from", from).param("to", to)
+                .query(Long.class).single();
+    }
+
+    public Optional<ReconBatch> findReconBatch(String periodType, LocalDate from, LocalDate to) {
+        return jdbc.sql("SELECT " + RECON_BATCH_COLUMNS + """
+                          FROM insurance_svc.settlement_recon_batch
+                         WHERE period_type = :type AND period_from = :from AND period_to = :to
+                        """)
+                .param("type", periodType).param("from", from).param("to", to)
+                .query(RECON_BATCH_MAPPER).optional();
+    }
+
+    public Optional<ReconBatch> findReconBatchById(UUID id) {
+        return jdbc.sql("SELECT " + RECON_BATCH_COLUMNS
+                        + " FROM insurance_svc.settlement_recon_batch WHERE id = ?")
+                .param(id).query(RECON_BATCH_MAPPER).optional();
+    }
+
+    public List<ReconBatch> listReconBatches(int limit) {
+        return jdbc.sql("SELECT " + RECON_BATCH_COLUMNS + """
+                          FROM insurance_svc.settlement_recon_batch
+                         ORDER BY period_from DESC, period_type, computed_at DESC
+                         LIMIT :limit
+                        """)
+                .param("limit", limit).query(RECON_BATCH_MAPPER).list();
+    }
+
+    /** 新批次：唯一键冲突返回 false（并发下由服务层回查既有批次）。 */
+    public boolean insertReconBatch(ReconBatch b) {
+        try {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.settlement_recon_batch
+                                (id, period_type, period_from, period_to, status, bill_count,
+                                 settled_count, not_settled_count, failed_count, mismatch_count,
+                                 voided_after_settle_count, unverified_count, open_diff_count,
+                                 local_total, local_insurance, local_self_pay,
+                                 counterparty_insurance, counterparty_self_pay, diff_amount,
+                                 computed_by)
+                            VALUES (:id, :periodType, :from, :to, 'COMPUTED', :billCount,
+                                    :settledCount, :notSettled, :failed, :mismatch,
+                                    :voidedAfterSettle, :unverified, :openDiff,
+                                    :localTotal, :localInsurance, :localSelfPay,
+                                    :cpInsurance, :cpSelfPay, :diffAmount, :by)
+                            """)
+                    .param("id", b.id()).param("periodType", b.periodType())
+                    .param("from", b.periodFrom()).param("to", b.periodTo())
+                    .param("billCount", b.billCount()).param("settledCount", b.settledCount())
+                    .param("notSettled", b.notSettledCount()).param("failed", b.failedCount())
+                    .param("mismatch", b.mismatchCount())
+                    .param("voidedAfterSettle", b.voidedAfterSettleCount())
+                    .param("unverified", b.unverifiedCount())
+                    .param("openDiff", b.openDiffCount())
+                    .param("localTotal", b.localTotal()).param("localInsurance", b.localInsurance())
+                    .param("localSelfPay", b.localSelfPay())
+                    .param("cpInsurance", b.counterpartyInsurance())
+                    .param("cpSelfPay", b.counterpartySelfPay())
+                    .param("diffAmount", b.diffAmount()).param("by", b.computedBy())
+                    .update();
+            return true;
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    /**
+     * 重算写回：只有 COMPUTED 且版本一致才更新（CAS）。
+     * 返回 false 表示已被他人重算/关闭，调用方按冲突处理。
+     */
+    public boolean updateReconBatch(ReconBatch b) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_batch
+                           SET bill_count = :billCount, settled_count = :settledCount,
+                               not_settled_count = :notSettled, failed_count = :failed,
+                               mismatch_count = :mismatch,
+                               voided_after_settle_count = :voidedAfterSettle,
+                               unverified_count = :unverified, open_diff_count = :openDiff,
+                               local_total = :localTotal, local_insurance = :localInsurance,
+                               local_self_pay = :localSelfPay,
+                               counterparty_insurance = :cpInsurance,
+                               counterparty_self_pay = :cpSelfPay,
+                               diff_amount = :diffAmount, computed_by = :by,
+                               computed_at = now(), version = version + 1
+                         WHERE id = :id AND status = 'COMPUTED' AND version = :version
+                        """)
+                .param("id", b.id()).param("version", b.version())
+                .param("billCount", b.billCount()).param("settledCount", b.settledCount())
+                .param("notSettled", b.notSettledCount()).param("failed", b.failedCount())
+                .param("mismatch", b.mismatchCount())
+                .param("voidedAfterSettle", b.voidedAfterSettleCount())
+                .param("unverified", b.unverifiedCount()).param("openDiff", b.openDiffCount())
+                .param("localTotal", b.localTotal()).param("localInsurance", b.localInsurance())
+                .param("localSelfPay", b.localSelfPay())
+                .param("cpInsurance", b.counterpartyInsurance())
+                .param("cpSelfPay", b.counterpartySelfPay())
+                .param("diffAmount", b.diffAmount()).param("by", b.computedBy())
+                .update() > 0;
+    }
+
+    /** 关闭批次：仅 COMPUTED + 版本一致；返回 false 表示状态/版本已变。 */
+    public boolean closeReconBatch(UUID id, long version, String actor) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_batch
+                           SET status = 'CLOSED', closed_by = :actor, closed_at = now(),
+                               version = version + 1
+                         WHERE id = :id AND status = 'COMPUTED' AND version = :version
+                           AND open_diff_count = 0
+                        """)
+                .param("id", id).param("version", version).param("actor", actor)
+                .update() > 0;
+    }
+
+    public List<ReconDiff> listReconDiffs(UUID batchId, String status, int limit) {
+        return jdbc.sql("SELECT " + RECON_DIFF_COLUMNS + """
+                          FROM insurance_svc.settlement_recon_diff
+                         WHERE batch_id = :batchId
+                           AND (CAST(:status AS text) = '' OR status = CAST(:status AS text))
+                         ORDER BY status = 'OPEN' DESC, category, bill_no
+                         LIMIT :limit
+                        """)
+                .param("batchId", batchId)
+                .param("status", status == null ? "" : status.trim().toUpperCase())
+                .param("limit", limit).query(RECON_DIFF_MAPPER).list();
+    }
+
+    public Optional<ReconDiff> findReconDiff(UUID id) {
+        return jdbc.sql("SELECT " + RECON_DIFF_COLUMNS
+                        + " FROM insurance_svc.settlement_recon_diff WHERE id = ?")
+                .param(id).query(RECON_DIFF_MAPPER).optional();
+    }
+
+    /** 新差异：同 (batch,bill,category) 已存在时什么都不做（保留人工处理状态）。 */
+    public void insertReconDiff(ReconDiff d) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.settlement_recon_diff
+                            (id, batch_id, bill_id, bill_no, visit_id, category, local_insurance,
+                             local_self_pay, counterparty_insurance, counterparty_self_pay,
+                             diff_amount, detail, status)
+                        VALUES (:id, :batchId, :billId, :billNo, :visitId, :category,
+                                :localInsurance, :localSelfPay, :cpInsurance, :cpSelfPay,
+                                :diffAmount, :detail, 'OPEN')
+                        ON CONFLICT (batch_id, bill_id, category) DO NOTHING
+                        """)
+                .param("id", d.id()).param("batchId", d.batchId()).param("billId", d.billId())
+                .param("billNo", d.billNo()).param("visitId", d.visitId())
+                .param("category", d.category()).param("localInsurance", d.localInsurance())
+                .param("localSelfPay", d.localSelfPay())
+                .param("cpInsurance", d.counterpartyInsurance())
+                .param("cpSelfPay", d.counterpartySelfPay())
+                .param("diffAmount", d.diffAmount()).param("detail", d.detail())
+                .update();
+    }
+
+    /** 仍存在的 OPEN 差异：刷新金额与原因（人工已处理的终态不动）。 */
+    public boolean refreshOpenReconDiff(ReconDiff d) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_diff
+                           SET local_insurance = :localInsurance, local_self_pay = :localSelfPay,
+                               counterparty_insurance = :cpInsurance,
+                               counterparty_self_pay = :cpSelfPay,
+                               diff_amount = :diffAmount, detail = :detail,
+                               updated_at = now()
+                         WHERE batch_id = :batchId AND bill_id = :billId
+                           AND category = :category AND status = 'OPEN'
+                        """)
+                .param("batchId", d.batchId()).param("billId", d.billId())
+                .param("category", d.category()).param("localInsurance", d.localInsurance())
+                .param("localSelfPay", d.localSelfPay())
+                .param("cpInsurance", d.counterpartyInsurance())
+                .param("cpSelfPay", d.counterpartySelfPay())
+                .param("diffAmount", d.diffAmount()).param("detail", d.detail())
+                .update() > 0;
+    }
+
+    /** 重算后已不存在的 OPEN 差异：自动关闭（不算人工处理）。 */
+    public int autoCloseReconDiff(UUID id) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_diff
+                           SET status = 'AUTO_CLOSED', updated_at = now()
+                         WHERE id = :id AND status = 'OPEN'
+                        """).param("id", id).update();
+    }
+
+    /**
+     * 重算前先把本批次所有 OPEN 置为 AUTO_CLOSED，再由"仍然存在的差异"重新打开。
+     *
+     * <p>为什么不逐个比对：差异数可达上万，逐个查询会把重算拖成 N+1；
+     * 一条 UPDATE + 逐条 reopen 是 O(1)+O(n)，且不会漏掉第 501 条之后的陈旧差异。
+     */
+    public int autoCloseAllOpenDiffs(UUID batchId) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_diff
+                           SET status = 'AUTO_CLOSED', updated_at = now()
+                         WHERE batch_id = :batchId AND status = 'OPEN'
+                        """).param("batchId", batchId).update();
+    }
+
+    /**
+     * 自动关闭后问题又出现：AUTO_CLOSED → OPEN（刷新金额与原因）。
+     *
+     * <p>RESOLVED / IGNORED 不在此列：那是人工结论，重算不能擅自推翻；
+     * AUTO_CLOSED 只是"上次重算时已消失"，重新出现必须再次提醒。
+     */
+    public boolean reopenAutoClosedReconDiff(ReconDiff d) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_diff
+                           SET status = 'OPEN', local_insurance = :localInsurance,
+                               local_self_pay = :localSelfPay,
+                               counterparty_insurance = :cpInsurance,
+                               counterparty_self_pay = :cpSelfPay,
+                               diff_amount = :diffAmount, detail = :detail, updated_at = now()
+                         WHERE batch_id = :batchId AND bill_id = :billId
+                           AND category = :category AND status = 'AUTO_CLOSED'
+                        """)
+                .param("batchId", d.batchId()).param("billId", d.billId())
+                .param("category", d.category()).param("localInsurance", d.localInsurance())
+                .param("localSelfPay", d.localSelfPay())
+                .param("cpInsurance", d.counterpartyInsurance())
+                .param("cpSelfPay", d.counterpartySelfPay())
+                .param("diffAmount", d.diffAmount()).param("detail", d.detail())
+                .update() > 0;
+    }
+
+    /** 人工处理：OPEN → RESOLVED / IGNORED（说明与处理人必填，服务层已校验）。 */
+    public boolean resolveReconDiff(UUID id, String status, String actor, String note) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_diff
+                           SET status = :status, resolved_by = :actor, resolved_at = now(),
+                               resolve_note = :note, updated_at = now()
+                         WHERE id = :id AND status = 'OPEN'
+                        """)
+                .param("id", id).param("status", status).param("actor", actor)
+                .param("note", note).update() > 0;
+    }
+
+    /** 批量重算 OPEN 差异数（关闭前判断"是否还有未处理差异"）。 */
+    public int countOpenReconDiffs(UUID batchId) {
+        return jdbc.sql("""
+                        SELECT count(*) FROM insurance_svc.settlement_recon_diff
+                         WHERE batch_id = ? AND status = 'OPEN'
+                        """).param(batchId).query(Integer.class).single();
+    }
+
+    /** 同步批次上的 open_diff_count（差异处理后调用；CLOSED 批次由触发器兜底拒绝）。 */
+    public boolean updateOpenDiffCount(UUID batchId, int openCount) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.settlement_recon_batch
+                           SET open_diff_count = :openCount, version = version + 1
+                         WHERE id = :id AND status = 'COMPUTED'
+                        """)
+                .param("id", batchId).param("openCount", openCount).update() > 0;
     }
 
     // ---------------------------------------------------------------- 审计

@@ -2859,6 +2859,75 @@ export interface InsuranceExportBatch {
   remainingPending: number
 }
 
+// ---------------------------------------------------------------- 医保结算对账（§291）
+
+export type ReconCategory =
+  | 'NOT_SETTLED'
+  | 'SETTLE_FAILED'
+  | 'AMOUNT_MISMATCH'
+  | 'VOIDED_AFTER_SETTLE'
+
+export type ReconDiffStatus = 'OPEN' | 'RESOLVED' | 'IGNORED' | 'AUTO_CLOSED'
+
+/** 对账批次：按就诊业务日期归属，同期间唯一；关闭后不可重算。 */
+export interface InsuranceReconBatch {
+  id: string
+  periodType: 'DAY' | 'MONTH'
+  periodFrom: string
+  periodTo: string
+  status: 'COMPUTED' | 'CLOSED'
+  billCount: number
+  settledCount: number
+  notSettledCount: number
+  failedCount: number
+  mismatchCount: number
+  voidedAfterSettleCount: number
+  unverifiedCount: number
+  openDiffCount: number
+  localTotal: number
+  localInsurance: number
+  localSelfPay: number
+  counterpartyInsurance: number
+  counterpartySelfPay: number
+  diffAmount: number
+  computedBy: string
+  computedAt: string
+  closedBy: string | null
+  closedAt: string | null
+  version: number
+}
+
+/** 对账差异工单：只对真差异建单，不含患者姓名/证件号。 */
+export interface InsuranceReconDiff {
+  id: string
+  batchId: string
+  billId: string
+  billNo: string
+  visitId: string
+  category: ReconCategory
+  localInsurance: number
+  localSelfPay: number
+  counterpartyInsurance: number | null
+  counterpartySelfPay: number | null
+  diffAmount: number
+  detail: string | null
+  status: ReconDiffStatus
+  resolvedBy: string | null
+  resolvedAt: string | null
+  resolveNote: string | null
+  createdAt: string
+}
+
+export interface InsuranceReconBatchList {
+  items: InsuranceReconBatch[]
+}
+
+export interface InsuranceReconDetail {
+  batch: InsuranceReconBatch
+  diffs: InsuranceReconDiff[]
+  openDiffCount: number
+}
+
 // ---------------------------------------------------------------- DRG/DIP 分组
 
 /** 支付方案：DRG 按权重×费率，DIP 按分值×点值。 */

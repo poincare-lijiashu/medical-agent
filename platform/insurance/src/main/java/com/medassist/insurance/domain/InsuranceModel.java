@@ -350,4 +350,78 @@ public final class InsuranceModel {
     /** 分组报表：未入组原因排行（病案质控入口）。 */
     public record GrouperReasonCount(String reason, long hits) {
     }
+
+    // ---------------------------------------------------------------- 结算对账（§291）
+
+    /**
+     * 结算对账批次（日结/月结）。
+     *
+     * <p>状态机：COMPUTED →（关闭）→ CLOSED。关闭后不可重算、不可改差异——
+     * 对账结论是财务与医保沟通的依据，必须可复查。
+     *
+     * <p>期间按**就诊业务日期**（{@code service_date}）归属，与财务结算日一致；
+     * 同一 (periodType, from, to) 只有一条，重算幂等。
+     */
+    public record ReconBatch(UUID id, String periodType, LocalDate periodFrom, LocalDate periodTo,
+                             String status, int billCount, int settledCount, int notSettledCount,
+                             int failedCount, int mismatchCount, int voidedAfterSettleCount,
+                             int unverifiedCount, int openDiffCount, BigDecimal localTotal,
+                             BigDecimal localInsurance, BigDecimal localSelfPay,
+                             BigDecimal counterpartyInsurance, BigDecimal counterpartySelfPay,
+                             BigDecimal diffAmount, String computedBy, Instant computedAt,
+                             String closedBy, Instant closedAt, long version) {
+
+        public static final String DAY = "DAY";
+        public static final String MONTH = "MONTH";
+        public static final String COMPUTED = "COMPUTED";
+        public static final String CLOSED = "CLOSED";
+
+        public boolean closed() {
+            return CLOSED.equals(status);
+        }
+    }
+
+    /**
+     * 对账差异工单。
+     *
+     * <p>类别（只对真差异建单，不伪造"省局未回传金额"的差异）：
+     * <ul>
+     *   <li>{@code NOT_SETTLED}：已确认清单没有成功的 SETTLE；</li>
+     *   <li>{@code SETTLE_FAILED}：最近一笔 SETTLE 为 FAILED，detail 记失败原因；</li>
+     *   <li>{@code AMOUNT_MISMATCH}：省局回传金额可解析且与本地不一致；</li>
+     *   <li>{@code VOIDED_AFTER_SETTLE}：清单已作废但省局已结算成功（须先冲销）。</li>
+     * </ul>
+     * 状态：OPEN → RESOLVED / IGNORED（必须留处理人与说明）；重算不再出现时 OPEN → AUTO_CLOSED。
+     */
+    public record ReconDiff(UUID id, UUID batchId, UUID billId, String billNo, UUID visitId,
+                            String category, BigDecimal localInsurance, BigDecimal localSelfPay,
+                            BigDecimal counterpartyInsurance, BigDecimal counterpartySelfPay,
+                            BigDecimal diffAmount, String detail, String status,
+                            String resolvedBy, Instant resolvedAt, String resolveNote,
+                            Instant createdAt) {
+
+        public static final String NOT_SETTLED = "NOT_SETTLED";
+        public static final String SETTLE_FAILED = "SETTLE_FAILED";
+        public static final String AMOUNT_MISMATCH = "AMOUNT_MISMATCH";
+        public static final String VOIDED_AFTER_SETTLE = "VOIDED_AFTER_SETTLE";
+
+        public static final String OPEN = "OPEN";
+        public static final String RESOLVED = "RESOLVED";
+        public static final String IGNORED = "IGNORED";
+        /** 重算后差异已消失（如补提交成功）；自动关闭，不算人工处理。 */
+        public static final String AUTO_CLOSED = "AUTO_CLOSED";
+    }
+
+    /**
+     * 对账读取投影：清单 + 最近一笔 SETTLE 交易。
+     *
+     * <p>只取对账需要的字段，不带患者姓名/证件号；{@code responsePayload} 仅用于解析
+     * 省局回传金额，解析失败按"不可验证"处理，不落第二份明文。
+     */
+    public record ReconBillRow(UUID billId, String billNo, UUID visitId, LocalDate serviceDate,
+                               String billStatus, BigDecimal totalAmount,
+                               BigDecimal insuranceAmount, BigDecimal selfPayAmount,
+                               String settleStatus, int attempts, String lastError,
+                               String responsePayload) {
+    }
 }

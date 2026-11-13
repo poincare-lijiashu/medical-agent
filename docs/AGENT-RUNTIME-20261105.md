@@ -13281,3 +13281,65 @@ Python：全量 2045 passed / 1 skipped（新增/改写 5 条计量用例；含�
 网关模块门禁灰度强制（租户→科室→全量）；单院恢复演练纳入发布门禁；
 授权与用量 Grafana 看板收口。
 
+---
+
+## 291. 2026-11-13 医保日结/月结对账与差异工单（第 291 批 / 计划书 W2.5）
+
+**为什么"单就诊对账"不够**
+
+§261 起已有清单级对账（本地金额 vs 当前收费重算），但它回答不了财务与医保办每天要问的三件事：
+**昨天/上月一共多少已确认清单没结算成功、金额差多少、谁在处理**。
+结算失败只留在 `realtime_settlement.last_error`，没人汇总就永远发现不了；
+"作废了但省局已出账"更是只能在审计时被偶然发现。
+
+**本批做了什么**
+
+1. **对账批次（`settlement_recon_batch`）**
+   - 期间按**就诊业务日期** `service_date` 归属（与财务结算日一致），日结=单日、月结=完整自然月；
+   - 同一 `(period_type, period_from, period_to)` 唯一，**重算幂等**；
+   - `COMPUTED → CLOSED` 单向：关闭即结论，之后不可重算/处理（数据库触发器兜底禁改/禁删）。
+2. **差异工单（`settlement_recon_diff`）**——只对真差异建单：
+   - `NOT_SETTLED`：已确认但无成功 SETTLE；
+   - `SETTLE_FAILED`：最近一笔 SETTLE 失败，附失败原因；
+   - `AMOUNT_MISMATCH`：省局回传 `fund_pay_sumamt/psn_pay` 可解析且与本地差 >0.01 元；
+   - `VOIDED_AFTER_SETTLE`：清单已作废但省局已结算成功（必须先冲销）。
+   - 省局未回传金额时**不伪造差异**，只计 `unverified_count`（对账不可验证张数）。
+3. **重算不推翻人工结论**
+   - 重算先把本批 OPEN 全部置为 `AUTO_CLOSED`，再由仍然存在的差异重新打开；
+   - `RESOLVED` / `IGNORED` 是人工结论，任何重算都不覆盖；
+   - 重算写回走版本 CAS，被他人抢先时显式 409，不静默覆盖。
+4. **权限与范围**
+   - 新增 `insurance:recon:read` / `insurance:recon:manage`（auth V100）；
+   - 对账必须**全院视角**（院区受限账号 403），避免把部分数据当全院结论；
+   - 窗口（REGISTRAR）不授予 manage；医保办可生成/处理/关闭；运营只读。
+5. **运营与前端**
+   - `medassist_insurance_recon_action_total{action,result}` + `medassist_insurance_recon_open_diffs`；
+   - 医保运维页新增「结算对账」页签：生成批次、看汇总/差异、处理、关闭；
+   - 差异与批次均不含患者姓名/证件号。
+
+**验证**
+
+```
+Java：SettlementReconServiceTest 10 passed（分类/汇总/范围/期间/幂等/CAS/关闭语义）
+      ReconControllerPermissionTest 3 passed（read 不得生成/处理/关闭）
+      全量 insurance 模块回归通过
+前端：typecheck 通过；build 通过（入口 gzip 99.28 KB < 110 KB）
+真实栈（8087，dev）：
+  V25 迁移        flyway_schema_history version=25 success=t
+  日结（11-05）   14 张已确认 / 1 已结算 / 13 未处理 / 差额 130.00
+  差异语义        首条 NOT_SETTLED，detail=「尚未提交医保结算」
+  处理差异        200 → RESOLVED，未处理 13 → 12
+  关闭门禁        仍有 12 条 → 422「不能关闭；请处理或标记忽略后再关闭」
+  权限隔离        REGISTRAR + settlement:read → 403「缺少 insurance:recon:read」
+```
+
+**已知边界**
+
+- 当前是"院内清单 vs 省局回传"两方对账；财务实收（收费票据）仍由门诊日结单独统计，
+  三方（收费-医保-财务）自动勾稽列入后续批次；
+- 省局回执字段按统筹区差异很大，金额解析只认已知字段，其它情况归为"不可验证"。
+
+**下一批建议（§292）**
+
+三方对账（接入收费票据实收）、网关模块门禁灰度强制、单院恢复演练纳入发布门禁。
+

@@ -70,6 +70,10 @@ import type {
   InsuranceMember,
   InsuranceMemberHistory,
   InsuranceReconcile,
+  InsuranceReconBatch,
+  InsuranceReconBatchList,
+  InsuranceReconDetail,
+  InsuranceReconDiff,
   InsuranceRealtimeSettlement,
   ChargeMapping,
   GroupSimulation,
@@ -1557,6 +1561,17 @@ export const insuranceOpsApi = {
   /** 失败交易手动重试；已成功幂等返回。 */
   retryRealtimeSettlement: (id: string) =>
     post<InsuranceRealtimeSettlement>(`/insurance/realtime-settlements/${id}/retry`),
+  // ---- 结算对账（§291，需 insurance:recon:read / insurance:recon:manage）----
+  reconBatches: (limit = 50) =>
+    get<InsuranceReconBatchList>('/insurance/recon/batches', { limit }),
+  computeRecon: (body: { periodType: 'DAY' | 'MONTH'; periodFrom: string; periodTo: string }) =>
+    post<InsuranceReconBatch>('/insurance/recon/batches', body),
+  reconDetail: (id: string, params: { diffStatus?: string; limit?: number } = {}) =>
+    get<InsuranceReconDetail>(`/insurance/recon/batches/${id}`, params),
+  closeRecon: (id: string) =>
+    post<InsuranceReconBatch>(`/insurance/recon/batches/${id}/close`),
+  resolveReconDiff: (id: string, body: { status: 'RESOLVED' | 'IGNORED'; note: string }) =>
+    post<InsuranceReconDiff>(`/insurance/recon/diffs/${id}/resolve`, body),
 }
 
 export const insuranceGroupingApi = {
