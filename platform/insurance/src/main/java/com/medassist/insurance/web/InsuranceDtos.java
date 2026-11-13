@@ -302,4 +302,52 @@ public final class InsuranceDtos {
 
     public record ReconBatchList(List<com.medassist.insurance.domain.InsuranceModel.ReconBatch> items) {
     }
+
+    // ---------------------------------------------------------------- 支付方分摊（§292）
+
+    /** 新增支付方：编码大写字母/数字/下划线，类型决定分摊校验规则。 */
+    public record CreatePayerReq(
+            @NotBlank @Pattern(regexp = "[A-Z0-9_]{2,32}", message = "支付方编码只允许大写字母、数字与下划线")
+            String code,
+            @NotBlank @Size(max = 64) String name,
+            @NotBlank @Pattern(regexp = "BASIC|SELF|COMMERCIAL|ASSISTANCE",
+                    message = "支付方类型不合法") String payerType,
+            Integer sortNo,
+            @Size(max = 256) String remark) {
+    }
+
+    /** 修改支付方：版本用于乐观锁，避免并发覆盖名称/类型。 */
+    public record UpdatePayerReq(
+            @NotBlank @Size(max = 64) String name,
+            @NotBlank @Pattern(regexp = "BASIC|SELF|COMMERCIAL|ASSISTANCE",
+                    message = "支付方类型不合法") String payerType,
+            Integer sortNo,
+            @Size(max = 256) String remark,
+            @NotNull Long version) {
+    }
+
+    public record PayerToggleReq(@NotNull Boolean enabled, @NotNull Long version) {
+    }
+
+    /** 单条分摊：金额由财务按协议填写，服务端只校验合计与医保部分。 */
+    public record AllocationItemReq(
+            @NotBlank @Size(max = 32) String payerCode,
+            @NotNull @DecimalMin(value = "0.01", message = "分摊金额必须大于 0") BigDecimal amount) {
+    }
+
+    /** 一次分摊：各支付方金额合计必须等于清单总额。 */
+    public record AllocateReq(
+            @NotEmpty @Size(max = 10, message = "单张清单最多 10 个支付方")
+            List<@Valid AllocationItemReq> items) {
+    }
+
+    /** 退费：金额不得超过原分摊余额，原因必填（写入不可改写台账）。 */
+    public record AllocationRefundReq(
+            @NotNull @DecimalMin(value = "0.01", message = "退费金额必须大于 0") BigDecimal amount,
+            @NotBlank @Size(min = 2, max = 256) String reason) {
+    }
+
+    public record AllocationBillList(
+            List<com.medassist.insurance.domain.InsuranceModel.AllocationBillRow> items) {
+    }
 }

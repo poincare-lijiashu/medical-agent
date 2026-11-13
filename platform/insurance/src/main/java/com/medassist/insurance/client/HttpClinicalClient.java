@@ -108,6 +108,51 @@ public class HttpClinicalClient implements ClinicalClient {
 
     @Override
     @SuppressWarnings("unchecked")
+    public Collections collections(LocalDate from, LocalDate to) {
+        if (from == null || to == null) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "实收汇总必须指定期间");
+        }
+        if (token.isBlank()) {
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "医保服务未配置临床域内部令牌，无法读取收费实收");
+        }
+        Map<?, ?> body;
+        try {
+            body = client.get()
+                    .uri(uri -> uri.path("/internal/finance/visits/collections")
+                            .queryParam("from", from)
+                            .queryParam("to", to)
+                            .queryParam("limit", 5000)
+                            .build())
+                    .header("X-Internal-Token", token)
+                    .retrieve()
+                    .body(Map.class);
+        } catch (RestClientException e) {
+            log.warn("insurance.clinical_collections_unavailable from={} to={} err={}",
+                    from, to, e.getClass().getSimpleName());
+            throw new BusinessException(ErrorCode.UPSTREAM_UNAVAILABLE,
+                    "临床收费汇总暂不可用，无法做三方对账，请稍后重试");
+        }
+        List<ClinicCollection> items = new ArrayList<>();
+        Object raw = body == null ? null : body.get("items");
+        if (raw instanceof List<?> rows) {
+            for (Object row : rows) {
+                if (!(row instanceof Map<?, ?> m)) {
+                    continue;
+                }
+                items.add(new ClinicCollection(
+                        uuid(m.get("visitId")), date(m.get("serviceDate")),
+                        decimal(m.get("totalAmount")), decimal(m.get("paidAmount")),
+                        decimal(m.get("unpaidAmount")), decimal(m.get("refundedAmount")),
+                        decimal(m.get("receiptAmount")), integer(m.get("receiptCount"))));
+            }
+        }
+        boolean truncated = body != null && Boolean.TRUE.equals(body.get("truncated"));
+        return new Collections(items, truncated);
+    }
+
+    @Override
+    @SuppressWarnings("unchecked")
     public DiagnosisSummary diagnoses(UUID visitId) {
         if (visitId == null) {
             return new DiagnosisSummary(null, List.of());
@@ -180,6 +225,17 @@ public class HttpClinicalClient implements ClinicalClient {
             return new BigDecimal(String.valueOf(o));
         } catch (NumberFormatException e) {
             return BigDecimal.ZERO;
+        }
+    }
+
+    private static int integer(Object o) {
+        if (o instanceof Number n) {
+            return n.intValue();
+        }
+        try {
+            return o == null ? 0 : Integer.parseInt(String.valueOf(o));
+        } catch (NumberFormatException e) {
+            return 0;
         }
     }
 }

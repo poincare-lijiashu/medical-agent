@@ -74,6 +74,11 @@ import type {
   InsuranceReconBatchList,
   InsuranceReconDetail,
   InsuranceReconDiff,
+  InsurancePayer,
+  InsuranceAllocationBill,
+  InsuranceAllocationBillList,
+  InsuranceAllocationView,
+  InsuranceSettlementAllocation,
   InsuranceRealtimeSettlement,
   ChargeMapping,
   GroupSimulation,
@@ -1572,6 +1577,30 @@ export const insuranceOpsApi = {
     post<InsuranceReconBatch>(`/insurance/recon/batches/${id}/close`),
   resolveReconDiff: (id: string, body: { status: 'RESOLVED' | 'IGNORED'; note: string }) =>
     post<InsuranceReconDiff>(`/insurance/recon/diffs/${id}/resolve`, body),
+  // ---- 支付方分摊（§292，需 insurance:payer:read / insurance:payer:manage）----
+  payers: (enabledOnly = false) =>
+    get<InsurancePayer[]>('/insurance/payers', { enabledOnly }),
+  createPayer: (body: {
+    code: string
+    name: string
+    payerType: string
+    sortNo?: number
+    remark?: string
+  }) => post<InsurancePayer>('/insurance/payers', body),
+  updatePayer: (
+    code: string,
+    body: { name: string; payerType: string; sortNo?: number; remark?: string; version: number },
+  ) => put<InsurancePayer>(`/insurance/payers/${encodeURIComponent(code)}`, body),
+  togglePayer: (code: string, enabled: boolean, version: number) =>
+    put<InsurancePayer>(`/insurance/payers/${encodeURIComponent(code)}/enabled`, { enabled, version }),
+  allocationBills: (pending = true, limit = 50) =>
+    get<InsuranceAllocationBillList>('/insurance/allocations/bills', { pending, limit }),
+  allocationView: (billId: string) =>
+    get<InsuranceAllocationView>(`/insurance/allocations/bills/${billId}`),
+  allocate: (billId: string, items: { payerCode: string; amount: number }[]) =>
+    post<InsuranceAllocationView>(`/insurance/allocations/bills/${billId}`, { items }),
+  refundAllocation: (id: string, body: { amount: number; reason: string }) =>
+    post<InsuranceSettlementAllocation>(`/insurance/allocations/${id}/refund`, body),
 }
 
 export const insuranceGroupingApi = {

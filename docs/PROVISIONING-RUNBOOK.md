@@ -441,3 +441,54 @@ curl "http://127.0.0.1:8080/api/v2/insurance/recon/batches?limit=20" -H "Authori
   - 差异关闭不了 → 仍有 OPEN 差异，先处理或标记忽略；
   - 重算报 409 → 他人已重算/关闭，刷新后再操作；
   - 大量「不可验证」→ 省局回执未回传金额，需与省局确认字段口径。
+
+## 14. 三方对账与多支付方分摊（§292 / 计划书 W2.5+W2.6）
+
+### 14.1 三方对账
+
+| 腿 | 数据来源 | 口径 |
+| --- | --- | --- |
+| 临床实收 | 临床域内部接口 `/internal/finance/visits/collections` | 收费单 `PAID` 金额；按就诊业务日期归属 |
+| 本地清单 | `settlement_bill` | 已确认清单的总额/基金/自付快照 |
+| 省局回传 | 最近一笔 `SETTLE` 响应 | `fund_pay_sumamt` / `psn_pay`，解析不到计"不可验证" |
+
+- 新增差异类别：`CLINIC_UNDER_COLLECTED`（清单有金额但未实收/已退费）、
+  `CLINIC_OVER_COLLECTED`（实收大于清单）；
+- 临床差异**不计入省局差额**（`diff_amount` 仍只统计清单 vs 省局）；
+- 临床汇总单批上限 5000 条，超过时生成失败，须按月或缩小范围；
+- 临床服务不可达时对账返回 503：**不允许把"读不到实收"当成"已收清"**。
+
+排障：
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 生成报"临床收费汇总暂不可用" | 8083 不可达或令牌缺失 | 确认临床服务、`INSURANCE_CLINICAL_TOKEN` 一致 |
+| 大批「临床未实收」 | 清单确认后患者未结算，或退费后未红冲 | 收费处补收/退费，医保办按结果红冲清单 |
+| 「临床多收」 | 清单漏报或退费未红冲 | 核对收费明细后重新生成清单 |
+
+### 14.2 多支付方分摊
+
+1. 医保运维 →「支付方分摊」→ 先确认支付方字典（BASIC/SELF/COMMERCIAL/ASSISTANCE）已启用；
+2. 「待分摊」选择已确认清单 → 填各方金额：
+   - BASIC（医保统筹）合计必须等于清单统筹支付；
+   - 其余支付方合计等于个人自付；全部合计必须等于清单总额；
+3. 提交后写入追加式台账；调整必须先对原分摊「退费」，再重新分摊；
+4. 退费必须写原因，累计不得超过原分摊余额；台账禁止修改/删除（数据库触发器兜底）；
+5. 清单作废前必须先把分摊全部冲销，否则作废会被拒绝。
+
+```bash
+# 查看待分摊清单（需 insurance:payer:read）
+curl "http://127.0.0.1:8080/api/v2/insurance/allocations/bills?pending=true&limit=20" \
+  -H "Authorization: Bearer <token>"
+# 首次分摊（需 insurance:payer:manage；金额合计必须等于清单总额）
+curl -X POST http://127.0.0.1:8080/api/v2/insurance/allocations/bills/<billId> \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" \
+  -d '{"items":[{"payerCode":"BASIC_INSURANCE","amount":70.00},{"payerCode":"SELF_PAY","amount":30.00}]}'
+```
+
+### 14.3 权限与指标
+
+- `insurance:payer:read`：ADMIN / INSURANCE_OFFICER / OPS_MANAGER；
+- `insurance:payer:manage`：ADMIN / INSURANCE_OFFICER（窗口不可见）；
+- `medassist_insurance_payer_action_total{action,result}`：
+  `create_payer / update_payer / enable_payer / disable_payer / allocate / refund`。

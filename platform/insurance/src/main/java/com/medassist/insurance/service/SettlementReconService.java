@@ -4,6 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
 import com.medassist.common.time.BusinessTime;
+import com.medassist.insurance.client.ClinicalClient;
 import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ReconBatch;
 import com.medassist.insurance.domain.InsuranceModel.ReconBillRow;
@@ -20,6 +21,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -53,12 +55,14 @@ public class SettlementReconService {
     private static final int MAX_DETAIL_CHARS = 200;
 
     private final InsuranceRepository repo;
+    private final ClinicalClient clinical;
     private final ObjectMapper json;
     private final InsuranceMetrics metrics;
 
-    public SettlementReconService(InsuranceRepository repo, ObjectMapper json,
-                                  InsuranceMetrics metrics) {
+    public SettlementReconService(InsuranceRepository repo, ClinicalClient clinical,
+                                  ObjectMapper json, InsuranceMetrics metrics) {
         this.repo = repo;
+        this.clinical = clinical;
         this.json = json;
         this.metrics = metrics;
     }
@@ -95,7 +99,8 @@ public class SettlementReconService {
         }
 
         List<ReconBillRow> rows = repo.listReconBills(start, end, MAX_BILLS);
-        Computed computed = evaluate(rows);
+        Map<UUID, ClinicalClient.ClinicCollection> collections = loadCollections(start, end);
+        Computed computed = evaluate(rows, collections);
         UUID batchId = existing.map(ReconBatch::id).orElseGet(UUID::randomUUID);
         List<ReconDiff> diffs = computed.withBatch(batchId);
 
@@ -104,10 +109,12 @@ public class SettlementReconService {
             batch = new ReconBatch(batchId, type, start, end, ReconBatch.COMPUTED,
                     computed.billCount, computed.settledCount, computed.notSettledCount,
                     computed.failedCount, computed.mismatchCount, computed.voidedAfterSettleCount,
-                    computed.unverifiedCount, diffs.size(), computed.localTotal,
+                    computed.unverifiedCount, computed.clinicMismatchCount,
+                    computed.clinicUnmatchedCount, diffs.size(), computed.localTotal,
                     computed.localInsurance, computed.localSelfPay, computed.counterpartyInsurance,
-                    computed.counterpartySelfPay, computed.diffAmount, actor, java.time.Instant.now(),
-                    null, null, 0);
+                    computed.counterpartySelfPay, computed.clinicTotal,
+                    computed.clinicRefundTotal, computed.diffAmount, actor,
+                    java.time.Instant.now(), null, null, 0);
             if (!repo.insertReconBatch(batch)) {
                 throw new BusinessException(ErrorCode.CONFLICT, "该期间批次已被他人创建，请刷新后重试");
             }
@@ -126,9 +133,11 @@ public class SettlementReconService {
             batch = new ReconBatch(current.id(), type, start, end, ReconBatch.COMPUTED,
                     computed.billCount, computed.settledCount, computed.notSettledCount,
                     computed.failedCount, computed.mismatchCount, computed.voidedAfterSettleCount,
-                    computed.unverifiedCount, open, computed.localTotal, computed.localInsurance,
-                    computed.localSelfPay, computed.counterpartyInsurance,
-                    computed.counterpartySelfPay, computed.diffAmount, actor,
+                    computed.unverifiedCount, computed.clinicMismatchCount,
+                    computed.clinicUnmatchedCount, open, computed.localTotal,
+                    computed.localInsurance, computed.localSelfPay,
+                    computed.counterpartyInsurance, computed.counterpartySelfPay,
+                    computed.clinicTotal, computed.clinicRefundTotal, computed.diffAmount, actor,
                     java.time.Instant.now(), null, null, current.version());
             if (!repo.updateReconBatch(batch)) {
                 throw new BusinessException(ErrorCode.CONFLICT,
@@ -139,42 +148,73 @@ public class SettlementReconService {
         repo.logChange(actor, "RECON_COMPUTE", "RECON_BATCH", batchId.toString(),
                 detail(Map.of("periodType", type, "from", start.toString(), "to", end.toString(),
                         "bills", computed.billCount, "diffs", diffs.size(),
-                        "diffAmount", computed.diffAmount)));
+                        "diffAmount", computed.diffAmount,
+                        "clinicMismatch", computed.clinicMismatchCount)));
         metrics.reconAction("compute", true);
         metrics.recordOpenDiffs(batch.openDiffCount());
         return repo.findReconBatchById(batchId).orElse(batch);
     }
 
+    /**
+     * 拉取期间内的临床实收并按就诊建索引。
+     *
+     * <p>超过单批上限时直接拒绝：只对一部分就诊出"对账结论"比不出更危险，
+     * 必须让操作员缩小期间或按月重算。
+     */
+    private Map<UUID, ClinicalClient.ClinicCollection> loadCollections(LocalDate start,
+                                                                       LocalDate end) {
+        ClinicalClient.Collections result = clinical.collections(start, end);
+        if (result.truncated()) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED,
+                    "期间内就诊数超过单批上限，无法完成三方对账；请按月或缩小范围后重试");
+        }
+        Map<UUID, ClinicalClient.ClinicCollection> byVisit = new HashMap<>();
+        for (ClinicalClient.ClinicCollection item : result.items()) {
+            if (item.visitId() != null) {
+                byVisit.put(item.visitId(), item);
+            }
+        }
+        return byVisit;
+    }
+
     /** 计算结果的内存快照（不落库，便于单测直接断言）。 */
     private record Computed(int billCount, int settledCount, int notSettledCount, int failedCount,
                             int mismatchCount, int voidedAfterSettleCount, int unverifiedCount,
+                            int clinicMismatchCount, int clinicUnmatchedCount,
                             BigDecimal localTotal, BigDecimal localInsurance,
                             BigDecimal localSelfPay, BigDecimal counterpartyInsurance,
-                            BigDecimal counterpartySelfPay, BigDecimal diffAmount,
+                            BigDecimal counterpartySelfPay, BigDecimal clinicTotal,
+                            BigDecimal clinicRefundTotal, BigDecimal diffAmount,
                             List<ReconDiff> diffs) {
 
         List<ReconDiff> withBatch(UUID batchId) {
             return diffs.stream()
                     .map(d -> new ReconDiff(d.id(), batchId, d.billId(), d.billNo(), d.visitId(),
                             d.category(), d.localInsurance(), d.localSelfPay(),
-                            d.counterpartyInsurance(), d.counterpartySelfPay(), d.diffAmount(),
-                            d.detail(), d.status(), null, null, null, d.createdAt()))
+                            d.counterpartyInsurance(), d.counterpartySelfPay(), d.clinicTotal(),
+                            d.diffAmount(), d.detail(), d.status(), null, null, null,
+                            d.createdAt()))
                     .toList();
         }
     }
 
-    private Computed evaluate(List<ReconBillRow> rows) {
+    private Computed evaluate(List<ReconBillRow> rows,
+                              Map<UUID, ClinicalClient.ClinicCollection> collections) {
         int settled = 0;
         int notSettled = 0;
         int failed = 0;
         int mismatch = 0;
         int voidedAfterSettle = 0;
         int unverified = 0;
+        int clinicMismatch = 0;
+        int clinicUnmatched = 0;
         BigDecimal localTotal = BigDecimal.ZERO;
         BigDecimal localInsurance = BigDecimal.ZERO;
         BigDecimal localSelfPay = BigDecimal.ZERO;
         BigDecimal cpInsurance = BigDecimal.ZERO;
         BigDecimal cpSelfPay = BigDecimal.ZERO;
+        BigDecimal clinicTotal = BigDecimal.ZERO;
+        BigDecimal clinicRefundTotal = BigDecimal.ZERO;
         BigDecimal diffAmount = BigDecimal.ZERO;
         List<ReconDiff> diffs = new ArrayList<>();
 
@@ -197,6 +237,35 @@ public class SettlementReconService {
                 diffs.add(diff(row, ReconDiff.VOIDED_AFTER_SETTLE, localIns, localSelf,
                         null, null, amount, "清单已作废但省局已结算成功，须走冲销流程"));
                 continue;
+            }
+
+            // 三方对账第二腿：临床实收 vs 本地清单总额。
+            // 只对已确认清单比对；作废后已结算属于冲销问题，不重复建单。
+            // 临床差异只建工单，不计入省局差额（diff_amount 仍只统计清单 vs 省局）。
+            ClinicalClient.ClinicCollection clinic = collections.get(row.visitId());
+            BigDecimal collected = clinic == null ? BigDecimal.ZERO : nz(clinic.paidAmount());
+            BigDecimal billTotal = nz(row.totalAmount());
+            clinicTotal = clinicTotal.add(collected);
+            clinicRefundTotal = clinicRefundTotal.add(
+                    clinic == null ? BigDecimal.ZERO : nz(clinic.refundedAmount()));
+            BigDecimal under = billTotal.subtract(collected);
+            if (clinic == null || under.compareTo(TOLERANCE) > 0) {
+                clinicMismatch++;
+                if (clinic == null) {
+                    clinicUnmatched++;
+                }
+                diffs.add(clinicDiff(row, ReconDiff.CLINIC_UNDER_COLLECTED, collected, under,
+                        clinic == null
+                                ? "临床无收费记录（清单已确认但未收费）"
+                                : "清单 " + money(billTotal) + "，临床实收 " + money(collected)
+                                        + "（未收 " + money(clinic.unpaidAmount()) + "，已退 "
+                                        + money(clinic.refundedAmount()) + "）"));
+            } else if (collected.subtract(billTotal).compareTo(TOLERANCE) > 0) {
+                clinicMismatch++;
+                diffs.add(clinicDiff(row, ReconDiff.CLINIC_OVER_COLLECTED, collected,
+                        collected.subtract(billTotal),
+                        "临床实收 " + money(collected) + " 大于清单 " + money(billTotal)
+                                + "，请核对是否漏报或退费未红冲"));
             }
 
             if ("SETTLED".equals(row.settleStatus())) {
@@ -234,18 +303,33 @@ public class SettlementReconService {
             }
         }
         return new Computed(rows.size(), settled, notSettled, failed, mismatch, voidedAfterSettle,
-                unverified, scale(localTotal), scale(localInsurance), scale(localSelfPay),
-                scale(cpInsurance), scale(cpSelfPay), scale(diffAmount), diffs);
+                unverified, clinicMismatch, clinicUnmatched, scale(localTotal),
+                scale(localInsurance), scale(localSelfPay), scale(cpInsurance), scale(cpSelfPay),
+                scale(clinicTotal), scale(clinicRefundTotal), scale(diffAmount), diffs);
+    }
+
+    /** 省局/清单差异（不含临床金额，clinic_total 为 NULL）。 */
+    private static ReconDiff diff(ReconBillRow row, String category, BigDecimal localIns,
+                                  BigDecimal localSelf, BigDecimal cpIns, BigDecimal cpSelf,
+                                  BigDecimal amount, String detail) {
+        return diff(row, category, localIns, localSelf, cpIns, cpSelf, null, amount, detail);
+    }
+
+    /** 三方差异：clinicTotal 记录该就诊临床实收，便于页面直接展示"清单 vs 实收"。 */
+    private static ReconDiff clinicDiff(ReconBillRow row, String category, BigDecimal clinicPaid,
+                                        BigDecimal amount, String detail) {
+        return diff(row, category, nz(row.insuranceAmount()), nz(row.selfPayAmount()),
+                null, null, scale(clinicPaid), amount, detail);
     }
 
     private static ReconDiff diff(ReconBillRow row, String category, BigDecimal localIns,
                                   BigDecimal localSelf, BigDecimal cpIns, BigDecimal cpSelf,
-                                  BigDecimal amount, String detail) {
+                                  BigDecimal clinicTotal, BigDecimal amount, String detail) {
         return new ReconDiff(UUID.randomUUID(), null, row.billId(), row.billNo(), row.visitId(),
                 category, scale(localIns), scale(localSelf),
                 cpIns == null ? null : scale(cpIns), cpSelf == null ? null : scale(cpSelf),
-                scale(amount), detail, ReconDiff.OPEN, null, null, null,
-                java.time.Instant.now());
+                clinicTotal == null ? null : scale(clinicTotal), scale(amount), detail,
+                ReconDiff.OPEN, null, null, null, java.time.Instant.now());
     }
 
     // ---------------------------------------------------------------- 差异处理

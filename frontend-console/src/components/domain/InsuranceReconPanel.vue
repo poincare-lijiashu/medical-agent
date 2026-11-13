@@ -15,6 +15,13 @@
         :tone="(current?.diffAmount ?? 0) > 0 ? 'warn' : 'default'"
       />
       <KpiCard
+        label="临床未实收"
+        :value="current?.clinicMismatchCount ?? 0"
+        unit="张"
+        :tone="(current?.clinicMismatchCount ?? 0) > 0 ? 'danger' : 'ok'"
+        meta="清单已确认但收费未实收/已退费"
+      />
+      <KpiCard
         label="已关闭"
         :value="batches.filter((b) => b.status === 'CLOSED').length"
         unit="个"
@@ -56,8 +63,8 @@
         </div>
       </div>
       <p class="hint">
-        口径：只统计已确认清单（含作废但省局已结算成功的清单）；省局回传金额无法解析时计入
-        "不可验证"，不伪造差异。
+        口径：临床实收（收费单已结算） vs 本地清单总额 vs 省局回传；省局回传金额无法解析时计入
+        "不可验证"，不伪造差异；临床未实收会单独建单，不计入省局差额。
       </p>
     </div>
 
@@ -146,6 +153,9 @@
         <div><span class="label">本地自付</span><span class="mono">{{ money(current.localSelfPay) }}</span></div>
         <div><span class="label">省局基金</span><span class="mono">{{ money(current.counterpartyInsurance) }}</span></div>
         <div><span class="label">省局自付</span><span class="mono">{{ money(current.counterpartySelfPay) }}</span></div>
+        <div><span class="label">临床实收</span><span class="mono">{{ money(current.clinicTotal) }}</span></div>
+        <div><span class="label">临床已退</span><span class="mono">{{ money(current.clinicRefundTotal) }}</span></div>
+        <div><span class="label">临床差异</span><span class="mono">{{ current.clinicMismatchCount }} 张<template v-if="current.clinicUnmatchedCount > 0">（无收费 {{ current.clinicUnmatchedCount }} 张）</template></span></div>
         <div><span class="label">不可验证</span><span class="mono">{{ current.unverifiedCount }} 张</span></div>
       </div>
 
@@ -177,6 +187,7 @@
               <th>结算清单</th>
               <th class="num">本地基金</th>
               <th class="num">省局基金</th>
+              <th class="num">临床实收</th>
               <th class="num">差额</th>
               <th>说明</th>
               <th>状态</th>
@@ -189,6 +200,7 @@
               <td class="mono">{{ d.billNo }}</td>
               <td class="num mono">{{ money(d.localInsurance) }}</td>
               <td class="num mono">{{ d.counterpartyInsurance == null ? '—' : money(d.counterpartyInsurance) }}</td>
+              <td class="num mono">{{ d.clinicTotal == null ? '—' : money(d.clinicTotal) }}</td>
               <td class="num mono">{{ money(d.diffAmount) }}</td>
               <td class="hint">{{ d.detail || '—' }}</td>
               <td>
@@ -416,6 +428,8 @@ const CATEGORY_TEXT: Record<ReconCategory, string> = {
   SETTLE_FAILED: '结算失败',
   AMOUNT_MISMATCH: '金额不一致',
   VOIDED_AFTER_SETTLE: '作废后已结算',
+  CLINIC_UNDER_COLLECTED: '临床未实收',
+  CLINIC_OVER_COLLECTED: '临床多收',
 }
 
 function categoryText(category: ReconCategory): string {

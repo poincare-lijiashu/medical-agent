@@ -20,7 +20,7 @@ REPO_JAVA = INSURANCE_MAIN / "java/com/medassist/insurance/repo/InsuranceReposit
 CONTROLLER = INSURANCE_MAIN / "java/com/medassist/insurance/web/ReconController.java"
 METRICS = INSURANCE_MAIN / "java/com/medassist/insurance/config/InsuranceMetrics.java"
 
-AUTH_V100 = AUTH_MAIN / "resources/db/migration/auth/V100__insurance_recon_permissions.sql"
+AUTH_V100 = AUTH_MAIN / "resources/db/migration/auth/V101__insurance_recon_permissions.sql"
 
 CONSOLE = REPO / "frontend-console/src"
 API = CONSOLE / "api/index.ts"

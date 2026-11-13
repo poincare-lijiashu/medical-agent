@@ -53,6 +53,14 @@
         >
           结算对账
         </button>
+        <button
+          class="seg-btn"
+          :class="{ active: tab === 'payer' }"
+          type="button"
+          @click="tab = 'payer'"
+        >
+          支付方分摊
+        </button>
       </div>
       <span class="spacer" />
       <span class="hint">
@@ -65,7 +73,9 @@
                 ? '院内模拟预分组，不替代省局正式分组与结算'
                 : tab === 'realtime'
                   ? '同一清单同一请求号只出账一次，失败可人工重试'
-                  : '日结/月结按业务日期归属；有未处理差异不能关闭'
+                  : tab === 'recon'
+                    ? '临床实收 / 本地清单 / 省局回传三方对账；有未处理差异不能关闭'
+                    : '分摊合计必须等于清单总额；台账只增不改，调整须先退费'
         }}
       </span>
     </div>
@@ -80,7 +90,8 @@
       @load-error="onPanelError"
     />
     <InsuranceRealtimePanel v-else-if="tab === 'realtime'" />
-    <InsuranceReconPanel v-else />
+    <InsuranceReconPanel v-else-if="tab === 'recon'" />
+    <InsurancePayerPanel v-else />
   </div>
 </template>
 
@@ -94,10 +105,11 @@ import InsuranceExportPanel from '@/components/domain/InsuranceExportPanel.vue'
 import InsuranceGroupingPanel from '@/components/domain/InsuranceGroupingPanel.vue'
 import InsuranceRealtimePanel from '@/components/domain/InsuranceRealtimePanel.vue'
 import InsuranceReconPanel from '@/components/domain/InsuranceReconPanel.vue'
+import InsurancePayerPanel from '@/components/domain/InsurancePayerPanel.vue'
 import { session } from '@/stores/session'
 
 const role = session.roleLabel
-const tab = ref<'catalog' | 'export' | 'grouping' | 'realtime' | 'recon'>('catalog')
+const tab = ref<'catalog' | 'export' | 'grouping' | 'realtime' | 'recon' | 'payer'>('catalog')
 
 /**
  * 目录 / 报盘 / 实时结算面板各自渲染 LoadError；DRG/DIP 面板按 tab 懒挂载，

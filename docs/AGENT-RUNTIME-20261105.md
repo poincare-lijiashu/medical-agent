@@ -13309,7 +13309,7 @@ Python：全量 2045 passed / 1 skipped（新增/改写 5 条计量用例；含�
    - `RESOLVED` / `IGNORED` 是人工结论，任何重算都不覆盖；
    - 重算写回走版本 CAS，被他人抢先时显式 409，不静默覆盖。
 4. **权限与范围**
-   - 新增 `insurance:recon:read` / `insurance:recon:manage`（auth V100）；
+   - 新增 `insurance:recon:read` / `insurance:recon:manage`（auth V101）；
    - 对账必须**全院视角**（院区受限账号 403），避免把部分数据当全院结论；
    - 窗口（REGISTRAR）不授予 manage；医保办可生成/处理/关闭；运营只读。
 5. **运营与前端**
@@ -13342,4 +13342,72 @@ Java：SettlementReconServiceTest 10 passed（分类/汇总/范围/期间/幂等
 **下一批建议（§292）**
 
 三方对账（接入收费票据实收）、网关模块门禁灰度强制、单院恢复演练纳入发布门禁。
+
+---
+
+## 292. 2026-11-13 三方对账与多支付方分摊（第 292 批 / 计划书 W2.5+W2.6）
+
+**为什么需要这一批**
+
+1. §291 只比"本地清单 vs 省局回传"，回答不了"清单已确认但患者根本没交钱"、
+   "收费已退但清单未红冲"这类**院内实收**问题；
+2. 一张清单的个人自付在真实医院里常由自费 + 商保 + 救助 + 单位补助共同承担，
+   只记一个 `self_pay_amount` 无法按支付方出账，也无法追溯"退费退给谁"。
+
+**本批做了什么**
+
+1. **临床实收内网汇总（第二腿）**
+   - 新增 `GET /internal/finance/visits/collections`（共享令牌、只读、不含姓名/证件号）；
+   - 按就诊业务日期（住院取出院日、门诊取挂号日）汇总：应收总额、已实收、未实收、已退费、有效票据金额；
+   - 一次查询覆盖整个期间，避免逐就诊 N+1；超过 5000 条直接标记 truncated，
+     医保侧拒绝出结论（部分数据不能当全院结论）。
+2. **三方对账（扩展 §291 批次）**
+   - 每张已确认清单比对：**临床实收 vs 本地清单总额**；
+   - 新增差异类别：`CLINIC_UNDER_COLLECTED`（未实收/已退费）、`CLINIC_OVER_COLLECTED`（实收大于清单）；
+   - 批次新增 `clinic_total / clinic_refund_total / clinic_mismatch_count / clinic_unmatched_count`；
+   - 临床差异**不计入省局差额** `diff_amount`，避免两类问题混在一起；
+   - 临床服务不可达时对账直接 503——绝不把"读不到"当"收清了"。
+3. **多支付方分摊（`payer_config` + `settlement_allocation`）**
+   - 支付方字典：BASIC 医保统筹 / SELF 自费 / COMMERCIAL 商保 / ASSISTANCE 救助；
+   - 首次分摊：各支付方金额合计必须等于清单总额；BASIC 合计必须等于清单统筹支付；
+   - 同一清单同一支付方只允许一条 CHARGE（部分唯一索引 + 服务层前置校验）；
+   - 台账**只增不改**：退费追加 REFUND 记录并指向原分摊、必须写原因，
+     退费累计不得超过原分摊余额；数据库触发器禁止 UPDATE/DELETE；
+   - 清单作废前必须先把分摊冲销为 0，否则拒绝作废（防止钱还在账上、单据已消失）。
+4. **权限与运营**
+   - auth V102：`insurance:payer:read` / `insurance:payer:manage`；
+     医保办可维护/分摊/退费，运营只读，窗口不可见；
+   - 指标 `medassist_insurance_payer_action_total{action,result}`；
+   - 医保运维页新增「支付方分摊」页签：字典维护、待分摊/已分摊列表、
+     分摊弹窗（默认带回统筹与自付金额）、台账与退费；对账页签展示临床实收/已退/差异。
+
+**验证**
+
+```
+Java：PayerAllocationServiceTest 6 passed（合计/BASIC/重复分摊/超额退费/追加台账）
+      SettlementReconServiceTest 10 passed（含三方差异分类与汇总）
+      InsuranceServiceTest 新增"未冲销分摊禁止作废"用例；insurance 模块 244 tests 全通过
+Python：全量 pytest 2058 passed / 1 skipped（含 §292 契约锁 7 条）
+前端：typecheck 通过；build 通过（入口 gzip 99.39 KB）
+迁移：insurance V26（payer_config / settlement_allocation / 三方字段）→ v26 成功
+      auth V101（对账权限）+ V102（支付方权限）→ v102 成功
+真实栈（8087/8083/8081，dev）：
+  临床实收接口  items 正常返回（业务日期归属；limit 超出 truncated=true）
+  三方对账      11-05：14 张已确认 / 临床差异 14 张（全部未实收）/
+                未结算 13 张 / 省局差额 130.00 / OPEN 工单 27 条
+  支付方分摊    SB20261105000214：统筹 10.00 → CHARGE；
+                退费 1.00 → REFUND 指向原分摊；收尾清零后净额 0.00
+```
+
+**已知边界**
+
+- 临床实收按"收费单状态"汇总，收费单是一就诊一张；多次补收费通过 charge_item 累计，
+  退款通过 REFUNDED/退药冲减体现，不会按流水拆成多张；
+- 分摊是"首次一次性写入"，调整必须走退费再分摊，不提供覆盖式修改（财务可追溯优先）；
+- 商保/救助的具体协议规则（比例、封顶、拒付）不在本批，本批只落"钱由谁承担"的台账。
+
+**下一批建议（§293）**
+
+IHE XDS/CDA 文档共享、指标字典与血缘、AI 漂移/误报闭环、院感/传染病上报。
+
 

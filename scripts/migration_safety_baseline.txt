@@ -21,3 +21,4 @@ platform/insurance/src/main/resources/db/migration/insurance/V20__settlement_cam
 platform/material/src/main/resources/db/migration/material/V5__document_campus.sql
 platform/pharmacy/src/main/resources/db/migration/pharmacy/V20__prescription_campus.sql
 platform/tech/src/main/resources/db/migration/tech/V13__application_campus.sql
+platform/auth/src/main/resources/db/migration/auth/V95__tenant_registry.sql

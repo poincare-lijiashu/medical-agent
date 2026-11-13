@@ -3,6 +3,7 @@ package com.medassist.insurance.service;
 import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.common.security.DataScope;
+import com.medassist.insurance.client.ClinicalClient;
 import com.medassist.insurance.config.InsuranceMetrics;
 import com.medassist.insurance.domain.InsuranceModel.ReconBatch;
 import com.medassist.insurance.domain.InsuranceModel.ReconBillRow;
@@ -50,6 +51,7 @@ class SettlementReconServiceTest {
     private static final DataScope ALL = DataScope.all("admin01", true);
 
     private InsuranceRepository repo;
+    private ClinicalClient clinical;
     private InsuranceMetrics metrics;
     private SettlementReconService service;
     private final AtomicReference<ReconBatch> stored = new AtomicReference<>();
@@ -57,9 +59,12 @@ class SettlementReconServiceTest {
     @BeforeEach
     void setUp() {
         repo = Mockito.mock(InsuranceRepository.class);
+        clinical = Mockito.mock(ClinicalClient.class);
         metrics = Mockito.mock(InsuranceMetrics.class);
-        service = new SettlementReconService(repo, new ObjectMapper(), metrics);
+        service = new SettlementReconService(repo, clinical, new ObjectMapper(), metrics);
 
+        when(clinical.collections(any(), any()))
+                .thenReturn(new ClinicalClient.Collections(List.of(), false));
         when(repo.findReconBatch(anyString(), any(), any())).thenReturn(Optional.empty());
         when(repo.insertReconBatch(any())).thenAnswer(inv -> {
             stored.set(inv.getArgument(0));
@@ -73,14 +78,22 @@ class SettlementReconServiceTest {
     @Test
     @DisplayName("按差异类别汇总，只对真差异建单；未回传金额不计差异")
     void classifiesDiffsAndTotals() {
+        ReconBillRow a = row("SB-A", "CONFIRMED", "SETTLED", 100, 20, payload(100, 20));
+        ReconBillRow b = row("SB-B", "CONFIRMED", "SETTLED", 100, 20, payload(90, 20));
+        ReconBillRow c = row("SB-C", "CONFIRMED", null, 100, 0, null);
+        ReconBillRow failedRow = row("SB-D", "CONFIRMED", "FAILED", 100, 0, null, "平台超时");
+        ReconBillRow e = row("SB-E", "VOIDED", "SETTLED", 50, 10, payload(50, 10));
+        ReconBillRow f = row("SB-F", "CONFIRMED", "SETTLED", 100, 0, "{\"ret_code\":\"0\"}");
         when(repo.countReconBills(DAY, DAY)).thenReturn(6L);
-        when(repo.listReconBills(DAY, DAY, 10_000)).thenReturn(List.of(
-                row("SB-A", "CONFIRMED", "SETTLED", 100, 20, payload(100, 20)),
-                row("SB-B", "CONFIRMED", "SETTLED", 100, 20, payload(90, 20)),
-                row("SB-C", "CONFIRMED", null, 100, 0, null),
-                row("SB-D", "CONFIRMED", "FAILED", 100, 0, null, "平台超时"),
-                row("SB-E", "VOIDED", "SETTLED", 50, 10, payload(50, 10)),
-                row("SB-F", "CONFIRMED", "SETTLED", 100, 0, "{\"ret_code\":\"0\"}")));
+        when(repo.listReconBills(DAY, DAY, 10_000)).thenReturn(List.of(a, b, c, failedRow, e, f));
+        // 三方对账：A/B/F 已实收，C/D 未实收；作废单不参与临床比对
+        when(clinical.collections(DAY, DAY)).thenReturn(new ClinicalClient.Collections(List.of(
+                collection(a.visitId(), 120),
+                collection(b.visitId(), 120),
+                collection(c.visitId(), 0),
+                collection(failedRow.visitId(), 0),
+                collection(e.visitId(), 60),
+                collection(f.visitId(), 100)), false));
 
         ReconBatch batch = service.compute("DAY", DAY.toString(), DAY.toString(), "admin01", ALL);
 
@@ -91,7 +104,9 @@ class SettlementReconServiceTest {
         assertThat(batch.mismatchCount()).isEqualTo(1);
         assertThat(batch.voidedAfterSettleCount()).isEqualTo(1);
         assertThat(batch.unverifiedCount()).isEqualTo(1);
-        assertThat(batch.openDiffCount()).isEqualTo(4);
+        assertThat(batch.clinicMismatchCount()).isEqualTo(2);
+        assertThat(batch.clinicUnmatchedCount()).isZero();
+        assertThat(batch.openDiffCount()).isEqualTo(6);
 
         // 本地金额只累计已确认清单（作废单不计入总收入）
         assertThat(batch.localTotal()).isEqualByComparingTo("540.00");
@@ -100,16 +115,22 @@ class SettlementReconServiceTest {
         // 省局金额只累计"已结算且可解析"的确认清单
         assertThat(batch.counterpartyInsurance()).isEqualByComparingTo("190.00");
         assertThat(batch.counterpartySelfPay()).isEqualByComparingTo("40.00");
-        // 差额：金额不一致 10 + 未结算 100 + 失败 100 + 作废后已结算 60
+        // 临床实收：A/B/F 已收（120+120+100=340），C/D 未收
+        assertThat(batch.clinicTotal()).isEqualByComparingTo("340.00");
+        // 差额：金额不一致 10 + 未结算 100 + 失败 100 + 作废后已结算 60（临床差异不计入省局差额）
         assertThat(batch.diffAmount()).isEqualByComparingTo("270.00");
 
         ArgumentCaptor<ReconDiff> captor = ArgumentCaptor.forClass(ReconDiff.class);
-        verify(repo, Mockito.times(4)).insertReconDiff(captor.capture());
+        verify(repo, Mockito.times(6)).insertReconDiff(captor.capture());
         assertThat(captor.getAllValues()).extracting(ReconDiff::category)
-                .containsExactlyInAnyOrder(ReconDiff.AMOUNT_MISMATCH, ReconDiff.NOT_SETTLED,
-                        ReconDiff.SETTLE_FAILED, ReconDiff.VOIDED_AFTER_SETTLE);
+                .contains(ReconDiff.AMOUNT_MISMATCH, ReconDiff.NOT_SETTLED,
+                        ReconDiff.SETTLE_FAILED, ReconDiff.VOIDED_AFTER_SETTLE,
+                        ReconDiff.CLINIC_UNDER_COLLECTED);
         assertThat(captor.getAllValues()).filteredOn(d -> d.category().equals(ReconDiff.SETTLE_FAILED))
                 .singleElement().satisfies(d -> assertThat(d.detail()).contains("平台超时"));
+        assertThat(captor.getAllValues())
+                .filteredOn(d -> d.category().equals(ReconDiff.CLINIC_UNDER_COLLECTED))
+                .hasSize(2);
         verify(repo).logChange(eq("admin01"), eq("RECON_COMPUTE"), eq("RECON_BATCH"),
                 anyString(), anyString());
     }
@@ -168,8 +189,8 @@ class SettlementReconServiceTest {
         service.compute("DAY", DAY.toString(), DAY.toString(), "admin01", ALL);
 
         verify(repo).autoCloseAllOpenDiffs(existing.id());
-        verify(repo).insertReconDiff(any());
-        verify(repo).reopenAutoClosedReconDiff(any());
+        verify(repo, Mockito.atLeastOnce()).insertReconDiff(any());
+        verify(repo, Mockito.atLeastOnce()).reopenAutoClosedReconDiff(any());
         verify(repo, never()).closeReconBatch(any(), anyLong(), any());
     }
 
@@ -265,26 +286,34 @@ class SettlementReconServiceTest {
                 lastError, payload);
     }
 
+    private static ClinicalClient.ClinicCollection collection(UUID visitId, int paid) {
+        return new ClinicalClient.ClinicCollection(visitId, DAY, BigDecimal.valueOf(paid),
+                BigDecimal.valueOf(paid), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, 0);
+    }
+
     private static ReconBatch batch(long version) {
         return new ReconBatch(UUID.randomUUID(), ReconBatch.DAY, DAY, DAY, ReconBatch.COMPUTED,
-                1, 0, 1, 0, 0, 0, 0, 1, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
-                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "admin01", Instant.now(),
-                null, null, version);
+                1, 0, 1, 0, 0, 0, 0, 0, 0, 1,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO,
+                BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, "admin01",
+                Instant.now(), null, null, version);
     }
 
     private static ReconBatch withStatus(ReconBatch b, String status) {
         return new ReconBatch(b.id(), b.periodType(), b.periodFrom(), b.periodTo(), status,
                 b.billCount(), b.settledCount(), b.notSettledCount(), b.failedCount(),
                 b.mismatchCount(), b.voidedAfterSettleCount(), b.unverifiedCount(),
-                b.openDiffCount(), b.localTotal(), b.localInsurance(), b.localSelfPay(),
-                b.counterpartyInsurance(), b.counterpartySelfPay(), b.diffAmount(),
+                b.clinicMismatchCount(), b.clinicUnmatchedCount(), b.openDiffCount(),
+                b.localTotal(), b.localInsurance(), b.localSelfPay(),
+                b.counterpartyInsurance(), b.counterpartySelfPay(), b.clinicTotal(),
+                b.clinicRefundTotal(), b.diffAmount(),
                 b.computedBy(), b.computedAt(), "admin01", Instant.now(), b.version());
     }
 
     private static ReconDiff diff(String status) {
         return new ReconDiff(UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), "SB-C",
                 UUID.randomUUID(), ReconDiff.NOT_SETTLED, BigDecimal.TEN, BigDecimal.ZERO,
-                null, null, BigDecimal.TEN, "尚未提交医保结算", status, null, null, null,
+                null, null, null, BigDecimal.TEN, "尚未提交医保结算", status, null, null, null,
                 Instant.now());
     }
 }

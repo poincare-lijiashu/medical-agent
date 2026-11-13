@@ -944,6 +944,28 @@ public final class ClinicalModel {
     }
 
     /**
+     * 就诊收费实收汇总（只读投影，供医保三方对账）。
+     *
+     * <p>为什么按"就诊"而不是按收费日期：医保清单按就诊业务日期归属，
+     * 三方对账必须拿"这张就诊单到底收了多少钱"与清单总额比对；
+     * 按收费流水归日会把跨日结算/补收费拆到两个期间，产生假差异。
+     *
+     * <p>金额口径：
+     * <ul>
+     *   <li>{@code paidAmount}：已结算收费单金额（status=PAID）；</li>
+     *   <li>{@code unpaidAmount}：未结算金额（status=UNPAID，应收未收）；</li>
+     *   <li>{@code refundedAmount}：已退费金额（status=REFUNDED，原路退回后的净额）；</li>
+     *   <li>{@code receiptAmount}：已开具有效票据金额（仅作凭证核对，不参与实收判定）。</li>
+     * </ul>
+     * 只返回就诊主键与费用金额，不含患者姓名/证件号。
+     */
+    public record VisitCollection(UUID visitId, String patientNo, LocalDate serviceDate,
+                                  BigDecimal totalAmount, BigDecimal paidAmount,
+                                  BigDecimal unpaidAmount, BigDecimal refundedAmount,
+                                  BigDecimal receiptAmount, int receiptCount) {
+    }
+
+    /**
      * 药房发药费用关联（N2 收尾）。
      *
      * <p>退药冲减的幂等依据：{@code refunded(已冲减) + pending(待财务退费) + done(已退费)}

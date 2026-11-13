@@ -3,6 +3,7 @@ package com.medassist.insurance.domain;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 /** 医保域领域模型（不可变记录）。 */
@@ -365,9 +366,11 @@ public final class InsuranceModel {
     public record ReconBatch(UUID id, String periodType, LocalDate periodFrom, LocalDate periodTo,
                              String status, int billCount, int settledCount, int notSettledCount,
                              int failedCount, int mismatchCount, int voidedAfterSettleCount,
-                             int unverifiedCount, int openDiffCount, BigDecimal localTotal,
+                             int unverifiedCount, int clinicMismatchCount,
+                             int clinicUnmatchedCount, int openDiffCount, BigDecimal localTotal,
                              BigDecimal localInsurance, BigDecimal localSelfPay,
                              BigDecimal counterpartyInsurance, BigDecimal counterpartySelfPay,
+                             BigDecimal clinicTotal, BigDecimal clinicRefundTotal,
                              BigDecimal diffAmount, String computedBy, Instant computedAt,
                              String closedBy, Instant closedAt, long version) {
 
@@ -396,14 +399,18 @@ public final class InsuranceModel {
     public record ReconDiff(UUID id, UUID batchId, UUID billId, String billNo, UUID visitId,
                             String category, BigDecimal localInsurance, BigDecimal localSelfPay,
                             BigDecimal counterpartyInsurance, BigDecimal counterpartySelfPay,
-                            BigDecimal diffAmount, String detail, String status,
-                            String resolvedBy, Instant resolvedAt, String resolveNote,
-                            Instant createdAt) {
+                            BigDecimal clinicTotal, BigDecimal diffAmount, String detail,
+                            String status, String resolvedBy, Instant resolvedAt,
+                            String resolveNote, Instant createdAt) {
 
         public static final String NOT_SETTLED = "NOT_SETTLED";
         public static final String SETTLE_FAILED = "SETTLE_FAILED";
         public static final String AMOUNT_MISMATCH = "AMOUNT_MISMATCH";
         public static final String VOIDED_AFTER_SETTLE = "VOIDED_AFTER_SETTLE";
+        /** 清单有金额但临床未实收（未结算/已退费），须先补收或红冲清单。 */
+        public static final String CLINIC_UNDER_COLLECTED = "CLINIC_UNDER_COLLECTED";
+        /** 临床实收大于清单总额，疑似漏报或退费未红冲。 */
+        public static final String CLINIC_OVER_COLLECTED = "CLINIC_OVER_COLLECTED";
 
         public static final String OPEN = "OPEN";
         public static final String RESOLVED = "RESOLVED";
@@ -423,5 +430,59 @@ public final class InsuranceModel {
                                BigDecimal insuranceAmount, BigDecimal selfPayAmount,
                                String settleStatus, int attempts, String lastError,
                                String responsePayload) {
+    }
+
+    // ---------------------------------------------------------------- 支付方分摊（§292）
+
+    /**
+     * 支付方字典。
+     *
+     * <p>BASIC（医保统筹）金额必须等于清单统筹支付；SELF/COMMERCIAL/ASSISTANCE
+     * 承接剩余自付。停用只阻止新分摊，不改写历史台账。
+     */
+    public record PayerConfig(String code, String name, String payerType, boolean enabled,
+                              int sortNo, String remark, long version, String updatedBy,
+                              Instant updatedAt, Instant createdAt) {
+
+        public static final String BASIC = "BASIC";
+        public static final String SELF = "SELF";
+        public static final String COMMERCIAL = "COMMERCIAL";
+        public static final String ASSISTANCE = "ASSISTANCE";
+
+        public boolean basic() {
+            return BASIC.equals(payerType);
+        }
+    }
+
+    /**
+     * 分摊台账（追加式）：CHARGE 应收分摊 / REFUND 退费。
+     *
+     * <p>REFUND 必须指向原 CHARGE 并写原因；台账禁止 UPDATE/DELETE，
+     * 退费累计不得超过原分摊金额（服务层校验），保证"钱退给谁"可追溯。
+     */
+    public record SettlementAllocation(UUID id, UUID billId, UUID visitId, String payerCode,
+                                       String payerType, String kind, UUID originalId,
+                                       BigDecimal amount, String reason, String operator,
+                                       Instant createdAt) {
+
+        public static final String CHARGE = "CHARGE";
+        public static final String REFUND = "REFUND";
+    }
+
+    /** 支付方汇总行（应收 / 已退 / 净额）。 */
+    public record PayerAllocationLine(String payerCode, String payerName, String payerType,
+                                      BigDecimal charged, BigDecimal refunded, BigDecimal net) {
+    }
+
+    /** 待分摊/已分摊清单行（列表页用，不含患者姓名）。 */
+    public record AllocationBillRow(UUID billId, String billNo, UUID visitId, LocalDate serviceDate,
+                                    BigDecimal totalAmount, BigDecimal insuranceAmount,
+                                    BigDecimal selfPayAmount, BigDecimal chargedAmount,
+                                    BigDecimal refundedAmount, int allocationCount) {
+    }
+
+    /** 一张清单的分摊视图。 */
+    public record AllocationView(SettlementBill bill, List<SettlementAllocation> allocations,
+                                 List<PayerAllocationLine> payers) {
     }
 }

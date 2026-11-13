@@ -576,6 +576,11 @@ public class InsuranceService {
                     "该清单已纳入报盘批次，" + hint);
         });
         String normalized = reason == null ? "" : reason.trim();
+        // 分摊是财务事实：还有未冲销的支付方分摊时作废清单会让"钱还在账上、单据已不存在"
+        if (repo.outstandingAllocation(billId).compareTo(BigDecimal.ZERO) != 0) {
+            throw new BusinessException(ErrorCode.INSURANCE_BILL_STATUS_INVALID,
+                    "该清单仍有未冲销的支付方分摊，请先完成退费/冲销后再作废");
+        }
         if (!repo.voidBill(billId, normalized, actor, bill.version())) {
             throw new BusinessException(ErrorCode.CONFLICT, "结算清单状态已变化，请刷新后重试");
         }

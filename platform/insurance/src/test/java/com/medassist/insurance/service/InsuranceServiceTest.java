@@ -72,6 +72,8 @@ class InsuranceServiceTest {
                 JsonMapper.builder().build());
         // 默认首插成功；并发首插用例单独覆盖为 false
         when(repo.insertBill(any(), any())).thenReturn(true);
+        // 默认没有未冲销分摊；作废守卫用例单独覆盖
+        when(repo.outstandingAllocation(any())).thenReturn(BigDecimal.ZERO);
     }
 
     // ---------------------------------------------------------------- 计算引擎
@@ -944,6 +946,20 @@ class InsuranceServiceTest {
         verify(repo).voidBill(eq(billId), eq("费用录错"), eq("cashier01"), eq(3L));
         verify(repo).logChange(eq("cashier01"), eq("BILL_VOID"), eq("SETTLEMENT_BILL"),
                 eq(billId.toString()), anyString());
+    }
+
+    @Test
+    @DisplayName("作废：仍有未冲销分摊时拒绝（防止钱在账上、单据已消失）")
+    void voidRejectsOutstandingAllocation() {
+        when(repo.lockBillById(billId)).thenReturn(Optional.of(
+                bill(SettlementBill.CONFIRMED, 3L)));
+        when(repo.outstandingAllocation(billId)).thenReturn(new BigDecimal("100.00"));
+
+        assertThatThrownBy(() -> service.voidBill(billId, "费用录错", "cashier01"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.INSURANCE_BILL_STATUS_INVALID);
+        verify(repo, never()).voidBill(any(), anyString(), anyString(), anyLong());
     }
 
     @Test

@@ -26,6 +26,10 @@ import com.medassist.insurance.domain.InsuranceModel.RealtimeSettlement;
 import com.medassist.insurance.domain.InsuranceModel.ReconBatch;
 import com.medassist.insurance.domain.InsuranceModel.ReconBillRow;
 import com.medassist.insurance.domain.InsuranceModel.ReconDiff;
+import com.medassist.insurance.domain.InsuranceModel.PayerConfig;
+import com.medassist.insurance.domain.InsuranceModel.SettlementAllocation;
+import com.medassist.insurance.domain.InsuranceModel.PayerAllocationLine;
+import com.medassist.insurance.domain.InsuranceModel.AllocationBillRow;
 import com.medassist.insurance.domain.InsuranceModel.SchemeRate;
 import com.medassist.insurance.domain.InsuranceModel.SettlementBill;
 import org.springframework.jdbc.core.RowMapper;
@@ -1748,10 +1752,12 @@ public class InsuranceRepository {
             rs.getString("status"), rs.getInt("bill_count"), rs.getInt("settled_count"),
             rs.getInt("not_settled_count"), rs.getInt("failed_count"),
             rs.getInt("mismatch_count"), rs.getInt("voided_after_settle_count"),
-            rs.getInt("unverified_count"), rs.getInt("open_diff_count"),
+            rs.getInt("unverified_count"), rs.getInt("clinic_mismatch_count"),
+            rs.getInt("clinic_unmatched_count"), rs.getInt("open_diff_count"),
             rs.getBigDecimal("local_total"), rs.getBigDecimal("local_insurance"),
             rs.getBigDecimal("local_self_pay"), rs.getBigDecimal("counterparty_insurance"),
-            rs.getBigDecimal("counterparty_self_pay"), rs.getBigDecimal("diff_amount"),
+            rs.getBigDecimal("counterparty_self_pay"), rs.getBigDecimal("clinic_total"),
+            rs.getBigDecimal("clinic_refund_total"), rs.getBigDecimal("diff_amount"),
             rs.getString("computed_by"), rs.getTimestamp("computed_at").toInstant(),
             rs.getString("closed_by"),
             rs.getTimestamp("closed_at") == null ? null : rs.getTimestamp("closed_at").toInstant(),
@@ -1760,9 +1766,10 @@ public class InsuranceRepository {
     private static final String RECON_BATCH_COLUMNS = """
             id, period_type, period_from, period_to, status, bill_count, settled_count,
             not_settled_count, failed_count, mismatch_count, voided_after_settle_count,
-            unverified_count, open_diff_count, local_total, local_insurance, local_self_pay,
-            counterparty_insurance, counterparty_self_pay, diff_amount, computed_by, computed_at,
-            closed_by, closed_at, version
+            unverified_count, clinic_mismatch_count, clinic_unmatched_count, open_diff_count,
+            local_total, local_insurance, local_self_pay,
+            counterparty_insurance, counterparty_self_pay, clinic_total, clinic_refund_total,
+            diff_amount, computed_by, computed_at, closed_by, closed_at, version
             """;
 
     private static final RowMapper<ReconDiff> RECON_DIFF_MAPPER = (rs, i) -> new ReconDiff(
@@ -1771,7 +1778,8 @@ public class InsuranceRepository {
             rs.getObject("visit_id", UUID.class), rs.getString("category"),
             rs.getBigDecimal("local_insurance"), rs.getBigDecimal("local_self_pay"),
             rs.getBigDecimal("counterparty_insurance"), rs.getBigDecimal("counterparty_self_pay"),
-            rs.getBigDecimal("diff_amount"), rs.getString("detail"), rs.getString("status"),
+            rs.getBigDecimal("clinic_total"), rs.getBigDecimal("diff_amount"),
+            rs.getString("detail"), rs.getString("status"),
             rs.getString("resolved_by"),
             rs.getTimestamp("resolved_at") == null
                     ? null : rs.getTimestamp("resolved_at").toInstant(),
@@ -1779,8 +1787,8 @@ public class InsuranceRepository {
 
     private static final String RECON_DIFF_COLUMNS = """
             id, batch_id, bill_id, bill_no, visit_id, category, local_insurance, local_self_pay,
-            counterparty_insurance, counterparty_self_pay, diff_amount, detail, status,
-            resolved_by, resolved_at, resolve_note, created_at
+            counterparty_insurance, counterparty_self_pay, clinic_total, diff_amount, detail,
+            status, resolved_by, resolved_at, resolve_note, created_at
             """;
 
     private static final RowMapper<ReconBillRow> RECON_ROW_MAPPER = (rs, i) -> new ReconBillRow(
@@ -1871,15 +1879,18 @@ public class InsuranceRepository {
                             INSERT INTO insurance_svc.settlement_recon_batch
                                 (id, period_type, period_from, period_to, status, bill_count,
                                  settled_count, not_settled_count, failed_count, mismatch_count,
-                                 voided_after_settle_count, unverified_count, open_diff_count,
+                                 voided_after_settle_count, unverified_count,
+                                 clinic_mismatch_count, clinic_unmatched_count, open_diff_count,
                                  local_total, local_insurance, local_self_pay,
-                                 counterparty_insurance, counterparty_self_pay, diff_amount,
-                                 computed_by)
+                                 counterparty_insurance, counterparty_self_pay,
+                                 clinic_total, clinic_refund_total, diff_amount, computed_by)
                             VALUES (:id, :periodType, :from, :to, 'COMPUTED', :billCount,
                                     :settledCount, :notSettled, :failed, :mismatch,
-                                    :voidedAfterSettle, :unverified, :openDiff,
+                                    :voidedAfterSettle, :unverified,
+                                    :clinicMismatch, :clinicUnmatched, :openDiff,
                                     :localTotal, :localInsurance, :localSelfPay,
-                                    :cpInsurance, :cpSelfPay, :diffAmount, :by)
+                                    :cpInsurance, :cpSelfPay,
+                                    :clinicTotal, :clinicRefundTotal, :diffAmount, :by)
                             """)
                     .param("id", b.id()).param("periodType", b.periodType())
                     .param("from", b.periodFrom()).param("to", b.periodTo())
@@ -1888,11 +1899,15 @@ public class InsuranceRepository {
                     .param("mismatch", b.mismatchCount())
                     .param("voidedAfterSettle", b.voidedAfterSettleCount())
                     .param("unverified", b.unverifiedCount())
+                    .param("clinicMismatch", b.clinicMismatchCount())
+                    .param("clinicUnmatched", b.clinicUnmatchedCount())
                     .param("openDiff", b.openDiffCount())
                     .param("localTotal", b.localTotal()).param("localInsurance", b.localInsurance())
                     .param("localSelfPay", b.localSelfPay())
                     .param("cpInsurance", b.counterpartyInsurance())
                     .param("cpSelfPay", b.counterpartySelfPay())
+                    .param("clinicTotal", b.clinicTotal())
+                    .param("clinicRefundTotal", b.clinicRefundTotal())
                     .param("diffAmount", b.diffAmount()).param("by", b.computedBy())
                     .update();
             return true;
@@ -1912,11 +1927,16 @@ public class InsuranceRepository {
                                not_settled_count = :notSettled, failed_count = :failed,
                                mismatch_count = :mismatch,
                                voided_after_settle_count = :voidedAfterSettle,
-                               unverified_count = :unverified, open_diff_count = :openDiff,
+                               unverified_count = :unverified,
+                               clinic_mismatch_count = :clinicMismatch,
+                               clinic_unmatched_count = :clinicUnmatched,
+                               open_diff_count = :openDiff,
                                local_total = :localTotal, local_insurance = :localInsurance,
                                local_self_pay = :localSelfPay,
                                counterparty_insurance = :cpInsurance,
                                counterparty_self_pay = :cpSelfPay,
+                               clinic_total = :clinicTotal,
+                               clinic_refund_total = :clinicRefundTotal,
                                diff_amount = :diffAmount, computed_by = :by,
                                computed_at = now(), version = version + 1
                          WHERE id = :id AND status = 'COMPUTED' AND version = :version
@@ -1926,11 +1946,16 @@ public class InsuranceRepository {
                 .param("notSettled", b.notSettledCount()).param("failed", b.failedCount())
                 .param("mismatch", b.mismatchCount())
                 .param("voidedAfterSettle", b.voidedAfterSettleCount())
-                .param("unverified", b.unverifiedCount()).param("openDiff", b.openDiffCount())
+                .param("unverified", b.unverifiedCount())
+                .param("clinicMismatch", b.clinicMismatchCount())
+                .param("clinicUnmatched", b.clinicUnmatchedCount())
+                .param("openDiff", b.openDiffCount())
                 .param("localTotal", b.localTotal()).param("localInsurance", b.localInsurance())
                 .param("localSelfPay", b.localSelfPay())
                 .param("cpInsurance", b.counterpartyInsurance())
                 .param("cpSelfPay", b.counterpartySelfPay())
+                .param("clinicTotal", b.clinicTotal())
+                .param("clinicRefundTotal", b.clinicRefundTotal())
                 .param("diffAmount", b.diffAmount()).param("by", b.computedBy())
                 .update() > 0;
     }
@@ -1973,10 +1998,10 @@ public class InsuranceRepository {
                         INSERT INTO insurance_svc.settlement_recon_diff
                             (id, batch_id, bill_id, bill_no, visit_id, category, local_insurance,
                              local_self_pay, counterparty_insurance, counterparty_self_pay,
-                             diff_amount, detail, status)
+                             clinic_total, diff_amount, detail, status)
                         VALUES (:id, :batchId, :billId, :billNo, :visitId, :category,
                                 :localInsurance, :localSelfPay, :cpInsurance, :cpSelfPay,
-                                :diffAmount, :detail, 'OPEN')
+                                :clinicTotal, :diffAmount, :detail, 'OPEN')
                         ON CONFLICT (batch_id, bill_id, category) DO NOTHING
                         """)
                 .param("id", d.id()).param("batchId", d.batchId()).param("billId", d.billId())
@@ -1985,6 +2010,7 @@ public class InsuranceRepository {
                 .param("localSelfPay", d.localSelfPay())
                 .param("cpInsurance", d.counterpartyInsurance())
                 .param("cpSelfPay", d.counterpartySelfPay())
+                .param("clinicTotal", d.clinicTotal())
                 .param("diffAmount", d.diffAmount()).param("detail", d.detail())
                 .update();
     }
@@ -1996,6 +2022,7 @@ public class InsuranceRepository {
                            SET local_insurance = :localInsurance, local_self_pay = :localSelfPay,
                                counterparty_insurance = :cpInsurance,
                                counterparty_self_pay = :cpSelfPay,
+                               clinic_total = :clinicTotal,
                                diff_amount = :diffAmount, detail = :detail,
                                updated_at = now()
                          WHERE batch_id = :batchId AND bill_id = :billId
@@ -2006,6 +2033,7 @@ public class InsuranceRepository {
                 .param("localSelfPay", d.localSelfPay())
                 .param("cpInsurance", d.counterpartyInsurance())
                 .param("cpSelfPay", d.counterpartySelfPay())
+                .param("clinicTotal", d.clinicTotal())
                 .param("diffAmount", d.diffAmount()).param("detail", d.detail())
                 .update() > 0;
     }
@@ -2046,6 +2074,7 @@ public class InsuranceRepository {
                                local_self_pay = :localSelfPay,
                                counterparty_insurance = :cpInsurance,
                                counterparty_self_pay = :cpSelfPay,
+                               clinic_total = :clinicTotal,
                                diff_amount = :diffAmount, detail = :detail, updated_at = now()
                          WHERE batch_id = :batchId AND bill_id = :billId
                            AND category = :category AND status = 'AUTO_CLOSED'
@@ -2055,6 +2084,7 @@ public class InsuranceRepository {
                 .param("localSelfPay", d.localSelfPay())
                 .param("cpInsurance", d.counterpartyInsurance())
                 .param("cpSelfPay", d.counterpartySelfPay())
+                .param("clinicTotal", d.clinicTotal())
                 .param("diffAmount", d.diffAmount()).param("detail", d.detail())
                 .update() > 0;
     }
@@ -2087,6 +2117,210 @@ public class InsuranceRepository {
                          WHERE id = :id AND status = 'COMPUTED'
                         """)
                 .param("id", batchId).param("openCount", openCount).update() > 0;
+    }
+
+    // ---------------------------------------------------------------- 支付方分摊（§292）
+
+    private static final RowMapper<PayerConfig> PAYER_MAPPER = (rs, i) -> new PayerConfig(
+            rs.getString("code"), rs.getString("name"), rs.getString("payer_type"),
+            rs.getBoolean("enabled"), rs.getInt("sort_no"), rs.getString("remark"),
+            rs.getLong("version"), rs.getString("updated_by"),
+            rs.getTimestamp("updated_at").toInstant(),
+            rs.getTimestamp("created_at").toInstant());
+
+    private static final RowMapper<SettlementAllocation> ALLOCATION_MAPPER = (rs, i) ->
+            new SettlementAllocation(
+                    rs.getObject("id", UUID.class), rs.getObject("bill_id", UUID.class),
+                    rs.getObject("visit_id", UUID.class), rs.getString("payer_code"),
+                    rs.getString("payer_type"), rs.getString("kind"),
+                    rs.getObject("original_id", UUID.class), rs.getBigDecimal("amount"),
+                    rs.getString("reason"), rs.getString("operator"),
+                    rs.getTimestamp("created_at").toInstant());
+
+    public List<PayerConfig> listPayers(boolean onlyEnabled) {
+        return jdbc.sql("""
+                        SELECT code, name, payer_type, enabled, sort_no, remark, version,
+                               updated_by, updated_at, created_at
+                          FROM insurance_svc.payer_config
+                         WHERE (NOT :onlyEnabled OR enabled)
+                         ORDER BY sort_no, code
+                        """)
+                .param("onlyEnabled", onlyEnabled).query(PAYER_MAPPER).list();
+    }
+
+    public Optional<PayerConfig> findPayer(String code) {
+        return jdbc.sql("""
+                        SELECT code, name, payer_type, enabled, sort_no, remark, version,
+                               updated_by, updated_at, created_at
+                          FROM insurance_svc.payer_config WHERE code = ?
+                        """).param(code).query(PAYER_MAPPER).optional();
+    }
+
+    /** 新增支付方；重复编码返回 false。 */
+    public boolean insertPayer(PayerConfig p) {
+        try {
+            jdbc.sql("""
+                            INSERT INTO insurance_svc.payer_config
+                                (code, name, payer_type, enabled, sort_no, remark, updated_by)
+                            VALUES (:code, :name, :type, :enabled, :sortNo, :remark, :by)
+                            """)
+                    .param("code", p.code()).param("name", p.name())
+                    .param("type", p.payerType()).param("enabled", p.enabled())
+                    .param("sortNo", p.sortNo()).param("remark", p.remark())
+                    .param("by", p.updatedBy()).update();
+            return true;
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            return false;
+        }
+    }
+
+    /** 修改支付方（名称/类型/排序/备注）；CAS 版本不一致返回 false。 */
+    public boolean updatePayer(PayerConfig p) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.payer_config
+                           SET name = :name, payer_type = :type, sort_no = :sortNo,
+                               remark = :remark, updated_by = :by, updated_at = now(),
+                               version = version + 1
+                         WHERE code = :code AND version = :version
+                        """)
+                .param("code", p.code()).param("name", p.name())
+                .param("type", p.payerType()).param("sortNo", p.sortNo())
+                .param("remark", p.remark()).param("by", p.updatedBy())
+                .param("version", p.version()).update() > 0;
+    }
+
+    /** 启用/停用支付方（停用只影响新分摊，不改写历史台账）。 */
+    public boolean setPayerEnabled(String code, boolean enabled, long version, String actor) {
+        return jdbc.sql("""
+                        UPDATE insurance_svc.payer_config
+                           SET enabled = :enabled, updated_by = :by, updated_at = now(),
+                               version = version + 1
+                         WHERE code = :code AND version = :version
+                        """)
+                .param("code", code).param("enabled", enabled).param("by", actor)
+                .param("version", version).update() > 0;
+    }
+
+    public List<SettlementAllocation> listAllocations(UUID billId) {
+        return jdbc.sql("""
+                        SELECT id, bill_id, visit_id, payer_code, payer_type, kind, original_id,
+                               amount, reason, operator, created_at
+                          FROM insurance_svc.settlement_allocation
+                         WHERE bill_id = ?
+                         ORDER BY created_at, id
+                        """).param(billId).query(ALLOCATION_MAPPER).list();
+    }
+
+    public Optional<SettlementAllocation> findChargeAllocation(UUID billId, String payerCode) {
+        return jdbc.sql("""
+                        SELECT id, bill_id, visit_id, payer_code, payer_type, kind, original_id,
+                               amount, reason, operator, created_at
+                          FROM insurance_svc.settlement_allocation
+                         WHERE bill_id = :billId AND payer_code = :code AND kind = 'CHARGE'
+                        """)
+                .param("billId", billId).param("code", payerCode)
+                .query(ALLOCATION_MAPPER).optional();
+    }
+
+    public Optional<SettlementAllocation> findAllocation(UUID id) {
+        return jdbc.sql("""
+                        SELECT id, bill_id, visit_id, payer_code, payer_type, kind, original_id,
+                               amount, reason, operator, created_at
+                          FROM insurance_svc.settlement_allocation WHERE id = ?
+                        """).param(id).query(ALLOCATION_MAPPER).optional();
+    }
+
+    public void insertAllocation(SettlementAllocation a) {
+        jdbc.sql("""
+                        INSERT INTO insurance_svc.settlement_allocation
+                            (id, bill_id, visit_id, payer_code, payer_type, kind, original_id,
+                             amount, reason, operator)
+                        VALUES (:id, :billId, :visitId, :code, :type, :kind, :originalId,
+                                :amount, :reason, :operator)
+                        """)
+                .param("id", a.id()).param("billId", a.billId()).param("visitId", a.visitId())
+                .param("code", a.payerCode()).param("type", a.payerType())
+                .param("kind", a.kind()).param("originalId", a.originalId())
+                .param("amount", a.amount()).param("reason", a.reason())
+                .param("operator", a.operator()).update();
+    }
+
+    /** 某条应收分摊已退金额（用于"退费不得超过原分摊"）。 */
+    public BigDecimal sumRefunds(UUID originalId) {
+        return jdbc.sql("""
+                        SELECT COALESCE(sum(amount), 0) FROM insurance_svc.settlement_allocation
+                         WHERE original_id = ? AND kind = 'REFUND'
+                        """).param(originalId).query(BigDecimal.class).single();
+    }
+
+    /** 清单尚未冲销的分摊净额（作废清单前必须为 0，否则财务账不平）。 */
+    public BigDecimal outstandingAllocation(UUID billId) {
+        return jdbc.sql("""
+                        SELECT COALESCE(sum(CASE WHEN kind = 'CHARGE' THEN amount
+                                                 ELSE -amount END), 0)
+                          FROM insurance_svc.settlement_allocation WHERE bill_id = ?
+                        """).param(billId).query(BigDecimal.class).single();
+    }
+
+    /** 按支付方汇总一张清单的应收/已退/净额。 */
+    public List<PayerAllocationLine> summarizeAllocations(UUID billId) {
+        return jdbc.sql("""
+                        SELECT a.payer_code, p.name AS payer_name, p.payer_type,
+                               COALESCE(sum(CASE WHEN a.kind = 'CHARGE' THEN a.amount END), 0)
+                                   AS charged,
+                               COALESCE(sum(CASE WHEN a.kind = 'REFUND' THEN a.amount END), 0)
+                                   AS refunded
+                          FROM insurance_svc.settlement_allocation a
+                          JOIN insurance_svc.payer_config p ON p.code = a.payer_code
+                         WHERE a.bill_id = :billId
+                         GROUP BY a.payer_code, p.name, p.payer_type, p.sort_no
+                         ORDER BY p.sort_no, a.payer_code
+                        """)
+                .param("billId", billId)
+                .query((rs, i) -> new PayerAllocationLine(
+                        rs.getString("payer_code"), rs.getString("payer_name"),
+                        rs.getString("payer_type"), rs.getBigDecimal("charged"),
+                        rs.getBigDecimal("refunded"),
+                        rs.getBigDecimal("charged").subtract(rs.getBigDecimal("refunded"))))
+                .list();
+    }
+
+    /**
+     * 清单分摊台账列表：pending=true 只看尚未分摊的已确认清单。
+     *
+     * <p>只查已确认清单（DRAFT/VOIDED 不应分摊），按业务日期倒序；
+     * 返回已分摊汇总，供页面区分"待分摊 / 已分摊"。
+     */
+    public List<AllocationBillRow> listBillsForAllocation(boolean pending, int limit) {
+        return jdbc.sql("""
+                        SELECT b.id AS bill_id, b.bill_no, b.visit_id, b.service_date,
+                               b.total_amount, b.insurance_amount, b.self_pay_amount,
+                               COALESCE(a.charged, 0) AS charged_amount,
+                               COALESCE(a.refunded, 0) AS refunded_amount,
+                               COALESCE(a.cnt, 0) AS allocation_count
+                          FROM insurance_svc.settlement_bill b
+                          LEFT JOIN LATERAL (
+                                SELECT sum(CASE WHEN x.kind = 'CHARGE' THEN x.amount END)
+                                           AS charged,
+                                       sum(CASE WHEN x.kind = 'REFUND' THEN x.amount END)
+                                           AS refunded,
+                                       count(*)::int AS cnt
+                                  FROM insurance_svc.settlement_allocation x
+                                 WHERE x.bill_id = b.id) a ON true
+                         WHERE b.status = 'CONFIRMED'
+                           AND (NOT :pending OR COALESCE(a.cnt, 0) = 0)
+                         ORDER BY b.service_date DESC, b.bill_no DESC
+                         LIMIT :limit
+                        """)
+                .param("pending", pending).param("limit", limit)
+                .query((rs, i) -> new AllocationBillRow(
+                        rs.getObject("bill_id", UUID.class), rs.getString("bill_no"),
+                        rs.getObject("visit_id", UUID.class),
+                        rs.getDate("service_date").toLocalDate(),
+                        rs.getBigDecimal("total_amount"), rs.getBigDecimal("insurance_amount"),
+                        rs.getBigDecimal("self_pay_amount"), rs.getBigDecimal("charged_amount"),
+                        rs.getBigDecimal("refunded_amount"), rs.getInt("allocation_count")))
+                .list();
     }
 
     // ---------------------------------------------------------------- 审计

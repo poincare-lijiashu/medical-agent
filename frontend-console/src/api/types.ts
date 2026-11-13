@@ -2866,6 +2866,8 @@ export type ReconCategory =
   | 'SETTLE_FAILED'
   | 'AMOUNT_MISMATCH'
   | 'VOIDED_AFTER_SETTLE'
+  | 'CLINIC_UNDER_COLLECTED'
+  | 'CLINIC_OVER_COLLECTED'
 
 export type ReconDiffStatus = 'OPEN' | 'RESOLVED' | 'IGNORED' | 'AUTO_CLOSED'
 
@@ -2883,12 +2885,16 @@ export interface InsuranceReconBatch {
   mismatchCount: number
   voidedAfterSettleCount: number
   unverifiedCount: number
+  clinicMismatchCount: number
+  clinicUnmatchedCount: number
   openDiffCount: number
   localTotal: number
   localInsurance: number
   localSelfPay: number
   counterpartyInsurance: number
   counterpartySelfPay: number
+  clinicTotal: number
+  clinicRefundTotal: number
   diffAmount: number
   computedBy: string
   computedAt: string
@@ -2909,6 +2915,7 @@ export interface InsuranceReconDiff {
   localSelfPay: number
   counterpartyInsurance: number | null
   counterpartySelfPay: number | null
+  clinicTotal: number | null
   diffAmount: number
   detail: string | null
   status: ReconDiffStatus
@@ -2926,6 +2933,81 @@ export interface InsuranceReconDetail {
   batch: InsuranceReconBatch
   diffs: InsuranceReconDiff[]
   openDiffCount: number
+}
+
+// ---------------------------------------------------------------- 支付方分摊（§292）
+
+export type PayerType = 'BASIC' | 'SELF' | 'COMMERCIAL' | 'ASSISTANCE'
+
+/** 支付方字典：BASIC 金额必须等于清单统筹支付。 */
+export interface InsurancePayer {
+  code: string
+  name: string
+  payerType: PayerType
+  enabled: boolean
+  sortNo: number
+  remark: string | null
+  version: number
+  updatedBy: string
+  updatedAt: string
+  createdAt: string
+}
+
+/** 待分摊/已分摊清单（不含患者姓名）。 */
+export interface InsuranceAllocationBill {
+  billId: string
+  billNo: string
+  visitId: string
+  serviceDate: string
+  totalAmount: number
+  insuranceAmount: number
+  selfPayAmount: number
+  chargedAmount: number
+  refundedAmount: number
+  allocationCount: number
+}
+
+export interface InsuranceSettlementAllocation {
+  id: string
+  billId: string
+  visitId: string
+  payerCode: string
+  payerType: PayerType
+  kind: 'CHARGE' | 'REFUND'
+  originalId: string | null
+  amount: number
+  reason: string | null
+  operator: string
+  createdAt: string
+}
+
+export interface InsurancePayerAllocationLine {
+  payerCode: string
+  payerName: string
+  payerType: PayerType
+  charged: number
+  refunded: number
+  net: number
+}
+
+/** 单张清单分摊视图。 */
+export interface InsuranceAllocationView {
+  bill: {
+    id: string
+    billNo: string
+    visitId: string
+    serviceDate: string
+    totalAmount: number
+    insuranceAmount: number
+    selfPayAmount: number
+    status: string
+  }
+  allocations: InsuranceSettlementAllocation[]
+  payers: InsurancePayerAllocationLine[]
+}
+
+export interface InsuranceAllocationBillList {
+  items: InsuranceAllocationBill[]
 }
 
 // ---------------------------------------------------------------- DRG/DIP 分组

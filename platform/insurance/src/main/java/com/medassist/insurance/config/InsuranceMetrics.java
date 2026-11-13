@@ -21,6 +21,7 @@ public class InsuranceMetrics {
     public static final String EXPORT_ACTION = "medassist.insurance.export_action";
     public static final String RECON_ACTION = "medassist.insurance.recon_action";
     public static final String RECON_OPEN_DIFFS = "medassist.insurance.recon_open_diffs";
+    public static final String PAYER_ACTION = "medassist.insurance.payer_action";
 
     private final MeterRegistry registry;
     /** 最近一次对账/处理后的未处理差异数（无标签，避免按批次拆分导致基数增长）。 */
@@ -47,6 +48,11 @@ public class InsuranceMetrics {
     /** 对账动作（action=compute/resolve/close，result=ok/failed）。 */
     public void reconAction(String action, boolean ok) {
         counter(RECON_ACTION, "action", action, "result", ok ? "ok" : "failed");
+    }
+
+    /** 支付方分摊动作（action=create_payer/update_payer/allocate/refund…）。 */
+    public void payerAction(String action, boolean ok) {
+        counter(PAYER_ACTION, "action", action, "result", ok ? "ok" : "failed");
     }
 
     /** 更新"当前未处理差异数"（批次计算/处理/关闭后调用）。 */

@@ -10,6 +10,7 @@ import com.medassist.clinical.domain.ClinicalModel.Charge;
 import com.medassist.clinical.domain.ClinicalModel.ChargeItemDef;
 import com.medassist.clinical.domain.ClinicalModel.ChargeLine;
 import com.medassist.clinical.domain.ClinicalModel.ChargeReceipt;
+import com.medassist.clinical.domain.ClinicalModel.VisitCollection;
 import com.medassist.clinical.domain.ClinicalModel.Consultation;
 import com.medassist.clinical.domain.ClinicalModel.DailyAdmissionTotal;
 import com.medassist.clinical.domain.ClinicalModel.DailyDispenseRequest;
@@ -1453,6 +1454,62 @@ public class ClinicalRepository {
             summary.put(row.getKey(), row.getValue());
         }
         return summary;
+    }
+
+    /**
+     * 按就诊业务日期汇总期间内的收费实收（供医保三方对账）。
+     *
+     * <p>业务日期口径与医保清单完全一致：住院取出院日（未出院取入院日），
+     * 门诊/急诊取挂号日；时区由调用方传入（医院本地日历日），避免容器 UTC 把夜间收费算到前一天。
+     *
+     * <p>一次查询返回期间内全部就诊的汇总，不做 N+1；调用方用数量上限保护内存。
+     */
+    public List<VisitCollection> listVisitCollections(LocalDate from, LocalDate to, String zone,
+                                                      int limit) {
+        return jdbc.sql("""
+                        WITH visit_service AS (
+                            SELECT v.id AS visit_id, v.patient_no, v.visit_date,
+                                   COALESCE(
+                                       (SELECT (COALESCE(a.discharged_at, a.admitted_at)
+                                                  AT TIME ZONE :zone)::date
+                                          FROM clinical_svc.admission a
+                                         WHERE a.visit_id = v.id
+                                         ORDER BY a.admitted_at DESC
+                                         LIMIT 1),
+                                       v.visit_date) AS service_date
+                              FROM clinical_svc.visit v
+                        )
+                        SELECT c.visit_id, vs.patient_no, vs.service_date, c.total_amount,
+                               c.status, COALESCE(r.issued_amount, 0) AS receipt_amount,
+                               COALESCE(r.issued_count, 0) AS receipt_count
+                          FROM clinical_svc.charge c
+                          JOIN visit_service vs ON vs.visit_id = c.visit_id
+                          LEFT JOIN LATERAL (
+                                SELECT sum(cr.amount) AS issued_amount,
+                                       count(*)::int AS issued_count
+                                  FROM clinical_svc.charge_receipt cr
+                                 WHERE cr.charge_id = c.id AND cr.status = 'ISSUED') r ON true
+                         WHERE vs.service_date BETWEEN :from AND :to
+                         ORDER BY vs.service_date, c.charge_no
+                         LIMIT :limit
+                        """)
+                .param("from", from).param("to", to)
+                .param("zone", zone).param("limit", limit)
+                .query((rs, i) -> {
+                    BigDecimal total = rs.getBigDecimal("total_amount");
+                    String status = rs.getString("status");
+                    BigDecimal paid = "PAID".equals(status) ? total : BigDecimal.ZERO;
+                    BigDecimal unpaid = "UNPAID".equals(status) ? total : BigDecimal.ZERO;
+                    BigDecimal refunded = "REFUNDED".equals(status) ? total : BigDecimal.ZERO;
+                    return new VisitCollection(
+                            rs.getObject("visit_id", UUID.class),
+                            rs.getString("patient_no"),
+                            rs.getDate("service_date").toLocalDate(),
+                            total, paid, unpaid, refunded,
+                            rs.getBigDecimal("receipt_amount"),
+                            rs.getInt("receipt_count"));
+                })
+                .list();
     }
 
     public List<Charge> listCharges(UUID visitId) {

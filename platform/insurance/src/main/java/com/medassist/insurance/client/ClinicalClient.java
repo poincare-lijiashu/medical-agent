@@ -41,6 +41,23 @@ public interface ClinicalClient {
     record DiagnosisSummary(UUID visitId, List<Diagnosis> diagnoses) {
     }
 
+    /**
+     * 就诊实收汇总（三方对账用）。
+     *
+     * <p>{@code paidAmount} 是收费单 PAID 的金额，{@code unpaidAmount} 是应收未收，
+     * {@code refundedAmount} 是已退费；{@code receiptAmount} 仅用于凭证核对。
+     * 金额单位为元，口径由临床域计算，医保域只做比对，不在此重算。
+     */
+    record ClinicCollection(UUID visitId, LocalDate serviceDate, BigDecimal totalAmount,
+                            BigDecimal paidAmount, BigDecimal unpaidAmount,
+                            BigDecimal refundedAmount, BigDecimal receiptAmount,
+                            int receiptCount) {
+    }
+
+    /** 期间内实收汇总；{@code truncated} 表示达到单批上限，调用方必须拒绝出结论。 */
+    record Collections(List<ClinicCollection> items, boolean truncated) {
+    }
+
     ChargeSummary charges(UUID visitId);
 
     /**
@@ -49,4 +66,12 @@ public interface ClinicalClient {
      * <p>临床不可达时与 {@link #charges} 一样抛 503：清单缺诊断会导致报盘退回。
      */
     DiagnosisSummary diagnoses(UUID visitId);
+
+    /**
+     * 按期间拉取就诊实收汇总（三方对账的第二腿）。
+     *
+     * <p>临床不可达时必须抛 503，不能返回空集合——把"读不到实收"当成
+     * "实收为 0"会批量制造假差异，比不做对账更危险。
+     */
+    Collections collections(LocalDate from, LocalDate to);
 }
