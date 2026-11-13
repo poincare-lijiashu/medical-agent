@@ -38,9 +38,20 @@ param(
 $ErrorActionPreference = "Continue"
 $stamp = Get-Date -Format "yyyyMMdd"
 
-# 默认值从脚本位置推导：仓库可被克隆到任意目录，硬编码本机路径会把
-# 开发者的目录结构带进版本库（评测整改：上传前脱敏）。
-if (-not $Src) { $Src = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path) }
+# Default source is derived from this script's location (repo may be cloned anywhere;
+# a hard-coded local path leaks the developer directory structure).
+# NOTE: keep this file ASCII-only -- PS 5.1 reads BOM-less UTF-8 as ANSI and would
+# fail to parse non-ASCII comments.
+if (-not $Src) {
+    $scriptPath = $MyInvocation.MyCommand.Path
+    if ($scriptPath -and -not [System.IO.Path]::IsPathRooted($scriptPath)) {
+        $scriptPath = Join-Path (Get-Location).Path $scriptPath
+    }
+    if ($scriptPath) {
+        $Src = Split-Path -Parent (Split-Path -Parent ([System.IO.Path]::GetFullPath($scriptPath)))
+    }
+}
+if (-not $Src) { throw "ABORT: cannot derive repo root from script path; pass -Src explicitly" }
 if (-not $Dst) { $Dst = Join-Path $env:USERPROFILE "backup_repos" }
 
 # -- 0) source sanity: refuse to "back up" from a broken tree
