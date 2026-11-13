@@ -30,6 +30,11 @@ Java：common 111 / clinical / emr / insurance / auth / license / ops 全部通�
 Python：ruff 全绿；pytest -m e2e → 3 passed, 16 skipped（skip 均带原因）
 迁移：migration_safety_lint.ps1 → scanned=308 known=11 new=0 PASS
 运行时：ops_svc.ops_slo ACTIVE = 10 条（SLO 因子不再恒 SKIP）
+重启后实测（新 jar + 脚本注入 SERVER_ADDRESS）：
+  16 个端口全部 127.0.0.1 监听（8083/8093 实测 LocalAddress=127.0.0.1，局域网不可达）
+  上线指挥台：READY=False，blockers=1（IMPL/SLO 未参与判定 → 显式缺口）
+  因子：IMPL=SKIP DR=PASS SLO=SKIP INCIDENT=PASS QUALITY=WARN FREEZE=PASS P1=WARN
+  浏览器当前 UI 冒烟：3 passed（登录/侧栏不被登出/无加载失败）
 ```
 
 ---
