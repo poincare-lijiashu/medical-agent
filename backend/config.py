@@ -215,6 +215,11 @@ class Settings(BaseSettings):
     platform_auth_base_url: str = ""
     internal_api_token: str = ""
     identity_sync_seconds: float = 15.0
+    # §303 控制台同源入口：AI 中台在根路径托管控制台（同镜像、同域、同登录），
+    # 浏览器发出的相对路径 /api/v2/** 由本进程反向代理到 Java 网关。
+    # 留空 = 不代理（生产若由 ingress 直接分流 /api/v2，可留空避免双重代理）；
+    # 本地演示默认指向 8080。仅影响 /api/v2，AI 中台自身的 /api/v1 不走此通道。
+    platform_gateway_base_url: str = "http://127.0.0.1:8080"
     # §289 AI 日调用量自动上报：AI 中台把"成功统一问答次数"按 UTC 日累计，
     # 定时推给授权服务（直连 8095，不经网关）：
     #   POST /internal/license/usage/ai   { date, aiCalls, source, workerId, workerCount }

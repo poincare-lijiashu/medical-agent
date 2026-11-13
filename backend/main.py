@@ -9,8 +9,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import (FileResponse, JSONResponse, PlainTextResponse, RedirectResponse,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
+import httpx
 
 from backend.config import settings
 from backend.api.deps import require_metrics_access
@@ -246,6 +248,12 @@ async def lifespan(app: FastAPI):
         await llm_factory.aclose_http_clients()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        # §303：网关反代连接池
+        if _gateway_http is not None and not _gateway_http.is_closed:
+            await _gateway_http.aclose()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 app = FastAPI(title="MedAssist · 医疗智能辅助平台 API", version=settings.app_version,
@@ -474,6 +482,68 @@ async def metrics(user: dict = Depends(require_metrics_access)):
 @app.get("/api/v1/health")
 async def health():
     return {"status": "ok", "service": "MedAssist", "version": settings.app_version}
+
+
+# ---- Java 网关反向代理（§303）----
+# 为什么必须代理：控制台由本进程在根路径托管（同镜像、同域、同登录），浏览器发出的
+# 相对路径 /api/v2/** 只能由本进程转发到 Java 网关。缺少这段代理时，POST 会落进只
+# 注册了 GET 的 SPA fallback，表现为"页面能打开、登录却 405/500"。
+# 只代理 /api/v2；AI 中台自身的 /api/v1 不经过这里（SSE 直连，避免多一跳缓冲）。
+_GATEWAY_HOP_BY_HOP = {
+    "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailers", "transfer-encoding", "upgrade", "host", "content-length",
+}
+_gateway_http: httpx.AsyncClient | None = None
+
+
+def _gateway_client() -> httpx.AsyncClient:
+    """共享上游连接池：避免每个请求都新建 TCP/TLS 会话。"""
+    global _gateway_http
+    if _gateway_http is None or _gateway_http.is_closed:
+        _gateway_http = httpx.AsyncClient(
+            timeout=httpx.Timeout(60.0, connect=10.0), follow_redirects=False)
+    return _gateway_http
+
+
+@app.api_route("/api/v2/{path:path}",
+               methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+               include_in_schema=False)
+async def gateway_proxy(path: str, request: Request):
+    base = (settings.platform_gateway_base_url or "").rstrip("/")
+    if not base:
+        return JSONResponse({"code": 50301, "message": "未配置医院平台网关地址"},
+                            status_code=503)
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in _GATEWAY_HOP_BY_HOP}
+    client_host = request.client.host if request.client else ""
+    prior = request.headers.get("x-forwarded-for")
+    headers["x-forwarded-for"] = f"{prior}, {client_host}" if prior else client_host
+    headers["x-forwarded-proto"] = request.url.scheme
+    if request.headers.get("host"):
+        headers["x-forwarded-host"] = request.headers["host"]
+    body = None if request.method in ("GET", "HEAD") else await request.body()
+    client = _gateway_client()
+    try:
+        upstream_req = client.build_request(
+            request.method, f"{base}/api/v2/{path}", headers=headers,
+            params=list(request.query_params.multi_items()), content=body)
+        upstream_resp = await client.send(upstream_req, stream=True)
+    except httpx.HTTPError as exc:
+        logger.warning("网关反向代理失败", method=request.method, path=path, error=str(exc))
+        return JSONResponse({"code": 50302, "message": "医院平台网关不可达"}, status_code=502)
+
+    out_headers = {k: v for k, v in upstream_resp.headers.items()
+                   if k.lower() not in _GATEWAY_HOP_BY_HOP}
+
+    async def _stream():
+        try:
+            async for chunk in upstream_resp.aiter_raw():
+                yield chunk
+        finally:
+            await upstream_resp.aclose()
+
+    return StreamingResponse(_stream(), status_code=upstream_resp.status_code,
+                             headers=out_headers)
 
 
 # ---- 唯一前端：临床控制台（根路径托管）----

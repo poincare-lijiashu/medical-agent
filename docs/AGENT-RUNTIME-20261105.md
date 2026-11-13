@@ -14125,3 +14125,50 @@ Python：新增 4 项契约锁；迁移安全 lint：scanned=307 known=11 new=0 
 
 等保三级/密评/CA 时间戳、医保与区域平台真实接口联调、FHIR R4 Connectathon 场景包、
 DICOM 全服务联调；软件侧可继续做 SLO 自动采集与发布评审强制阻断。
+
+## 303. 2026-11-13 控制台同源入口：`/api/v2` 反向代理（第 303 批 / 可用性修复）
+
+**问题（真实复现）**
+
+控制台由 AI 中台在根路径托管（`http://127.0.0.1:8001/`），浏览器只发相对路径
+`/api/v2/**`。但 AI 中台此前只提供 `/api/v1` 与 SPA 产物，`/api/v2` 会落进**只注册了
+GET** 的 SPA fallback：登录 `POST /api/v2/auth/login` 直接 405/500——页面能打开、一步
+都走不通。本地 vite 代理（5174/5175）虽能转发，但受 Java 网关 keep-alive 关闭时序影响，
+`http-proxy` 报 `Data after Connection: close`，表现为登录间歇性 500。
+
+**修复**
+
+- `backend/main.py` 新增 `/api/v2/{path:path}` 反向代理：方法覆盖 GET/POST/PUT/PATCH/DELETE/OPTIONS/HEAD；
+- 共享 `httpx.AsyncClient`（connect 10s / 总 60s），响应按上游字节流转发，SSE 与大响应不被缓冲；
+- 剔除 hop-by-hop 头（`connection`/`content-length`/`transfer-encoding` 等），保留业务头；
+- 透传 `X-Forwarded-For/Proto/Host`，网关侧审计与租户路由仍可定位真实来源；
+- `PLATFORM_GATEWAY_BASE_URL`（默认 `http://127.0.0.1:8080`）：生产若由 ingress 直接分流
+  `/api/v2`，留空即关闭本代理，避免双重转发；
+- `/api/v1` 不走本代理（AI 中台自身路由，SSE 直连）。
+
+**失败语义**
+
+- 未配置网关地址 → 503 + `code=50301`（配置问题，不是上游故障）；
+- 网关不可达/超时 → 502 + `code=50302`，日志只记方法、路径与异常摘要，不回显内部地址。
+
+**验证**
+
+```
+Python：新增 4 项契约锁（写方法齐全 / 未配置 503 / 不可达 502 / 头过滤与 forwarded 注入）
+真实栈（8001 单入口 → 8080 网关）：
+  连续登录 5/5 成功（修复前经 vite 代理 6/8 失败）
+  浏览器真实登录：/ → /login → admin01 登录 → /dashboard，侧边导航完整、38 个业务卡片、
+  直接刷新 /dashboard 不掉登录态，无错误提示
+  核心页面接口 200：auth/me、ops/golive/cockpit、ops/impl/projects、ops/slo/dashboard、
+  clinical/integration/hl7/dashboard、mdm/quality/dashboard
+```
+
+**已知边界**
+
+- 上传类接口的请求体会整段读入内存（受 `MAX_BODY_MB` 约束），超大附件应走对象存储直传；
+- 反代不替代生产 ingress 的 TLS/限流/WAF；生产必须保证 `/api/v2` 只经过一层代理；
+- 本地演示仍可用 vite（5174），但**推荐直接用 8001**（与生产同形态、同源、同登录）。
+
+**演示入口与账号（不变）**
+
+`http://127.0.0.1:8001/`；账号 `admin01` / `doctor01` / `qc01` / `pharm01`，口令 `Med@2026`。

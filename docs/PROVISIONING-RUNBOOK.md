@@ -1185,4 +1185,45 @@ curl -s ".../ops/golive/evidence?projectId=<pid>&componentCode=platform-gateway"
 
 - 指挥台不落库，不产生新数据；证据包由使用方保存；
 - 证据包含内部编号、主机与责任人，导出/外发前按院内制度脱敏；
-- 建议上线评审证据包与发布部署记录一并归档。
+- 建议上线评审证据包与发布部署记录一起归档。
+
+## 25. 控制台入口与登录（§303）
+
+### 25.1 唯一入口
+
+- **控制台：`http://127.0.0.1:8001/`**（AI 中台同源托管构建产物 + `/api/v1` + `/api/v2` 反代）；
+- Java 服务：`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_platform_demo.ps1`
+  （已在跑会自动跳过；停止加 `-Stop`）；
+- 网关直连：`http://127.0.0.1:8080/api/v2/**`（排障用，不用于浏览器页面）。
+
+### 25.2 演示账号
+
+`admin01` / `doctor01` / `qc01` / `pharm01`，口令 `Med@2026`（仅本地演示库；
+生产由院方身份源或运维初始化，禁止沿用演示口令）。
+
+### 25.3 请求路径
+
+| 浏览器请求 | 去向 | 说明 |
+| --- | --- | --- |
+| `/`、`/dashboard`、`/assets/*` | AI 中台静态产物 | SPA 深链刷新由 fallback 回 index.html |
+| `/api/v1/**` | AI 中台自身 | SSE 直连，不经网关，避免 30s 读超时截断长文 |
+| `/api/v2/**` | 反向代理到网关 8080 | 控制台全部业务接口（登录、临床、运维、发布） |
+
+### 25.4 配置项
+
+| 变量 | 默认 | 作用 |
+| --- | --- | --- |
+| `PLATFORM_GATEWAY_BASE_URL` | `http://127.0.0.1:8080` | `/api/v2` 反代目标；生产若由 ingress 直接分流可留空关闭 |
+| `AUTH_JWT_SECRET` | 无（必须配置） | Java 与 Python 必须同值，否则"一次登录两边不认" |
+| `INTERNAL_API_TOKEN` | 无（必须配置） | 服务间 `/internal/**` 调用；Java 与 Python 必须同值 |
+
+### 25.5 排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 页面能打开但登录 405/500 | `/api/v2` 未被反代（或反代目标未配） | 确认 `PLATFORM_GATEWAY_BASE_URL`，并检查是否走的是 8001 而非已被淘汰的旧入口 |
+| 登录成功但页面接口 401 | Python/Java 的 `AUTH_JWT_SECRET` 不一致 | 两端设为同值后重启 |
+| 接口 502 `code=50302` | 网关未启动或不可达 | 启动 8080，`/actuator/health` 应为 200 |
+| 接口 503 `code=50301` | 反代目标为空 | 配置 `PLATFORM_GATEWAY_BASE_URL` 或改由 ingress 分流 |
+| 身份同步日志 403 | `INTERNAL_API_TOKEN` 两端不一致 | 对齐令牌并重启 AI 中台与 auth |
+| 用 5174/5175 时登录间歇 500 | vite 代理与网关 keep-alive 关闭时序冲突 | 改用 8001 入口（推荐），或仅用于前端热更新调试 |
