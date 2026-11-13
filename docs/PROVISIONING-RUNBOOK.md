@@ -1007,3 +1007,67 @@ curl -s -X POST ".../mdm/quality/issues/<issueId>/waive" -H "$H" \
 - 质量规则与执行记录属于治理数据，纳入日常备份；恢复后检查未闭环问题是否连续；
 - 探针 SQL 可能含内部表名，导出前按院内制度脱敏；
 - 生产建议使用只读库账号执行探针，并限制规则维护权限到数据管家。
+
+## 22. SLO 与错误预算（§300）
+
+### 22.1 口径与数据
+
+- 定义：`ops_svc.ops_slo`；快照：`ops_slo_snapshot`；
+- 达标率 = good/total；错误预算 = total×(100−target)/100；燃烧率 = bad/预算；
+- 状态：BREACHED（低于目标）> AT_RISK（剩余 <25%）> HEALTHY；无快照为 NO_DATA；
+- 快照幂等键唯一，重试必须复用；窗口结束不得超前当前时间 5 分钟。
+
+### 22.2 上线前最小动作
+
+1. 在服务目录中确认关键服务已登记；
+2. 为网关、临床、药事、医保等关键服务定义 SLO（目标/窗口/负责人）；
+3. 接入 exporter 或人工上报最近一个窗口的 total/good；
+4. 核对达标率、错误预算与燃烧率是否符合预期；
+5. 将 BREACHED / AT_RISK 纳入变更评审与值班交接。
+
+### 22.3 常用命令
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+H="Authorization: Bearer $TOKEN"
+
+# 服务目录与 SLO 列表
+curl -s ".../ops/slo/services" -H "$H" | jq
+curl -s ".../ops/slo?onlyActive=true" -H "$H" | jq
+
+# 新建 SLO（可用性 99.9%，30 天）
+curl -s -X POST ".../ops/slo" -H "$H" -H 'Content-Type: application/json' -d '{
+  "code":"SLO-GATEWAY-AVAIL","name":"网关可用性","serviceCode":"platform-gateway",
+  "indicator":"AVAILABILITY","targetPercent":99.9,"windowDays":30,
+  "owner":"ops01","status":"ACTIVE"}'
+
+# 上报窗口快照（exporter 重试必须复用幂等键）
+curl -s -X POST ".../ops/slo/<sloId>/snapshots" -H "$H" \
+  -H 'Content-Type: application/json' -d '{
+    "windowStart":"2026-11-13T02:00:00Z","windowEnd":"2026-11-13T03:00:00Z",
+    "totalEvents":120000,"goodEvents":119990,"source":"EXPORTER",
+    "idempotencyKey":"slo-gateway-20261113-0300"}'
+
+# 看板与详情
+curl -s ".../ops/slo/dashboard" -H "$H" | jq .data
+curl -s ".../ops/slo/<sloId>" -H "$H" | jq .data.evaluation
+```
+
+### 22.4 排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 保存 SLO 422 / 52461 | 目标越界、延迟类缺阈值或非延迟类带阈值 | 按指标类型修正 |
+| 上报快照 422 / 52462 | good>total、total=0、窗口倒置或超前 | 核对窗口与计数 |
+| 上报快照 409 / 52463 | 幂等键已用于另一组内容 | 新窗口用新键，不要覆盖历史 |
+| 状态一直 NO_DATA | 没有快照或 total=0 | 接入 exporter 或补报窗口 |
+| 达标率很低但预算仍显示 100% | 样本量太小或窗口未覆盖 | 拉长窗口/补报历史；注意小样本波动 |
+| 停用后无法上报 | SLO 已 INACTIVE | 需要补报先启用 |
+
+### 22.5 数据与备份
+
+- SLO 与快照属于运营治理数据，纳入日常备份；恢复后检查窗口连续性；
+- 快照只存计数，不含用户/患者标识；
+- 生产建议 exporter 使用独立只读账号与固定周期上报，避免人工口径漂移。

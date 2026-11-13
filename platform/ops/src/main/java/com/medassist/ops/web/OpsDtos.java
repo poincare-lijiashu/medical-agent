@@ -1,6 +1,8 @@
 package com.medassist.ops.web;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -9,6 +11,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -326,5 +329,35 @@ public final class OpsDtos {
     public record ImplAttemptReq(
             @NotBlank @Size(max = 64) String trainee,
             @NotEmpty Map<@NotBlank @Size(max = 64) String, @NotBlank @Size(max = 16) String> answers) {
+    }
+
+    // ------------------------------------------------------------------ SLO 与错误预算（§300）
+
+    public record SloUpsertReq(
+            @NotBlank @Pattern(regexp = "[A-Za-z0-9:_-]{2,64}") String code,
+            @NotBlank @Size(max = 128) String name,
+            @NotBlank @Size(max = 64) String serviceCode,
+            @NotBlank @Pattern(regexp = "AVAILABILITY|LATENCY|ERROR_RATE") String indicator,
+            @NotNull @DecimalMin(value = "0", inclusive = false)
+            @DecimalMax(value = "100", inclusive = false) BigDecimal targetPercent,
+            @Min(1) @Max(90) Integer windowDays,
+            @Min(1) Integer latencyThresholdMs,
+            @NotBlank @Size(max = 64) String owner,
+            @Size(max = 1000) String description,
+            @Pattern(regexp = "ACTIVE|INACTIVE") String status) {
+    }
+
+    public record SloSnapshotReq(
+            @NotNull Instant windowStart,
+            @NotNull Instant windowEnd,
+            @Min(0) long totalEvents,
+            @Min(0) long goodEvents,
+            @NotBlank @Pattern(regexp = "MANUAL|EXPORTER|SYNTHETIC") String source,
+            @NotBlank @Size(max = 128) String idempotencyKey,
+            @Size(max = 1000) String note) {
+    }
+
+    public record SloStatusReq(
+            @NotBlank @Pattern(regexp = "ACTIVE|INACTIVE") String status) {
     }
 }

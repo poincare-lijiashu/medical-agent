@@ -592,6 +592,12 @@ public enum ErrorCode {
     IMPL_ATTEMPT_INVALID(52458, "考试成绩不合法（答题不完整或选项越界）"),
     IMPL_ATTEMPT_CLOSED(52459, "考试已关闭，不能再录入成绩"),
 
+    // ---- SLO 与错误预算（52xxx 续，§300）----
+    OPS_SLO_NOT_FOUND(52460, "未找到该 SLO，或 SLO 已停用"),
+    OPS_SLO_INVALID(52461, "SLO 定义不合法（目标百分比/指标/窗口/延迟阈值有误）"),
+    OPS_SLO_SNAPSHOT_INVALID(52462, "SLO 快照不合法（窗口/good 与 total/未来时间有误）"),
+    OPS_SLO_SNAPSHOT_CONFLICT(52463, "同一幂等键的快照已存在且内容不同，禁止改写"),
+
     // ---- 版本与补丁（53xxx，§273）----
     REL_COMPONENT_NOT_FOUND(53401, "未找到该发布组件"),
     REL_VERSION_NOT_FOUND(53402, "未找到该组件版本"),

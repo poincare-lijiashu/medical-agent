@@ -143,6 +143,8 @@ const messages: Record<MessageKey, string> = {
   'nav.dr-drill.hint': 'Backup policies · idempotent backup runs · drill steps with RTO/RPO · four-eyes verification · release gate',
   'nav.impl-delivery.title': 'Implementation Delivery',
   'nav.impl-delivery.hint': 'Reusable implementation templates · project tasks with evidence · go-live readiness score · training pass rate',
+  'nav.slo-console.title': 'SLO & Error Budget',
+  'nav.slo-console.hint': 'Service objectives and rolling windows · compliance · error budget and burn rate · snapshot reporting',
   'nav.group.系统管理': 'Administration',
 
   /* ---------- Navigation items ---------- */

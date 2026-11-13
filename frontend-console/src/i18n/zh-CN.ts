@@ -130,6 +130,8 @@ const messages = {
   'nav.dr-drill.hint': '备份策略 · 备份运行幂等 · 演练步骤与 RTO/RPO · 四眼复核 · 发布门禁',
   'nav.impl-delivery.title': '实施交付',
   'nav.impl-delivery.hint': '实施模板可复制 · 项目任务与证据 · 上线就绪评分 · 培训考核通过率',
+  'nav.slo-console.title': 'SLO 与错误预算',
+  'nav.slo-console.hint': '服务目标与滚动窗口 · 达标率 · 错误预算与燃烧率 · 快照上报',
   'nav.license.title': '授权与许可',
   'nav.license.hint': '版本与模块权益 · 配额使用 · 授权书导入验签 · 续期与吊销',
   'nav.tenant.title': '租户管理',

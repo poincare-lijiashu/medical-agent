@@ -521,6 +521,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['ops:impl:read'],
   },
   {
+    // 第 300 批：SLO 与错误预算（定义 / 快照 / 预算燃烧 / 看板）
+    name: 'slo-console',
+    path: '/ops/slo',
+    title: 'SLO 与错误预算',
+    hint: '服务目标与滚动窗口 · 达标率 · 错误预算与燃烧率 · 快照上报',
+    icon: 'activity',
+    group: '平台运维',
+    permissions: ['ops:slo:read'],
+  },
+  {
     name: 'his-workbench',
     path: '/his-workbench',
     title: 'HIS 集成工作台',

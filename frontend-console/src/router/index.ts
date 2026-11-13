@@ -245,6 +245,12 @@ const router = createRouter({
           component: () => import('@/views/ImplementationView.vue'),
         },
         {
+          // 第 300 批：SLO 与错误预算（定义/快照/预算燃烧）
+          path: 'ops/slo',
+          name: 'slo-console',
+          component: () => import('@/views/SloView.vue'),
+        },
+        {
           // 第 172 批：HIS 深度整合自检（适配器状态 / 患者与医嘱读取 / 就地审方）
           path: 'his-workbench',
           name: 'his-workbench',
