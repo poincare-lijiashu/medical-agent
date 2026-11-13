@@ -251,6 +251,12 @@ const router = createRouter({
           component: () => import('@/views/SloView.vue'),
         },
         {
+          // 第 302 批：上线指挥台（六门禁聚合 + 证据包）
+          path: 'ops/golive',
+          name: 'golive-cockpit',
+          component: () => import('@/views/GoLiveView.vue'),
+        },
+        {
           // 第 172 批：HIS 深度整合自检（适配器状态 / 患者与医嘱读取 / 就地审方）
           path: 'his-workbench',
           name: 'his-workbench',

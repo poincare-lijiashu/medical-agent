@@ -132,6 +132,8 @@ const messages = {
   'nav.impl-delivery.hint': '实施模板可复制 · 项目任务与证据 · 上线就绪评分 · 培训考核通过率',
   'nav.slo-console.title': 'SLO 与错误预算',
   'nav.slo-console.hint': '服务目标与滚动窗口 · 达标率 · 错误预算与燃烧率 · 快照上报',
+  'nav.golive-cockpit.title': '上线指挥台',
+  'nav.golive-cockpit.hint': '实施就绪 · 灾备演练 · SLO 错误预算 · 重大事件 · 数据质量 · 变更冻结 · 证据包',
   'nav.license.title': '授权与许可',
   'nav.license.hint': '版本与模块权益 · 配额使用 · 授权书导入验签 · 续期与吊销',
   'nav.tenant.title': '租户管理',

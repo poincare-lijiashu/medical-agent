@@ -1133,3 +1133,56 @@ curl -s ".../clinical/integration/hl7/runs?caseCode=ADT-A01" -H "$H" | jq
 - 用例必须使用合成患者；生产患者数据不得粘贴到测试台；
 - 报文摘要可能含姓名/就诊号，导出与截图前按院内制度脱敏；
 - 执行记录属于集成验收证据，纳入备份；恢复后检查最近一次回归结果。
+
+## 24. 上线指挥台（§302）
+
+### 24.1 用途与口径
+
+- 只读聚合六门禁：实施就绪、灾备演练、SLO、重大事件、数据质量、变更冻结；P1 工单仅提醒；
+- 阻断：DR 缺失、SLO 违约、SEV1/2、BLOCKER 质量问题、冻结窗口；
+- 提醒：SLO 预算告急、HIGH 质量问题、P1 工单；
+- 关键数据源读取失败按不可放行处理；项目不存在返回 404；
+- 报告与证据包同源，可导出 JSON 作为上线评审附件。
+
+### 24.2 上线评审流程
+
+1. 完成实施项目任务与培训（§298），确认就绪分与通过率达标；
+2. 完成灾备演练并由第二人复核（§297），确认在 90 天有效期内；
+3. 在「SLO 与错误预算」确认无 BREACHED；有 AT_RISK 时准备解释与缓解措施；
+4. 清零 SEV1/SEV2 与 BLOCKER 数据质量问题，确认不在冻结窗口；
+5. 打开「上线指挥台」选择项目与组件，生成报告；READY 后导出证据包；
+6. 评审会以证据包为准；结论不替代院方签字与外部资质。
+
+### 24.3 常用命令
+
+```bash
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+H="Authorization: Bearer $TOKEN"
+
+curl -s ".../ops/golive/cockpit?projectId=<pid>&componentCode=platform-gateway&environment=PROD" \
+  -H "$H" | jq '.data | {ready, blockers, factors: [.factors[] | {code,status,detail}]}'
+
+curl -s ".../ops/golive/evidence?projectId=<pid>&componentCode=platform-gateway" -H "$H" \
+  > golive-evidence.json
+```
+
+### 24.4 排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| IMPL=FAIL | 实施项目未达标/必填任务或培训通过率不足 | 回实施交付页补齐 |
+| DR=FAIL | 90 天内无已复核演练 | 完成演练并由第二人复核 |
+| SLO=FAIL | 有 SLO 低于目标 | 修复服务或在评审中说明并延期 |
+| INCIDENT=FAIL | 有未关闭 SEV1/SEV2 | 先关闭事件或降级并留复盘 |
+| QUALITY=FAIL | 有 BLOCKER 质量问题 | 解决或由数据治理负责人豁免 |
+| FREEZE=FAIL | 处于冻结窗口 | 等窗口结束或走紧急变更 |
+| 报告打不开/500 | 项目 ID 非法或依赖库不可用 | 核对项目；查看 ops 日志 |
+| 证据包与页面不一致 | 两次生成时间不同 | 以同一次生成的导出文件为准 |
+
+### 24.5 数据与备份
+
+- 指挥台不落库，不产生新数据；证据包由使用方保存；
+- 证据包含内部编号、主机与责任人，导出/外发前按院内制度脱敏；
+- 建议上线评审证据包与发布部署记录一并归档。

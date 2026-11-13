@@ -145,6 +145,8 @@ const messages: Record<MessageKey, string> = {
   'nav.impl-delivery.hint': 'Reusable implementation templates · project tasks with evidence · go-live readiness score · training pass rate',
   'nav.slo-console.title': 'SLO & Error Budget',
   'nav.slo-console.hint': 'Service objectives and rolling windows · compliance · error budget and burn rate · snapshot reporting',
+  'nav.golive-cockpit.title': 'Go-Live Cockpit',
+  'nav.golive-cockpit.hint': 'Implementation readiness · DR drill · SLO error budget · major incidents · data quality · change freeze · evidence pack',
   'nav.group.系统管理': 'Administration',
 
   /* ---------- Navigation items ---------- */

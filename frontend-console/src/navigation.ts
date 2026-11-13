@@ -481,6 +481,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['clinical:report:subscription:read'],
   },
   {
+    // 第 302 批：上线指挥台（六门禁聚合 + 证据包）
+    name: 'golive-cockpit',
+    path: '/ops/golive',
+    title: '上线指挥台',
+    hint: '实施就绪 · 灾备演练 · SLO 错误预算 · 重大事件 · 数据质量 · 变更冻结 · 证据包',
+    icon: 'check',
+    group: '平台运维',
+    permissions: ['ops:golive:read'],
+  },
+  {
     // 第 275 批：运营工作台（SLA 工单 / 值班 / 重大事件与复盘）
     name: 'ops-console',
     path: '/ops',

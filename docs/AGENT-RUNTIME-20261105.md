@@ -14064,3 +14064,64 @@ Python：新增 6 项契约锁；迁移安全 lint：scanned=306 known=11 new=0 
 
 HL7 用例套件与定时回归（夜间批量执行 + 趋势）、MLLP over TLS 与双向证书、
 FHIR R4 资源/搜索参数 Connectathon 场景包。
+
+## 302. 2026-11-13 上线指挥台与证据包（第 302 批 / 计划书 G6+G7）
+
+**目标**
+
+把"能不能上线"从多人分别查台账变成一张可复核的报告：聚合实施就绪、灾备演练、
+SLO 错误预算、重大事件、数据质量、变更冻结六个门禁，外加 P1 工单提醒；
+报告可直接导出 JSON 作为上线评审证据包。
+
+**架构（只读聚合，无新表）**
+
+- 实施就绪：`ImplementationService.detail` 复用 §298 的加权评分与培训通过率；
+- 灾备演练：`BackupDrRepository.findLatestPassed`，有效期 90 天（与发布门禁一致）；
+- SLO：`SloService.list(true)`，统计 BREACHED / AT_RISK；
+- 重大事件：`ops_svc.ops_incident` 未关闭 SEV1/SEV2；
+- 数据质量：`mdm_svc.md_dq_issue` 未闭环 BLOCKER/HIGH；
+- 变更冻结：`release_svc.rel_change_window` 当前生效 FREEZE（scope 为空或匹配组件）；
+- P1 工单：`ops_svc.ops_ticket` 未关闭 P1，仅提醒不阻断。
+
+**规则**
+
+1. **fail-closed**：关键数据源读取失败按"不可放行"处理并给出阻断项；
+   只有"实施项目不存在/参数错误"按 404 返回，不伪装成数据源故障。
+2. **阻断与提醒分级**：DR 缺失、SLO 违约、SEV1/2、BLOCKER 质量问题、冻结窗口为阻断；
+   SLO 预算告急、HIGH 质量问题、P1 工单为提醒。
+3. **一致证据**：`/cockpit` 与 `/evidence` 同一服务方法，页面与导出内容同源。
+4. **只读**：不写业务数据，不替代各域审批；证据包记录生成时间、范围、环境与原始编号。
+
+**接口与权限**
+
+- `GET /api/v2/ops/golive/cockpit?projectId=&componentCode=&environment=`；
+- `GET /api/v2/ops/golive/evidence`（同源，便于下载）；
+- 只读权限 `ops:golive:read`；管理员、运营、发布、SRE、质控、一线运维均可查看。
+
+**前端**
+
+- 新页「上线指挥台」（`/ops/golive`，导航「平台运维」）：项目/组件/环境筛选、
+  总体 READY/BLOCKED、七因子卡片、阻断与提醒列表、证据 JSON 预览与下载。
+
+**验证**
+
+```
+Java：GoLiveCockpitServiceTest 4 项（全通过/多阻断/数据源 fail-closed/无项目 SKIP）；ops 全量单测通过
+Python：新增 4 项契约锁；迁移安全 lint：scanned=307 known=11 new=0 PASS
+前端：typecheck 通过；build 通过（入口 gzip 103.14 KB）
+真实栈（网关 8080 → ops 8093，真实登录与 PG）：
+  选择已验收实施项目 + 组件 platform-gateway → 七因子齐全，ready=true/blockers=0
+  不选项目 → IMPL=SKIP 并提示；随机项目 ID → 404；/evidence 与 /cockpit 同源
+```
+
+**已知边界**
+
+- 报告是"证据聚合"，不替代等保/密评/院方验收；外部资质项未完成时不应对外宣称 100%；
+- SLO 与数据质量依赖各自快照/规则覆盖，未定义时按 SKIP 提示，不虚构通过；
+- 变更冻结只读 release_svc 当前窗口，不判断发布列车状态；
+- 证据包含内部编号与主机信息，导出前按院内制度脱敏。
+
+**后续建议（外部项为主）**
+
+等保三级/密评/CA 时间戳、医保与区域平台真实接口联调、FHIR R4 Connectathon 场景包、
+DICOM 全服务联调；软件侧可继续做 SLO 自动采集与发布评审强制阻断。
