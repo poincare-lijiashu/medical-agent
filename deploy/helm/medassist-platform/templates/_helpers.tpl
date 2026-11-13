@@ -191,6 +191,9 @@ Java 服务公共环境变量。
 {{- end }}
 # ---- 租户与实例（ADR-001）：每 Cell 只认本院 ----
 # 默认租户 = 本院：入口 Host 未映射时回落到它，绝不会落到别家。
+# $isGateway 必须在首次使用前声明（Go 模板变量按声明顺序作用域，后置声明会报
+# "undefined variable"，表现为 helm lint 解析失败、整个 chart 渲染不出来）。
+{{- $isGateway := eq .component "gateway" }}
 {{- $cell := .root.Values.cell | default dict }}
 {{- if $cell.tenantCode }}
 - name: TENANT_DEFAULT_CODE
@@ -230,7 +233,6 @@ Java 服务公共环境变量。
 {{- $hmac := .root.Values.external.internalHmac | default dict }}
 {{- $hmacSecret := $hmac.existingSecret | default "medassist-internal-hmac" }}
 {{- $signing := toString ($ia.gatewaySigning | default "hmac") }}
-{{- $isGateway := eq .component "gateway" }}
 {{- $acceptEd25519 := or $ia.acceptEd25519 (eq $signing "ed25519") }}
 {{- $acceptHmacV1 := ne (toString $ia.acceptHmacV1) "false" }}
 - name: MEDASSIST_INTERNALAUTH_MODE

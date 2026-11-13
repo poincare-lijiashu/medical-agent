@@ -50,6 +50,9 @@ class ClinicalRepositoryPostgresIT {
                     .withPassword("medagent123")
                     .withReuse(false);
 
+    /** 迁移 V56/V57 回填用的默认院区（夹具与生产回填同口径）。 */
+    private static final UUID CAMPUS = UUID.fromString("a0000000-0000-0000-0000-000000000001");
+
     private JdbcClient jdbc;
     private ClinicalRepository repo;
     private UUID deptId;
@@ -153,13 +156,15 @@ class ClinicalRepositoryPostgresIT {
         UUID visitId = UUID.randomUUID();
         insertVisit(visitId, "IT-V-" + visitId.toString().substring(0, 8));
         UUID chargeId = UUID.randomUUID();
+        // V57 起 charge.campus_id NOT NULL：夹具必须显式写入院区，与 insertVisit 同口径
         jdbc.sql("""
-                        INSERT INTO clinical_svc.charge (id, charge_no, visit_id)
-                        VALUES (:id, :no, :visit)
+                        INSERT INTO clinical_svc.charge (id, charge_no, visit_id, campus_id)
+                        VALUES (:id, :no, :visit, :campus)
                         """)
                 .param("id", chargeId)
                 .param("no", "IT-C-" + chargeId.toString().substring(0, 8))
                 .param("visit", visitId)
+                .param("campus", CAMPUS)
                 .update();
 
         // 期望版本不符：不更新
@@ -301,8 +306,7 @@ class ClinicalRepositoryPostgresIT {
                 .param("pid", UUID.randomUUID())
                 .param("dept", deptId)
                 .param("d", LocalDate.now())
-                .param("campus", java.util.UUID.fromString(
-                        "a0000000-0000-0000-0000-000000000001"))
+                .param("campus", CAMPUS)
                 .update();
     }
 

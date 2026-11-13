@@ -149,6 +149,20 @@
             需要时用 `mvn -Ppostgres-it test` 单独运行。
           -->
           <excludedGroups>postgres</excludedGroups>
+          <!--
+            测试 JVM 的时区必须与生产一致（生产容器由 helm 注入 -Duser.timezone=Asia/Shanghai）。
+            CI runner 默认 UTC：业务侧用 BusinessTime（Asia/Shanghai）算"今天"，而测试用
+            LocalDate.now() 算"今天"，在北京时间 00:00–08:00 会差一天，表现为一批与代码无关
+            的假失败（挂号重复判定、未来日期校验、按日请领，2026-11-14 CI 实测 12 例，
+            本地 UTC+8 全过）。
+            TZ 供 Linux 上的 JVM 启动时读取；user.timezone 覆盖不读 TZ 的平台（Windows 等）。
+          -->
+          <environmentVariables>
+            <TZ>Asia/Shanghai</TZ>
+          </environmentVariables>
+          <systemPropertyVariables>
+            <user.timezone>Asia/Shanghai</user.timezone>
+          </systemPropertyVariables>
         </configuration>
       </plugin>
       <!--
