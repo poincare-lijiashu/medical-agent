@@ -7,6 +7,11 @@ asyncpg==0.30.0
 # 评测 04 P1-5：备份归档 AES-256-GCM 加解密（backend/core/backup_crypto.py）
 cryptography==50.0.1
 pymilvus==2.4.9
+# pymilvus 2.4.9 → environs(<=9.5.0) → marshmallow>=3.0.0。environs 9.5.0 读
+# `marshmallow.__version_info__`（4.x 已删除），全新环境解析到 4.x 时 `import pymilvus`
+# 直接 AttributeError，pytest/e2e 在全量收集阶段就失败（2026-11-14 CI 实测）。
+# 固定到 3.x 末位版本，与 environs 的实际兼容范围一致。
+marshmallow==3.26.2
 httpx==0.28.1
 python-dotenv==1.0.1
 pydantic==2.11.4

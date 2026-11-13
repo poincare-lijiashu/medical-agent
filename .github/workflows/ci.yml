@@ -105,6 +105,11 @@ jobs:
           python-version: "3.11"
       - name: Install ruff
         run: pip install ruff==0.14.4
+      # release_check.py 延迟导入 backend.config（pydantic-settings）。此前的 lint job 只装
+      # ruff，该导入必然失败 → 版本一致性门禁常红（2026-11-14 CI 实测）。只装最小依赖，
+      # 不复制 pytest job 的重型安装（FlagEmbedding/torch 对本检查无意义）。
+      - name: Install minimal deps for release_check
+        run: pip install pydantic-settings==2.11.0
       - name: Ruff（E9 + pyflakes）
         run: python -m ruff check backend tests scripts
       # 评测 05 P1-8：版本号单一真源（VERSION）与四处落点一致性；漂移即阻断发布
