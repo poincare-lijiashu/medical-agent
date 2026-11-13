@@ -115,7 +115,7 @@ class GoLiveCockpitServiceTest {
     }
 
     @Test
-    @DisplayName("未选择项目：实施就绪 SKIP 并给出提示")
+    @DisplayName("未选择项目：实施就绪 SKIP 且不得判 READY（门禁未参与≠通过）")
     void noProjectIsSkip() {
         when(backupRepo.findLatestPassed(any(), any(), any())).thenReturn(Optional.of(drill()));
         when(sloService.list(true)).thenReturn(List.of());
@@ -126,9 +126,13 @@ class GoLiveCockpitServiceTest {
 
         Report report = service.build(null, null, "PROD");
 
-        assertThat(report.ready()).isTrue();
+        assertThat(report.ready()).isFalse();
         assertThat(report.project()).isNull();
         assertThat(report.warnings()).anyMatch(w -> w.contains("未选择实施项目"));
+        // IMPL 与 SLO 都未参与判定，必须作为缺口显式阻断，避免绿标误导评审
+        assertThat(String.valueOf(report.evidence().get("gaps")))
+                .contains("IMPL").contains("SLO");
+        assertThat(report.blockers()).anyMatch(b -> b.contains("未参与判定"));
     }
 
     // ------------------------------------------------------------------ 构造

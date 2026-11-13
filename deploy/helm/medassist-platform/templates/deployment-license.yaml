@@ -1,0 +1,109 @@
+{{- if .Values.license.enabled }}
+{{- $kind := include "medassist.workloadKind" (dict "root" $ "component" "license") }}
+apiVersion: {{ include "medassist.workloadApiVersion" (dict "root" $ "component" "license") }}
+kind: {{ $kind }}
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "license") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "license") | nindent 4 }}
+spec:
+  {{- if not .Values.license.autoscaling.enabled }}
+  replicas: {{ .Values.license.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.license.revisionHistoryLimit }}
+  {{- if eq $kind "Rollout" }}
+  {{- include "medassist.canaryStrategy" (dict "root" $ "component" "license") | nindent 2 }}
+  progressDeadlineSeconds: {{ .Values.rollout.progressDeadlineSeconds }}
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "medassist.selectorLabels" (dict "root" $ "component" "license") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "medassist.selectorLabels" (dict "root" $ "component" "license") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "medassist.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      terminationGracePeriodSeconds: {{ .Values.license.terminationGracePeriodSeconds }}
+      {{- if .Values.external.skywalking.enabled }}
+      initContainers:
+        {{- include "medassist.skywalkingInit" (dict "root" $) | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: license
+          image: {{ include "medassist.image" (dict "root" $ "image" .Values.license.image) }}
+          imagePullPolicy: {{ .Values.license.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 10"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.license.service.port }}
+              protocol: TCP
+          env:
+            {{- include "medassist.commonEnv" (dict "root" $ "component" "license" "jwt" false "empi" false) | nindent 12 }}
+            {{- with .Values.license.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          startupProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            periodSeconds: {{ .Values.license.probes.startup.periodSeconds }}
+            failureThreshold: {{ .Values.license.probes.startup.failureThreshold }}
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: http
+            initialDelaySeconds: {{ .Values.license.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.license.probes.liveness.periodSeconds }}
+            timeoutSeconds: {{ .Values.license.probes.liveness.timeoutSeconds }}
+            failureThreshold: {{ .Values.license.probes.liveness.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: http
+            initialDelaySeconds: {{ .Values.license.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.license.probes.readiness.periodSeconds }}
+            timeoutSeconds: {{ .Values.license.probes.readiness.timeoutSeconds }}
+            failureThreshold: {{ .Values.license.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.license.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.external.skywalking.enabled }}
+            - name: skywalking-agent
+              mountPath: /opt/skywalking-agent
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- include "medassist.skywalkingVolume" . | nindent 8 }}
+        {{- include "medassist.tmpVolume" . | nindent 8 }}
+      {{- with .Values.license.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.license.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- include "medassist.podScheduling" (dict "root" $ "component" "license") | nindent 6 }}
+{{- end }}

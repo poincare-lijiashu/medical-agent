@@ -38,7 +38,9 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  TRANSFUSION_RECORD_NOT_FOUND,
                  NURSING_INDICATOR_NOT_FOUND, NURSING_INDICATOR_REPORT_NOT_FOUND,
                  PACU_STAY_NOT_FOUND, OPERATION_LEVEL_NOT_FOUND,
-                 HL7_ENDPOINT_NOT_FOUND, HL7_CASE_NOT_FOUND, HL7_RUN_NOT_FOUND
+                 HL7_ENDPOINT_NOT_FOUND, HL7_CASE_NOT_FOUND, HL7_RUN_NOT_FOUND,
+                 // 评测 4-3：科室不存在曾被降级为 400，与"记录不存在"语义不符
+                 ORG_NOT_FOUND
                  -> HttpStatus.NOT_FOUND;
             case UNAUTHORIZED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN, HL7_ACTOR_REQUIRED -> HttpStatus.FORBIDDEN;
@@ -68,7 +70,9 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  TRANSFUSION_NOT_CROSSMATCHED, TRANSFUSION_REACTION_EXISTS,
                  PACU_STAY_EXISTS, PACU_STAY_STATUS_INVALID, PACU_OBSERVATION_DUPLICATED,
                  PACU_SELF_SIGN, OPERATION_LEVEL_CONFLICT,
-                 NURSING_INDICATOR_REPORT_STATUS_INVALID, NURSING_INDICATOR_SELF_REVIEW
+                 NURSING_INDICATOR_REPORT_STATUS_INVALID, NURSING_INDICATOR_SELF_REVIEW,
+                 // 评测 4-3：输血前置/反应状态冲突属于业务冲突，不是参数错误
+                 TRANSFUSION_PRECHECK_EXISTS, TRANSFUSION_REACTION_STATUS_INVALID
                  -> HttpStatus.CONFLICT;
             case VALIDATION_FAILED, CHARGE_RECEIPT_VOID_REASON_REQUIRED,
                  // 补打未登记原因属于“缺必填信息”，422 让前端走原因弹窗而不是报参数错误
@@ -96,11 +100,17 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  NURSING_INDICATOR_REPORT_RETURN_REASON_REQUIRED,
                  NURSING_INDICATOR_PERIOD_INVALID,
                  HL7_ENDPOINT_INVALID, HL7_CASE_INVALID, HL7_MESSAGE_INVALID, HL7_ACK_INVALID,
-                 HL7_SEND_FAILED
+                 HL7_SEND_FAILED,
+                 // 评测 4-3：安全检查表/输血执行前置缺失属于"缺必填信息"（422）
+                 SURGERY_SAFETY_CHECKLIST_REQUIRED, SURGERY_SAFETY_CHECKLIST_INVALID,
+                 TRANSFUSION_PRECHECK_REQUIRED, TRANSFUSION_ISSUE_CHECK_INVALID,
+                 TRANSFUSION_OBSERVATION_REQUIRED
                  -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            // 评测 4-3：服务端内部故障必须是 5xx，否则前端按"参数错误"提示、告警口径被污染
+            case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

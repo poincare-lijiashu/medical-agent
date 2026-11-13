@@ -203,4 +203,28 @@ class ClinicalExceptionMappingTest {
                     .isFalse();
         }
     }
+
+    @Test
+    @DisplayName("评测 4-3：实际抛出的错误码不得被 default 静默降级为 400")
+    void actuallyThrownCodesAreNotSilentlyDowngraded() {
+        // 这些码在业务代码中真实抛出，但曾因 statusOf 漏配落进 default -> BAD_REQUEST，
+        // 导致"记录不存在/依赖故障/缺必填"被误报为"参数错误"。此处逐条锁定语义。
+        assertThat(handler.statusOf(ErrorCode.ORG_NOT_FOUND)).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_PRECHECK_EXISTS))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_REACTION_STATUS_INVALID))
+                .isEqualTo(HttpStatus.CONFLICT);
+        assertThat(handler.statusOf(ErrorCode.SURGERY_SAFETY_CHECKLIST_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.SURGERY_SAFETY_CHECKLIST_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_PRECHECK_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_ISSUE_CHECK_INVALID))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.TRANSFUSION_OBSERVATION_REQUIRED))
+                .isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+        assertThat(handler.statusOf(ErrorCode.INTERNAL_ERROR))
+                .isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
+    }
 }

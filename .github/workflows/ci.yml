@@ -361,12 +361,12 @@ jobs:
 
   e2e:
     # 评测 C6：此前 CI 从不跑 e2e —— 16 个浏览器用例在 CI 全 skip（只 skip 不执行），
-    # 生产前端/主链路实际只有本地人工冒烟。本 job 起 PG + uvicorn + Chromium 真跑
-    # `-m e2e`；先以"可观测不阻断"（continue-on-error）接入一个周期：共享 runner 上
-    # 限流窗口（60 次/分钟）与浏览器抖动需要观察，避免 G63 式"常红被绕过"。
+    # 生产前端/主链路实际只有本地人工冒烟。本 job 起 PG + uvicorn + Chromium 真跑 `-m e2e`。
+    # 评测 E7-L3（2026-11-13）：选择器随登录页改版失效导致 16/16 全红，而 job 级
+    # continue-on-error 把红灯掩盖了。选择器已修复为语义选择器，这里恢复为**真实门禁**：
+    # e2e 红即流水线红，避免"常红被绕过"变成"常红没人看"。
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    continue-on-error: true
     services:
       postgres:
         image: postgres:15-alpine

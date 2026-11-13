@@ -132,6 +132,34 @@ public class InternalAuthAutoConfiguration {
                     "生产/预发布环境不允许使用 log 模式（medassist.internal-auth.mode=log），"
                             + "请改为 enforce 后再启动");
         }
+        // 评测 S-01（Critical）：mode=off/log 时 X-Actor / X-Permissions 完全由请求头决定。
+        // 只要端口对非回环地址可达，任何内网主机都能伪造身份读取 PHI，且审计会记入伪造的 actor。
+        // 因此非 enforce 形态必须限定为"只有本机能连"：要么监听回环地址，要么显式声明处于隔离网络。
+        if (!InternalAuthProperties.ENFORCE.equals(mode)) {
+            String bind = environment.getProperty("server.address", "");
+            boolean loopback = "127.0.0.1".equals(bind) || "::1".equals(bind)
+                    || "localhost".equalsIgnoreCase(bind);
+            boolean isolatedNetwork = Boolean.parseBoolean(environment.getProperty(
+                    "medassist.internal-auth.unverified-allow-non-loopback", "false"));
+            // 只在"固定端口对外监听"时生效：测试上下文（无 server.port）与随机端口（0）
+            // 不会固定暴露，不参与该守卫，避免把单测环境打红。
+            String port = environment.getProperty("server.port", "").trim();
+            boolean listeningOnFixedPort = !port.isEmpty() && !"0".equals(port);
+            if (listeningOnFixedPort && !loopback && !isolatedNetwork) {
+                throw new IllegalStateException(
+                        "medassist.internal-auth.mode=" + mode + " 且未限定监听回环地址"
+                                + "（当前 server.address=" + (bind == null || bind.isBlank() ? "<未配置=全网卡>" : bind)
+                                + "）：请求头身份可被任意内网主机伪造，服务拒绝启动。三者选一："
+                                + "① 设置 server.address=127.0.0.1（单机/演示形态）；"
+                                + "② 改用 mode=enforce 并配置 keys-json / gateway-public-key；"
+                                + "③ 确认处于隔离网络后设置 "
+                                + "medassist.internal-auth.unverified-allow-non-loopback=true");
+            }
+            if (isolatedNetwork && !loopback) {
+                log.warn("internal-auth.mode={} 未验签且监听非回环地址：已由 "
+                        + "unverified-allow-non-loopback 放行，请确保网络不可被横向访问", mode);
+            }
+        }
         // P0-9：/internal/** 只靠单值共享令牌时，一处令牌泄露即可冒充任意调用方读 PHI。
         // 生产必须要求调用方签名（按 caller 分配密钥），与 mode=off 同规格 fail-fast。
         if (SecurityDefaults.isProduction(environment)

@@ -48,9 +48,10 @@ class ExceptionMappingContractTest {
     }
 
     @Test
-    @DisplayName("SSO 错误码：状态/令牌 401、未绑定 403、开户失败 422、IdP 不可用 503")
+    @DisplayName("SSO 错误码：关闭/状态/令牌 401、未绑定 403、开户失败 422、IdP 不可用 503")
     void ssoCodesMapToExpectedStatus() {
-        assertThat(handler.statusOf(ErrorCode.SSO_DISABLED)).isEqualTo(HttpStatus.BAD_REQUEST);
+        // 评测 4-3：SSO 关闭时登录入口不可用，语义是"未认证"，不是"请求参数有误"
+        assertThat(handler.statusOf(ErrorCode.SSO_DISABLED)).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(handler.statusOf(ErrorCode.SSO_STATE_INVALID)).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(handler.statusOf(ErrorCode.SSO_TOKEN_INVALID)).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(handler.statusOf(ErrorCode.SSO_IDENTITY_NOT_LINKED)).isEqualTo(HttpStatus.FORBIDDEN);

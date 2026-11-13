@@ -668,6 +668,46 @@ release:
   tolerations: []
   affinity: {}
 
+# ---- 授权与许可（实例码绑定、模块门禁）----
+# 评测 E8-01：此前 values 无 license 键，但 job-migrate-license.yaml 已引用
+# .Values.license.*，16 个 Deployment 也独缺 license → 私有化交付装不出授权后端。
+license:
+  enabled: true
+  image:
+    repository: platform-license
+    tag: "0.1.0-SNAPSHOT"
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  revisionHistoryLimit: 5
+  terminationGracePeriodSeconds: 30
+  service:
+    type: ClusterIP
+    port: 8095
+  resources:
+    requests: {cpu: 100m, memory: 256Mi}
+    limits: {cpu: 300m, memory: 512Mi}
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 2
+    targetCPUUtilizationPercentage: 70
+  podDisruptionBudget:
+    enabled: false
+    minAvailable: 1
+  probes:
+    startup: {failureThreshold: 30, periodSeconds: 5}
+    liveness: {initialDelaySeconds: 20, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+    readiness: {initialDelaySeconds: 10, periodSeconds: 10, timeoutSeconds: 3, failureThreshold: 3}
+  # 院方部署只验签不签发；实例码必须与授权书一致（缺失即拒绝启动）
+  env:
+    - name: LICENSE_DEPLOYMENT_MODE
+      value: hospital
+    - name: LICENSE_ISSUANCE_ENABLED
+      value: "false"
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
 # ---- 医技域（检查/检验申请、标本、报告、危急值）----
 tech:
   enabled: true

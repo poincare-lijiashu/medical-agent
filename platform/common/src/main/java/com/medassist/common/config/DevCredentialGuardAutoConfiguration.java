@@ -6,7 +6,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.Environment;
+import org.springframework.core.env.EnumerablePropertySource;
+import org.springframework.core.env.PropertySource;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +44,8 @@ public class DevCredentialGuardAutoConfiguration {
         /** 与各服务 application.yml 的默认值保持一致。 */
         static final String DEV_PG_PASSWORD = "medagent123";
         static final String DEV_NACOS_PASSWORD = "nacos";
+        /** 评测 D-21：application-dev.yml 里的公开开发令牌，生产出现即为泄露。 */
+        static final String DEV_INTERNAL_TOKEN = "medassist-dev-internal-token";
 
         private final Environment environment;
 
@@ -50,7 +55,7 @@ public class DevCredentialGuardAutoConfiguration {
 
         @Override
         public void afterPropertiesSet() {
-            List<String> findings = new ArrayList<>(2);
+            List<String> findings = new ArrayList<>(3);
             if (DEV_PG_PASSWORD.equals(environment.getProperty("spring.datasource.password"))) {
                 findings.add("spring.datasource.password");
             }
@@ -60,15 +65,49 @@ public class DevCredentialGuardAutoConfiguration {
                     environment.getProperty("spring.cloud.nacos.discovery.password"))) {
                 findings.add("spring.cloud.nacos.discovery.password");
             }
+            // 评测 D-21：内部接口令牌此前无守卫（JWT/EMPI/PG 都有），
+            // 生产一旦沿用仓库里的公开开发令牌，等于"任何人都能调 /internal/**"。
+            String leakedKey = findDevInternalTokenKey();
+            if (leakedKey != null) {
+                findings.add(leakedKey);
+            }
             if (findings.isEmpty()) {
                 return;
             }
             String detail = "仍在使用开发默认口令：" + String.join("、", findings)
-                    + "（请通过 PG_PASSWORD / NACOS_PASSWORD 注入正式凭据）";
+                    + "（请通过 PG_PASSWORD / NACOS_PASSWORD / INTERNAL_API_TOKEN 注入正式凭据）";
             if (SecurityDefaults.isProduction(environment)) {
                 throw new IllegalStateException("生产/预发布环境" + detail + "，服务拒绝启动");
             }
             log.warn("dev-credential-guard {}", detail);
+        }
+
+        /**
+         * 扫描所有配置源，找出"值为开发公开令牌"的内部令牌键。
+         *
+         * <p>各模块的键名不同（{@code empi.internal-token} / {@code clinical.internal-token} /
+         * {@code pharmacy.internal-api-token} …），按后缀匹配比维护一张键名清单更可靠：
+         * 新增模块时守卫自动覆盖，不会因为漏登记而失效。
+         */
+        private String findDevInternalTokenKey() {
+            if (!(environment instanceof ConfigurableEnvironment configurable)) {
+                return null;
+            }
+            for (PropertySource<?> source : configurable.getPropertySources()) {
+                if (!(source instanceof EnumerablePropertySource<?> enumerable)) {
+                    continue;
+                }
+                for (String name : enumerable.getPropertyNames()) {
+                    if (!name.endsWith("internal-token") && !name.endsWith("internal-api-token")) {
+                        continue;
+                    }
+                    Object value = source.getProperty(name);
+                    if (value instanceof String text && DEV_INTERNAL_TOKEN.equals(text.trim())) {
+                        return name;
+                    }
+                }
+            }
+            return null;
         }
     }
 }

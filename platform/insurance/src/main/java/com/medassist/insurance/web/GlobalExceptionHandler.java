@@ -32,7 +32,10 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
                  INSURANCE_TEMPLATE_INVALID, INSURANCE_TEMPLATE_REQUIRED_MISSING
                  -> HttpStatus.UNPROCESSABLE_ENTITY;
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
-            case UPSTREAM_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            // 评测 4-3：分组器不可用是依赖故障，必须是 503（前端才会提示"稍后重试"），
+            // 曾被 default 降级为 400 → 表现为"参数有误"，运维口径被污染
+            case UPSTREAM_UNAVAILABLE, INSURANCE_GROUPER_UNAVAILABLE
+                 -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
             default -> HttpStatus.BAD_REQUEST;
         };

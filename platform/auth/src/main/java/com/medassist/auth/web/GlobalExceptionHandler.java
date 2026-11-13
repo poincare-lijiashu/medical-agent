@@ -27,7 +27,10 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case NOT_FOUND, PATIENT_NOT_FOUND, REGISTRATION_NO_SLOT,
                  USER_NOT_FOUND, SESSION_NOT_FOUND, OAUTH_CLIENT_NOT_FOUND,
                  TENANT_NOT_FOUND -> HttpStatus.NOT_FOUND;
-            case UNAUTHORIZED, SSO_STATE_INVALID, SSO_TOKEN_INVALID, OAUTH_SECRET_INVALID -> HttpStatus.UNAUTHORIZED;
+            case UNAUTHORIZED, SSO_STATE_INVALID, SSO_TOKEN_INVALID, OAUTH_SECRET_INVALID,
+                 // 评测 4-3：SSO 被关闭时登录入口不可用，语义是"未认证/不可用"，
+                 // 曾被降级为 400（前端误提示"参数错误"）
+                 SSO_DISABLED -> HttpStatus.UNAUTHORIZED;
             case FORBIDDEN, LAST_ADMIN_PROTECTED, SSO_IDENTITY_NOT_LINKED,
                  TENANT_SUSPENDED, TENANT_MISMATCH, TENANT_INSTANCE_MISMATCH -> HttpStatus.FORBIDDEN;
             case CONFLICT, PATIENT_DUPLICATE, PATIENT_MERGE_CONFLICT, REGISTRATION_DUPLICATED,

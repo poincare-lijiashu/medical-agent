@@ -132,6 +132,11 @@ if (-not $secret) {
 }
 $env:JWT_SECRET = $secret
 
+# 评测 S-01（Critical）：服务间未启用签名校验时必须只监听回环地址，
+# 否则同网段任何主机都能伪造 X-Actor / X-Permissions 头直接读取 PHI。
+# 网关同样只监听回环：对外入口由 AI 中台（8001）同源代理。
+$env:SERVER_ADDRESS = "127.0.0.1"
+
 # 服务间内部令牌：/internal/** 端点 fail-closed 校验，缺失即拒绝。
 # 同上：必须由 .env.local/环境变量提供，不在脚本里写死。
 $internal = Get-EnvValue "INTERNAL_API_TOKEN"

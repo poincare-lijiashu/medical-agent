@@ -207,6 +207,25 @@ spec:
     {{- include "medassist.selectorLabels" (dict "root" $ "component" "release") | nindent 4 }}
 ---
 {{- end }}
+{{- if .Values.license.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "medassist.componentName" (dict "root" $ "component" "license") }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "medassist.labels" (dict "root" $ "component" "license") | nindent 4 }}
+spec:
+  type: {{ .Values.license.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.license.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "medassist.selectorLabels" (dict "root" $ "component" "license") | nindent 4 }}
+---
+{{- end }}
 {{- if .Values.tech.enabled }}
 apiVersion: v1
 kind: Service

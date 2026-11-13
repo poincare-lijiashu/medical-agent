@@ -151,10 +151,76 @@
           <excludedGroups>postgres</excludedGroups>
         </configuration>
       </plugin>
+      <!--
+        评测 E7-L4（2026-11-13）：此前 JaCoCo 只在 pluginManagement 声明版本，
+        从未绑定执行 → "Java 侧覆盖率"根本不可知，回归风险不可见。
+        现在默认构建产出覆盖率报告；阈值门禁用 `mvn -Pcoverage-gate verify` 开启，
+        避免存量低覆盖模块一次性把流水线打红（阈值由 CI 逐步收紧）。
+      -->
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>prepare-agent</id>
+            <goals>
+              <goal>prepare-agent</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>report</id>
+            <phase>verify</phase>
+            <goals>
+              <goal>report</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 
   <profiles>
+    <!--
+      覆盖率门禁（评测 E7-L4）：
+        mvn -Pcoverage-gate verify
+      只对"有测试的模块"生效（common 等纯技术模块按需排除），阈值先给到 50% 行覆盖，
+      CI 跑通后再逐步收紧；默认构建只出报告不阻断，避免存量低覆盖一次性打红。
+    -->
+    <profile>
+      <id>coverage-gate</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.jacoco</groupId>
+            <artifactId>jacoco-maven-plugin</artifactId>
+            <executions>
+              <execution>
+                <id>check</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>check</goal>
+                </goals>
+                <configuration>
+                  <rules>
+                    <rule>
+                      <element>BUNDLE</element>
+                      <limits>
+                        <limit>
+                          <counter>LINE</counter>
+                          <value>COVEREDRATIO</value>
+                          <minimum>0.50</minimum>
+                        </limit>
+                      </limits>
+                    </rule>
+                  </rules>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
     <!--
       真库 SQL 级集成测试（意见书 P1-4 / §5.1）：
         mvn -Ppostgres-it -pl clinical -am test

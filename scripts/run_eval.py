@@ -24,6 +24,11 @@ import urllib.request
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EVAL_DIR = os.path.join(BASE, "eval")
+# 评测 D-12：把 eval_metrics 里写好的引用精确率/拒答正确率/ECE 真正接进来。
+# 直接 `python scripts\run_eval.py` 时 sys.path[0] 是 scripts/，显式加一次以保证
+# 从仓库根目录或其它工作目录调用都能导入。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from eval_metrics import citation_precision, refusal_correct, summarize  # noqa: E402
 SERVER = os.environ.get("MEDICAL_SERVER", "http://127.0.0.1:8001")
 # 凭据安全（终评 F3）：评测口令不再内置默认值——缺失时 login() 明确退出并指路，
 # 防止把真实凭据硬编码进版本库/脚本传播。
@@ -161,6 +166,35 @@ def run_case(case: dict) -> dict:
                                            "needs_human_review", "sources", "error")}}
 
 
+def _metric_rows(results: list[dict]) -> list[dict]:
+    """把每题结果映射成指标输入。
+
+    <p>为什么这样取：评测集没有"标准证据集"，所以引用精确率用"真实引用
+    （非 fallback 来源）占比"作为可计算代理——它仍能发现"整篇答案只靠模型常识兜底
+    却标注了来源"这类最常见的引用造假；拒答正确率用 needs_human_review/置信度
+    与"该题是否本就不可答（expect_hit=false）"比对；ECE 用 (置信度, 是否命中)。
+    """
+    rows = []
+    for r in results:
+        resp = r.get("resp") or {}
+        sources = [str(s) for s in (resp.get("sources") or [])]
+        real = [s for s in sources if not s.startswith("fallback")]
+        conf = resp.get("confidence")
+        # 只有用例显式声明 expect_hit=False（本就不可答）才算"金标准不可答"；
+        # 命中失败不等于题目不可答，不能拿它反推，否则拒答指标会被答错题污染。
+        gold_unanswerable = str(r.get("expect") or "") == "expect_hit=False"
+        rows.append({
+            "citation_precision": citation_precision(sources, real),
+            "refusal_correct": None if conf is None else refusal_correct(
+                bool(resp.get("needs_human_review")), float(conf),
+                gold_unanswerable=gold_unanswerable),
+            # confidence 缺失时不要放这个键：summarize() 的 ECE 分支按"键存在"取数
+            **({"confidence": float(conf)} if conf is not None else {}),
+            "correct": 1 if r.get("hit") else 0,
+        })
+    return rows
+
+
 def main() -> int:
     # 任务2：eval runner 属非服务进程（不跑 lifespan/无 PG 池），启动时显式置离线模式——
     # 同进程内任何 backend 模块导入（pg_store repo 层）走纯静默 JSON：不置 stale、
@@ -205,14 +239,34 @@ def main() -> int:
         print(f"[{mark}] {r['agent']}: {r['question']}  "
               f"(conf={r['confidence']}, {r['elapsed_s']}s){fb}")
     print(f"\nEVAL[{MODE}] hit_rate = {passed}/{len(results)} = {rate:.0%}")
+    # 评测 D-12：三项质量指标（此前只写不接，CI 门槛形同虚设）
+    metrics = summarize(_metric_rows(results))
+    print(f"metrics: citation_precision={metrics['citation_precision_mean']} "
+          f"refusal_accuracy={metrics['refusal_accuracy']} ece={metrics['ece']}")
     report = {"mode": MODE, "cases_file": os.path.abspath(args.cases) if args.cases else "builtin",
-              "hit_rate": rate, "passed": passed, "total": len(results), "results": results}
+              "hit_rate": rate, "passed": passed, "total": len(results),
+              "metrics": metrics, "results": results}
     paths = [OUT] if args.cases else [OUT, _COMPAT_OUT]  # 难题集不覆盖 baseline 兼容摘要
     for path in paths:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
     print(f"report -> {OUT}")
+
+    # 质量门槛：可用环境变量调整；指标为 None（样本不足）时不阻断，避免误杀小样本集
+    cp_min = float(os.environ.get("EVAL_CITATION_MIN", "0.80"))
+    refusal_min = float(os.environ.get("EVAL_REFUSAL_MIN", "0.80"))
+    ece_max = float(os.environ.get("EVAL_ECE_MAX", "0.15"))
+    violations = []
+    if metrics["citation_precision_mean"] is not None and metrics["citation_precision_mean"] < cp_min:
+        violations.append(f"citation_precision {metrics['citation_precision_mean']} < {cp_min}")
+    if metrics["refusal_accuracy"] is not None and metrics["refusal_accuracy"] < refusal_min:
+        violations.append(f"refusal_accuracy {metrics['refusal_accuracy']} < {refusal_min}")
+    if metrics["ece"] is not None and metrics["ece"] > ece_max:
+        violations.append(f"ece {metrics['ece']} > {ece_max}")
+    if violations:
+        print("[eval] 质量门槛未通过：" + "；".join(violations), file=sys.stderr)
+        return 1
     return 0 if rate >= 0.8 else 1
 
 

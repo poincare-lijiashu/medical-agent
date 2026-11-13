@@ -50,6 +50,8 @@ public class GlobalExceptionHandler extends AbstractApiExceptionHandler {
             case TOO_MANY_REQUESTS -> HttpStatus.TOO_MANY_REQUESTS;
             case UPSTREAM_UNAVAILABLE, CA_PROVIDER_UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
             case GATEWAY_TIMEOUT -> HttpStatus.GATEWAY_TIMEOUT;
+            // 评测 4-3：病案首页编码内部故障必须是 5xx（曾被降级为 400）
+            case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;
             default -> HttpStatus.BAD_REQUEST;
         };
     }

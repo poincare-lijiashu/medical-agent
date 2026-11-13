@@ -70,7 +70,23 @@ public class GoLiveCockpitService {
         freezeFactor(scope, now, factors, blockers, warnings, evidence);
         p1Factor(factors, warnings, evidence);
 
-        boolean ready = factors.stream().noneMatch(Factor::blocking);
+        // 评测 E8-02：SKIP（门禁未参与判定）不等于通过。IMPLEMENTATION/SLO 未就绪时
+        // 若仍判 READY，评审会被绿标误导；这里把"未参与"单独列为缺口并阻止放行。
+        List<String> gaps = factors.stream()
+                .filter(f -> "SKIP".equals(f.status()))
+                .map(Factor::code)
+                .toList();
+        if (!gaps.isEmpty()) {
+            blockers.add("以下门禁未参与判定：" + String.join("、", gaps)
+                    + "；请补齐关联后再评审");
+        }
+        evidence.put("participatingGates", factors.stream()
+                .filter(f -> !"SKIP".equals(f.status()))
+                .map(Factor::code)
+                .toList());
+        evidence.put("gaps", gaps);
+
+        boolean ready = factors.stream().noneMatch(Factor::blocking) && gaps.isEmpty();
         return new Report(now, scope, env, project, factors, ready, blockers, warnings, evidence);
     }
 
@@ -161,9 +177,12 @@ public class GoLiveCockpitService {
                     .filter(d -> "BREACHED".equals(d.evaluation().status())).count();
             long atRisk = slos.stream()
                     .filter(d -> "AT_RISK".equals(d.evaluation().status())).count();
+            long noData = slos.stream()
+                    .filter(d -> "NO_DATA".equals(d.evaluation().status())).count();
             evidence.put("sloTotal", slos.size());
             evidence.put("sloBreached", breached);
             evidence.put("sloAtRisk", atRisk);
+            evidence.put("sloNoData", noData);
             if (slos.isEmpty()) {
                 factors.add(new Factor("SLO", "SLO 错误预算", "SKIP", "尚未定义 SLO", false));
                 warnings.add("尚未定义 SLO，错误预算未参与判定");
@@ -181,8 +200,21 @@ public class GoLiveCockpitService {
                 warnings.add("有 " + atRisk + " 条 SLO 错误预算告急");
                 return;
             }
-            factors.add(new Factor("SLO", "SLO 错误预算", "PASS",
-                    slos.size() + " 条 SLO 均健康", false));
+            // 评测：NO_DATA 不等于健康。仅有目标但无快照时不能给 PASS，
+            // 否则"没有任何观测数据"会被读成"全部达标"（与 fail-open 同一类问题）。
+            long observed = slos.size() - noData;
+            if (observed == 0) {
+                factors.add(new Factor("SLO", "SLO 错误预算", "SKIP",
+                        slos.size() + " 条 SLO 尚无观测数据", false));
+                warnings.add("SLO 目标已定义但无快照数据，错误预算未参与判定");
+                return;
+            }
+            factors.add(new Factor("SLO", "SLO 错误预算", noData > 0 ? "WARN" : "PASS",
+                    observed + " 条有数据且均健康"
+                            + (noData > 0 ? "，" + noData + " 条尚无数据" : ""), false));
+            if (noData > 0) {
+                warnings.add("有 " + noData + " 条 SLO 尚无观测数据");
+            }
         } catch (RuntimeException e) {
             factors.add(new Factor("SLO", "SLO 错误预算", "FAIL",
                     "无法读取 SLO，按不可放行处理", true));
