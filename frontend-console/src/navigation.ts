@@ -501,6 +501,16 @@ export const NAV_ITEMS: NavItem[] = [
     permissions: ['release:read'],
   },
   {
+    // 第 297 批：灾备演练（备份策略与运行 / 演练与 RTO-RPO / 四眼复核 / 发布门禁）
+    name: 'dr-drill',
+    path: '/ops/dr',
+    title: '灾备演练',
+    hint: '备份策略 · 备份运行幂等 · 演练步骤与 RTO/RPO · 四眼复核 · 发布门禁',
+    icon: 'archive',
+    group: '平台运维',
+    permissions: ['ops:dr:read'],
+  },
+  {
     name: 'his-workbench',
     path: '/his-workbench',
     title: 'HIS 集成工作台',

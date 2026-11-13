@@ -540,6 +540,25 @@ public enum ErrorCode {
     /** 接入令牌错误：401 段，网关白名单放行后由服务自身校验。 */
     OPS_INTEGRATION_TOKEN_INVALID(40129, "接入令牌无效或已轮换，请更新告警平台配置"),
 
+    // ---- 备份与灾备（52xxx 续，§297）----
+    /*
+     * 备份与演练是发布门禁的证据链：缺记录、状态不对、时限不达标都要给稳定码，
+     * 否则发布页只能靠中文文案判断"为什么被拦"。
+     */
+    OPS_BACKUP_POLICY_NOT_FOUND(52429, "未找到该备份策略，或该策略已停用"),
+    OPS_BACKUP_POLICY_INVALID(52430, "备份策略不合法（范围/计划/保留/加密/RPO/负责人有误）"),
+    OPS_BACKUP_RUN_NOT_FOUND(52431, "未找到该备份运行记录"),
+    OPS_BACKUP_RUN_INVALID(52432, "备份运行内容不合法（类型/时间/大小/校验和/位置有误）"),
+    OPS_BACKUP_RUN_CONFLICT(52433, "同一幂等键的备份运行已结束，结果不可改写"),
+    OPS_DR_DRILL_NOT_FOUND(52434, "未找到该灾备演练"),
+    OPS_DR_STATUS_INVALID(52435, "当前演练状态不允许该操作"),
+    OPS_DR_TRANSITION_INVALID(52436, "演练状态流转不合法（PLANNED → RUNNING → PASSED/FAILED/ABORTED）"),
+    OPS_DR_STEPS_INCOMPLETE(52437, "仍有必填演练步骤未通过，不能判定演练通过"),
+    OPS_DR_TARGET_EXCEEDED(52438, "实测 RTO/RPO 超过目标值，不能判定演练通过"),
+    OPS_DR_SELF_VERIFY(52439, "演练执行人不能自行复核通过，请由另一名负责人复核"),
+    OPS_DR_EVIDENCE_REQUIRED(52440, "演练通过或步骤通过必须填写证据（日志/截图/还原结果）"),
+    OPS_DR_INVALID(52441, "演练内容不合法（范围/环境/目标/关联备份/步骤有误）"),
+
     // ---- 版本与补丁（53xxx，§273）----
     REL_COMPONENT_NOT_FOUND(53401, "未找到该发布组件"),
     REL_VERSION_NOT_FOUND(53402, "未找到该组件版本"),
@@ -565,6 +584,8 @@ public enum ErrorCode {
     REL_CI_SOURCE_NOT_FOUND(53422, "未找到该 CI 接入源，或该接入源已停用"),
     REL_CI_PAYLOAD_INVALID(53424, "CI 事件格式不合法（kind/component/version/result 有误）"),
     REL_CI_TOKEN_INVALID(40131, "CI 接入令牌无效或已轮换，请更新流水线密钥"),
+    /** 生产部署门禁：没有有效期内的已复核灾备演练，不允许上线。 */
+    REL_DR_DRILL_REQUIRED(53425, "缺少有效期内的灾备演练通过记录（需已复核），生产部署被拒绝"),
 
     // ---- 授权与许可（54xxx，§279）----
     LICENSE_NOT_FOUND(54401, "未找到该授权书"),

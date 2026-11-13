@@ -137,6 +137,8 @@ const messages: Record<MessageKey, string> = {
   'nav.open-platform.hint': 'Third-party client_credentials · read-only scope catalog · secret rotation and disable · integration examples',
   'nav.release-console.title': 'Release Management',
   'nav.release-console.hint': 'Components & immutable versions · release trains · compatibility matrix · patch approval · freeze windows · deploy & rollback',
+  'nav.dr-drill.title': 'DR Drill',
+  'nav.dr-drill.hint': 'Backup policies · idempotent backup runs · drill steps with RTO/RPO · four-eyes verification · release gate',
   'nav.group.系统管理': 'Administration',
 
   /* ---------- Navigation items ---------- */

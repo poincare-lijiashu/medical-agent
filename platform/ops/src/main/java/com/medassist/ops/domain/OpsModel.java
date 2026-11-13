@@ -210,6 +210,98 @@ public final class OpsModel {
             Instant updatedAt) {
     }
 
+    /** 备份策略。 */
+    public record BackupPolicy(
+            UUID id,
+            String code,
+            String name,
+            String scopeType,
+            String scopeRef,
+            String backupType,
+            String scheduleCron,
+            int retentionDays,
+            String encryption,
+            String storageTarget,
+            int rpoMinutes,
+            String owner,
+            String status,
+            Instant lastRunAt,
+            long version,
+            Instant createdAt,
+            Instant updatedAt) {
+    }
+
+    /** 备份运行事实。 */
+    public record BackupRun(
+            UUID id,
+            String runNo,
+            UUID policyId,
+            String policyCode,
+            String backupType,
+            String status,
+            String idempotencyKey,
+            Long sizeBytes,
+            String checksum,
+            String storageLocation,
+            Instant startedAt,
+            Instant finishedAt,
+            String errorMessage,
+            String reportedBy,
+            long version,
+            Instant createdAt,
+            Instant updatedAt) {
+    }
+
+    /** 演练步骤。 */
+    public record DrDrillStep(
+            UUID id,
+            UUID drillId,
+            int stepNo,
+            String name,
+            String status,
+            boolean required,
+            String evidence,
+            String note,
+            String actor,
+            Instant startedAt,
+            Instant completedAt) {
+    }
+
+    /** 灾备演练。 */
+    public record DrDrill(
+            UUID id,
+            String drillNo,
+            String title,
+            String scope,
+            String environment,
+            String status,
+            UUID backupRunId,
+            int rtoTargetMinutes,
+            Integer rtoActualMinutes,
+            int rpoTargetMinutes,
+            Integer rpoActualMinutes,
+            Integer dataLossMinutes,
+            boolean consistencyVerified,
+            String executor,
+            String verifier,
+            Instant verifiedAt,
+            String evidence,
+            String note,
+            Instant startedAt,
+            Instant completedAt,
+            long version,
+            Instant createdAt,
+            Instant updatedAt,
+            List<DrDrillStep> steps) {
+
+        public DrDrill withSteps(List<DrDrillStep> steps) {
+            return new DrDrill(id, drillNo, title, scope, environment, status, backupRunId,
+                    rtoTargetMinutes, rtoActualMinutes, rpoTargetMinutes, rpoActualMinutes,
+                    dataLossMinutes, consistencyVerified, executor, verifier, verifiedAt,
+                    evidence, note, startedAt, completedAt, version, createdAt, updatedAt, steps);
+        }
+    }
+
     /** 运营审计。 */
     public record AuditLog(
             long id,

@@ -5,6 +5,7 @@ import com.medassist.common.exception.BusinessException;
 import com.medassist.release.config.ReleaseProperties;
 import com.medassist.release.domain.ReleaseModel.ChangeWindow;
 import com.medassist.release.domain.ReleaseModel.Deployment;
+import com.medassist.release.domain.ReleaseModel.DrillGate;
 import com.medassist.release.domain.ReleaseModel.Patch;
 import com.medassist.release.domain.ReleaseModel.Version;
 import com.medassist.release.repo.ReleaseRepository;
@@ -50,8 +51,47 @@ class DeploymentServiceTest {
         when(catalog.requireVersion(VERSION_ID)).thenReturn(new Version(VERSION_ID,
                 "platform-clinical", "1.0.0", "abc", "sha256:x", null, "RELEASED", false,
                 "changelog", NOW, "release01", 0, NOW, NOW));
+        // §297：默认放行需要一条有效期内的已复核演练；需要验证门禁的用例自行覆盖
+        when(repo.latestPassedDrill(any(), any(), any())).thenReturn(Optional.of(
+                new DrillGate("DR202611010001", "季度灾备演练", NOW.minusSeconds(86400 * 10),
+                        "ops-manager", 20, 5)));
         service = new DeploymentService(repo, catalog, new ReleaseProperties(),
                 Clock.fixed(NOW, ZoneOffset.UTC));
+    }
+
+    @Test
+    @DisplayName("生产部署：没有有效期内已复核的灾备演练时拒绝（§297）")
+    void drDrillRequired() {
+        when(repo.latestPassedDrill(any(), any(), any())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.record(req("DEPLOY", fullChecklist()),
+                "deploy01", null, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.REL_DR_DRILL_REQUIRED);
+        verify(repo, org.mockito.Mockito.never()).insertDeployment(any());
+    }
+
+    @Test
+    @DisplayName("生产部署：演练查询失败时 fail-closed，不放行")
+    void drDrillLookupFailsClosed() {
+        when(repo.latestPassedDrill(any(), any(), any()))
+                .thenThrow(new IllegalStateException("schema ops_svc unavailable"));
+
+        assertThatThrownBy(() -> service.record(req("DEPLOY", fullChecklist()),
+                "deploy01", null, null))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).errorCode())
+                .isEqualTo(ErrorCode.REL_DR_DRILL_REQUIRED);
+    }
+
+    @Test
+    @DisplayName("生产部署：演练门禁按组件与 90 天窗口查询")
+    void drDrillGateQueryWindow() {
+        service.record(req("DEPLOY", fullChecklist()), "deploy01", null, null);
+
+        verify(repo).latestPassedDrill(eq("platform-clinical"), eq("PROD"),
+                eq(NOW.minus(java.time.Duration.ofDays(90))));
     }
 
     @Test
@@ -132,6 +172,8 @@ class DeploymentServiceTest {
         assertThat(saved.versionId()).isEqualTo(VERSION_ID);
         // 回滚记录必须继承原部署的 Cell：否则台账里会出现"回滚到别家"的歧义
         assertThat(saved.tenantCode()).isEqualTo("tenant-001");
+        // 回滚是在恢复稳定性，不应被灾备演练门禁拦住（§297）
+        verify(repo, org.mockito.Mockito.never()).latestPassedDrill(any(), any(), any());
     }
 
     @Test

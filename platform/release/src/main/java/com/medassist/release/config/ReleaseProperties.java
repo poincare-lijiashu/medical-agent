@@ -18,6 +18,13 @@ public class ReleaseProperties {
     private int maxPageSize = 200;
     private int auditListDefault = 50;
     private int auditListMax = 200;
+    /**
+     * 生产部署要求的灾备演练有效期（天，§297）。
+     *
+     * <p>超过该窗口的演练视为"没有演练"：恢复能力会随系统演进而衰减，
+     * 三个月前的通过记录不能为今天的上线背书。
+     */
+    private int drillMaxAgeDays = 90;
 
     public List<String> getProdChecklist() {
         return prodChecklist;
@@ -49,5 +56,13 @@ public class ReleaseProperties {
 
     public void setAuditListMax(int auditListMax) {
         this.auditListMax = auditListMax;
+    }
+
+    public int getDrillMaxAgeDays() {
+        return drillMaxAgeDays;
+    }
+
+    public void setDrillMaxAgeDays(int drillMaxAgeDays) {
+        this.drillMaxAgeDays = drillMaxAgeDays;
     }
 }

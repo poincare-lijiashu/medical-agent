@@ -4,6 +4,7 @@ import com.medassist.common.api.ErrorCode;
 import com.medassist.common.exception.BusinessException;
 import com.medassist.release.config.ReleaseProperties;
 import com.medassist.release.domain.ReleaseModel.Deployment;
+import com.medassist.release.domain.ReleaseModel.DrillGate;
 import com.medassist.release.domain.ReleaseModel.Version;
 import com.medassist.release.repo.ReleaseRepository;
 import com.medassist.release.web.ReleaseDtos;
@@ -11,11 +12,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -83,6 +86,7 @@ public class DeploymentService {
         }
 
         Instant now = clock.instant();
+        String drillRef = null;
         if ("PROD".equals(req.environment()) && !"ROLLBACK".equals(req.action())) {
             List<Map<String, Object>> freezes = new ArrayList<>();
             repo.activeFreezes(now, req.componentCode()).forEach(w -> freezes.add(Map.of(
@@ -96,6 +100,8 @@ public class DeploymentService {
                 }
             }
             requireChecklist(req.checklist());
+            // §297：生产上线必须有有效期内的、已复核的灾备演练通过记录
+            drillRef = requireDrDrill(req.componentCode(), now);
         }
 
         Deployment deployment = new Deployment(UUID.randomUUID(), req.componentCode(),
@@ -105,13 +111,17 @@ public class DeploymentService {
                 req.reason(), actor, req.startedAt(),
                 req.finishedAt() == null ? now : req.finishedAt(), now);
         repo.insertDeployment(deployment);
+        Map<String, Object> auditDetail = new LinkedHashMap<>();
+        auditDetail.put("environment", req.environment());
+        auditDetail.put("action", req.action());
+        auditDetail.put("result", req.result());
+        auditDetail.put("tenant", deployment.tenantCode() == null ? "" : deployment.tenantCode());
+        auditDetail.put("batch", deployment.batchLabel() == null ? "" : deployment.batchLabel());
+        if (drillRef != null) {
+            auditDetail.put("drDrill", drillRef);
+        }
         repo.audit(actor, "DEPLOY_RECORD",
-                req.componentCode() + "@" + version.version(),
-                Map.of("environment", req.environment(), "action", req.action(),
-                        "result", req.result(),
-                        "tenant", deployment.tenantCode() == null ? "" : deployment.tenantCode(),
-                        "batch", deployment.batchLabel() == null ? "" : deployment.batchLabel()),
-                clientIp, traceId);
+                req.componentCode() + "@" + version.version(), auditDetail, clientIp, traceId);
         return deployment;
     }
 
@@ -162,5 +172,31 @@ public class DeploymentService {
             throw new BusinessException(ErrorCode.REL_CHECKLIST_INCOMPLETE,
                     "缺少检查项：" + String.join(", ", missing));
         }
+    }
+
+    /**
+     * 生产部署的灾备演练门禁（§297）。
+     *
+     * <p>fail-closed：查不到、查失败、过期、未复核都按"没有演练"处理——
+     * 门禁的价值在于拒绝，而不是在依赖故障时默默放行。
+     *
+     * @return 通过时的演练编号，写入部署审计，便于事后追溯"凭哪次演练上线"
+     */
+    private String requireDrDrill(String componentCode, Instant now) {
+        int maxAgeDays = Math.max(properties.getDrillMaxAgeDays(), 1);
+        Instant since = now.minus(Duration.ofDays(maxAgeDays));
+        Optional<DrillGate> gate;
+        try {
+            gate = repo.latestPassedDrill(componentCode, "PROD", since);
+        } catch (RuntimeException e) {
+            throw new BusinessException(ErrorCode.REL_DR_DRILL_REQUIRED,
+                    "无法读取灾备演练记录，按未通过处理；请检查运营服务与数据库连通性");
+        }
+        if (gate.isEmpty()) {
+            throw new BusinessException(ErrorCode.REL_DR_DRILL_REQUIRED,
+                    "组件 " + componentCode + " 近 " + maxAgeDays
+                            + " 天内没有已复核的灾备演练通过记录");
+        }
+        return gate.get().drillNo();
     }
 }

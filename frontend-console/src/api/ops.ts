@@ -274,6 +274,121 @@ export interface TicketFilter {
   size?: number
 }
 
+/* ------------------------------------------------------------------ *
+ * 备份与灾备（§297）
+ * ------------------------------------------------------------------ */
+export type BackupScopeType = 'ALL' | 'COMPONENT' | 'SCHEMA'
+export type BackupType = 'FULL' | 'INCREMENTAL' | 'WAL' | 'LOGICAL'
+export type BackupRunStatus = 'RUNNING' | 'SUCCESS' | 'FAILED'
+export type DrStatus = 'PLANNED' | 'RUNNING' | 'PASSED' | 'FAILED' | 'ABORTED'
+export type DrStepStatus = 'PENDING' | 'PASSED' | 'FAILED' | 'SKIPPED'
+
+export interface BackupPolicy {
+  id: string
+  code: string
+  name: string
+  scopeType: BackupScopeType
+  scopeRef: string | null
+  backupType: BackupType
+  scheduleCron: string
+  retentionDays: number
+  encryption: 'NONE' | 'AES256' | 'KMS'
+  storageTarget: string
+  rpoMinutes: number
+  owner: string
+  status: 'ACTIVE' | 'INACTIVE'
+  lastRunAt: string | null
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BackupRun {
+  id: string
+  runNo: string
+  policyId: string
+  policyCode: string
+  backupType: BackupType
+  status: BackupRunStatus
+  idempotencyKey: string
+  sizeBytes: number | null
+  checksum: string | null
+  storageLocation: string | null
+  startedAt: string
+  finishedAt: string | null
+  errorMessage: string | null
+  reportedBy: string
+  version: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface DrDrillStep {
+  id: string
+  drillId: string
+  stepNo: number
+  name: string
+  status: DrStepStatus
+  required: boolean
+  evidence: string | null
+  note: string | null
+  actor: string | null
+  startedAt: string | null
+  completedAt: string | null
+}
+
+export interface DrDrill {
+  id: string
+  drillNo: string
+  title: string
+  scope: string
+  environment: 'PROD' | 'STAGING' | 'DRILL'
+  status: DrStatus
+  backupRunId: string | null
+  rtoTargetMinutes: number
+  rtoActualMinutes: number | null
+  rpoTargetMinutes: number
+  rpoActualMinutes: number | null
+  dataLossMinutes: number | null
+  consistencyVerified: boolean
+  executor: string
+  verifier: string | null
+  verifiedAt: string | null
+  evidence: string | null
+  note: string | null
+  startedAt: string | null
+  completedAt: string | null
+  version: number
+  createdAt: string
+  updatedAt: string
+  steps: DrDrillStep[]
+}
+
+export interface DrGate {
+  scope: string
+  environment: string
+  windowDays: number
+  eligible: boolean
+  reason: string
+  drillNo?: string
+  title?: string
+  completedAt?: string
+  verifiedAt?: string
+  verifier?: string
+  ageDays?: number
+  rtoTargetMinutes?: number
+  rtoActualMinutes?: number
+  rpoTargetMinutes?: number
+  rpoActualMinutes?: number
+  dataLossMinutes?: number
+}
+
+export interface DrStepReq {
+  stepNo: number
+  name: string
+  required?: boolean
+}
+
 export const opsApi = {
   dashboard: (trendDays = 14) => get<OpsDashboard>('/ops/dashboard', { trendDays }),
 
@@ -396,4 +511,77 @@ export const opsApi = {
     post<AlertSource>(`/ops/integrations/alert-sources/${id}/disable`),
   alertEvents: (sourceCode?: string, limit = 100) =>
     get<AlertHookEvent[]>('/ops/integrations/alert-events', { sourceCode, limit }),
+
+  // ---- 备份与灾备（§297）----
+  backupPolicies: (onlyActive = false) =>
+    get<BackupPolicy[]>('/ops/backup/policies', { onlyActive }),
+  upsertBackupPolicy: (body: {
+    code: string
+    name: string
+    scopeType: BackupScopeType
+    scopeRef?: string
+    backupType: BackupType
+    scheduleCron: string
+    retentionDays?: number
+    encryption?: 'NONE' | 'AES256' | 'KMS'
+    storageTarget: string
+    rpoMinutes: number
+    owner: string
+    status?: 'ACTIVE' | 'INACTIVE'
+  }) => post<BackupPolicy>('/ops/backup/policies', body),
+  backupRuns: (params: {
+    policyCode?: string
+    status?: string
+    page?: number
+    size?: number
+  }) => get<PageResult<BackupRun>>('/ops/backup/runs', { ...params }),
+  reportBackupRun: (body: {
+    policyCode: string
+    backupType: BackupType
+    status: BackupRunStatus
+    idempotencyKey: string
+    startedAt: string
+    finishedAt?: string
+    sizeBytes?: number
+    checksum?: string
+    storageLocation?: string
+    errorMessage?: string
+  }) => post<BackupRun>('/ops/backup/runs', body),
+
+  drills: (params: { scope?: string; status?: string; page?: number; size?: number }) =>
+    get<PageResult<DrDrill>>('/ops/dr/drills', { ...params }),
+  drill: (id: string) => get<DrDrill>(`/ops/dr/drills/${id}`),
+  createDrill: (body: {
+    title: string
+    scope: string
+    environment: 'PROD' | 'STAGING' | 'DRILL'
+    backupRunId?: string
+    rtoTargetMinutes: number
+    rpoTargetMinutes: number
+    steps?: DrStepReq[]
+    note?: string
+  }) => post<DrDrill>('/ops/dr/drills', body),
+  startDrill: (id: string) => post<DrDrill>(`/ops/dr/drills/${id}/start`),
+  updateDrillStep: (
+    id: string,
+    stepNo: number,
+    body: { status: DrStepStatus; evidence?: string; note?: string },
+  ) => post<DrDrill>(`/ops/dr/drills/${id}/steps/${stepNo}`, body),
+  completeDrill: (
+    id: string,
+    body: {
+      rtoActualMinutes: number
+      rpoActualMinutes: number
+      dataLossMinutes?: number
+      consistencyVerified: boolean
+      evidence: string
+      note?: string
+    },
+  ) => post<DrDrill>(`/ops/dr/drills/${id}/complete`, body),
+  failDrill: (id: string, reason: string) =>
+    post<DrDrill>(`/ops/dr/drills/${id}/fail`, { reason }),
+  abortDrill: (id: string, reason: string) =>
+    post<DrDrill>(`/ops/dr/drills/${id}/abort`, { reason }),
+  drGate: (scope: string, environment = 'PROD', days = 90) =>
+    get<DrGate>('/ops/dr/gate', { scope, environment, days }),
 }

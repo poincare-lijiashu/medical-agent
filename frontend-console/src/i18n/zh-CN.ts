@@ -126,6 +126,8 @@ const messages = {
   'nav.ops-console.hint': 'SLA 工单 · 首响/解决倒计时 · 值班轮换 · 重大事件与复盘',
   'nav.release-console.title': '发布管理',
   'nav.release-console.hint': '组件与不可变版本 · 发布列车 · 兼容矩阵 · 补丁审批 · 冻结窗口 · 部署回滚',
+  'nav.dr-drill.title': '灾备演练',
+  'nav.dr-drill.hint': '备份策略 · 备份运行幂等 · 演练步骤与 RTO/RPO · 四眼复核 · 发布门禁',
   'nav.license.title': '授权与许可',
   'nav.license.hint': '版本与模块权益 · 配额使用 · 授权书导入验签 · 续期与吊销',
   'nav.tenant.title': '租户管理',

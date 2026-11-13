@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
@@ -156,5 +157,77 @@ public final class OpsDtos {
 
     public record PostmortemApproveReq(
             @Size(max = 1000) String note) {
+    }
+
+    // ------------------------------------------------------------------ 备份与灾备（§297）
+
+    public record BackupPolicyReq(
+            @NotBlank @Size(max = 64) String code,
+            @NotBlank @Size(max = 128) String name,
+            @NotBlank @Pattern(regexp = "ALL|COMPONENT|SCHEMA") String scopeType,
+            @Size(max = 128) String scopeRef,
+            @NotBlank @Pattern(regexp = "FULL|INCREMENTAL|WAL|LOGICAL") String backupType,
+            @NotBlank @Size(max = 64) String scheduleCron,
+            @Min(1) @Max(3650) Integer retentionDays,
+            @Pattern(regexp = "NONE|AES256|KMS") String encryption,
+            @NotBlank @Size(max = 512) String storageTarget,
+            @Min(1) @Max(43200) int rpoMinutes,
+            @NotBlank @Size(max = 64) String owner,
+            @Pattern(regexp = "ACTIVE|INACTIVE") String status) {
+    }
+
+    /**
+     * 备份运行上报。
+     *
+     * <p>{@code idempotencyKey} 由备份平台生成（同一作业重试必须复用），
+     * 服务端据此保证"重试不重复记账"。
+     */
+    public record BackupRunReq(
+            @NotBlank @Size(max = 64) String policyCode,
+            @NotBlank @Pattern(regexp = "FULL|INCREMENTAL|WAL|LOGICAL") String backupType,
+            @NotBlank @Pattern(regexp = "RUNNING|SUCCESS|FAILED") String status,
+            @NotBlank @Size(max = 128) String idempotencyKey,
+            @NotNull Instant startedAt,
+            Instant finishedAt,
+            @Min(0) Long sizeBytes,
+            @Size(max = 128) String checksum,
+            @Size(max = 512) String storageLocation,
+            @Size(max = 1000) String errorMessage) {
+    }
+
+    public record DrDrillStepReq(
+            @NotNull @Min(1) @Max(99) Integer stepNo,
+            @NotBlank @Size(max = 200) String name,
+            Boolean required) {
+    }
+
+    public record DrDrillCreateReq(
+            @NotBlank @Size(max = 200) String title,
+            @NotBlank @Size(max = 64) String scope,
+            @NotBlank @Pattern(regexp = "PROD|STAGING|DRILL") String environment,
+            UUID backupRunId,
+            @Min(1) @Max(43200) int rtoTargetMinutes,
+            @Min(1) @Max(43200) int rpoTargetMinutes,
+            List<@NotNull DrDrillStepReq> steps,
+            @Size(max = 1000) String note) {
+    }
+
+    public record DrDrillStepUpdateReq(
+            @NotBlank @Pattern(regexp = "PENDING|PASSED|FAILED|SKIPPED") String status,
+            @Size(max = 1000) String evidence,
+            @Size(max = 1000) String note) {
+    }
+
+    public record DrDrillCompleteReq(
+            @Min(0) @Max(43200) int rtoActualMinutes,
+            @Min(0) @Max(43200) int rpoActualMinutes,
+            @Min(0) @Max(43200) Integer dataLossMinutes,
+            @NotNull Boolean consistencyVerified,
+            @NotBlank @Size(max = 1000) String evidence,
+            @Size(max = 1000) String note) {
+    }
+
+    public record DrDrillReasonReq(
+            @NotBlank @Size(min = 2, max = 1000) String reason) {
     }
 }

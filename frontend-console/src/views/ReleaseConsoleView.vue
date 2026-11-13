@@ -5,6 +5,9 @@
       :sub="`组件 · 不可变版本 · 发布列车 · 兼容矩阵 · 补丁审批 · 冻结窗口 · 部署与回滚（近 ${dashboard?.windowDays ?? 30} 天口径）`"
     >
       <template #actions>
+        <router-link v-if="canSeeDr" class="btn" to="/ops/dr">
+          <AppIcon name="archive" :size="15" /> 灾备演练
+        </router-link>
         <button class="btn" type="button" :disabled="loading" @click="loadDashboard">
           <AppIcon name="refresh" :size="15" /> 刷新
         </button>
@@ -98,9 +101,12 @@ import ReleaseDeployPanel from '@/components/domain/release/ReleaseDeployPanel.v
 import ReleaseIntegrationPanel from '@/components/domain/release/ReleaseIntegrationPanel.vue'
 import { releaseApi, type ReleaseDashboard } from '@/api/release'
 import { errorText } from '@/api/http'
+import { hasPermission } from '@/stores/session'
 import { toast } from '@/stores/toast'
 
 type TabKey = 'versions' | 'trains' | 'patches' | 'deploy' | 'ci'
+
+const canSeeDr = hasPermission('ops:dr:read')
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: 'versions', label: '版本与兼容' },

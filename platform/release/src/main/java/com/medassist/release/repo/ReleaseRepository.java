@@ -7,6 +7,7 @@ import com.medassist.release.domain.ReleaseModel.ChangeWindow;
 import com.medassist.release.domain.ReleaseModel.Compatibility;
 import com.medassist.release.domain.ReleaseModel.Component;
 import com.medassist.release.domain.ReleaseModel.Deployment;
+import com.medassist.release.domain.ReleaseModel.DrillGate;
 import com.medassist.release.domain.ReleaseModel.Patch;
 import com.medassist.release.domain.ReleaseModel.Train;
 import com.medassist.release.domain.ReleaseModel.TrainItem;
@@ -561,6 +562,34 @@ public class ReleaseRepository {
     }
 
     // ------------------------------------------------------------------ 部署
+
+    /**
+     * 最近一次有效期内的灾备演练通过记录（§297）。
+     *
+     * <p>跨 schema 只读 {@code ops_svc.ops_dr_drill}：发布门禁不维护演练副本，
+     * 避免"运营域已判定失败、发布域还拿着旧快照放行"。scope 为组件编码或 ALL。
+     */
+    public Optional<DrillGate> latestPassedDrill(String scope, String environment, Instant since) {
+        return plain.query("""
+                SELECT drill_no, title, completed_at, verifier,
+                       rto_actual_minutes, rpo_actual_minutes
+                  FROM ops_svc.ops_dr_drill
+                 WHERE status = 'PASSED'
+                   AND environment = ?
+                   AND verifier IS NOT NULL
+                   AND (scope = ? OR scope = 'ALL')
+                   AND completed_at >= ?
+                 ORDER BY completed_at DESC
+                 LIMIT 1
+                """, (rs, n) -> new DrillGate(
+                rs.getString("drill_no"),
+                rs.getString("title"),
+                instant(rs, "completed_at"),
+                rs.getString("verifier"),
+                rs.getObject("rto_actual_minutes", Integer.class),
+                rs.getObject("rpo_actual_minutes", Integer.class)),
+                environment, scope, timestamp(since)).stream().findFirst();
+    }
 
     private static final RowMapper<Deployment> DEPLOY_MAPPER = (rs, n) -> new Deployment(
             rs.getObject("id", UUID.class),

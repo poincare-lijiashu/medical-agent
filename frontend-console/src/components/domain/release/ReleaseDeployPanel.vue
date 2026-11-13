@@ -306,6 +306,9 @@
             <span class="hint"> · {{ item.hint }}</span>
           </span>
         </label>
+        <p class="hint">
+          §297 门禁：生产部署还要求近 90 天内有已复核的灾备演练通过记录；缺失或过期时后端拒绝记录。
+        </p>
       </div>
 
       <template #footer>

@@ -233,6 +233,12 @@ const router = createRouter({
           component: () => import('@/views/ReleaseConsoleView.vue'),
         },
         {
+          // 第 297 批：灾备演练（备份策略/运行 · 演练步骤与 RTO/RPO · 发布门禁）
+          path: 'ops/dr',
+          name: 'dr-drill',
+          component: () => import('@/views/DrDrillView.vue'),
+        },
+        {
           // 第 172 批：HIS 深度整合自检（适配器状态 / 患者与医嘱读取 / 就地审方）
           path: 'his-workbench',
           name: 'his-workbench',

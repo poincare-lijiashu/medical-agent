@@ -139,6 +139,20 @@ public final class ReleaseModel {
             Instant createdAt) {
     }
 
+    /**
+     * 灾备演练门禁证据（§297）。
+     *
+     * <p>发布域只读运营域的演练记录，不复制、不缓存：门禁必须反映"此刻"的事实。
+     */
+    public record DrillGate(
+            String drillNo,
+            String title,
+            Instant completedAt,
+            String verifier,
+            Integer rtoActualMinutes,
+            Integer rpoActualMinutes) {
+    }
+
     public record AuditLog(
             long id,
             Instant ts,

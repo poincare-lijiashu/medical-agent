@@ -775,3 +775,91 @@ curl -X POST .../incidents -d '{"agentId":"drug","kind":"FALSE_POSITIVE","severi
 - 事件标题/描述可能含临床细节，导出或截图前先脱敏；审计只存业务编号。
 
 
+
+## 19. 备份与灾备演练（§297）
+
+### 19.1 数据与门槛
+
+- 表：`ops_svc.ops_backup_policy`、`ops_backup_run`、`ops_dr_drill`、`ops_dr_drill_step`；
+- 备份运行以 `idempotencyKey` 去重：同一作业重试必须复用，RUNNING 只能终结一次；
+- 演练默认六步：备份可恢复性 → 基础设施拉起 → 数据恢复 → 应用启动与健康检查 →
+  核心业务冒烟 → 数据一致性与丢失窗口核对；
+- `PASSED` 同时要求：必填步骤全 PASSED、实测 RTO/RPO ≤ 目标、一致性核对通过、
+  证据非空、复核人 ≠ 执行人。
+
+### 19.2 上线前最小动作
+
+1. 为每个数据域登记备份策略（范围、cron、保留、加密、存储目标、RPO、负责人）；
+2. 接入备份平台上报：成功带大小/校验和/位置，失败带错误原因；
+3. 至少完成一次 `scope=ALL`、`environment=PROD` 的演练，并由第二人复核通过；
+4. 在「灾备演练 → 发布门禁自检」中确认 `eligible=true`；
+5. 生产部署检查单仍须完成（备份/回滚方案/冒烟/值班/变更单），门禁不是替代品。
+
+### 19.3 常用命令
+
+```bash
+# 令牌
+TOKEN=$(curl -s -X POST http://127.0.0.1:8080/api/v2/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin01","password":"Med@2026"}' | jq -r .data.accessToken)
+H="Authorization: Bearer $TOKEN"
+
+# 备份策略
+curl -s -X POST http://127.0.0.1:8080/api/v2/ops/backup/policies -H "$H" \
+  -H 'Content-Type: application/json' -d '{
+    "code":"pg-full","name":"核心库全量备份","scopeType":"ALL","backupType":"FULL",
+    "scheduleCron":"0 2 * * *","retentionDays":30,"encryption":"AES256",
+    "storageTarget":"s3://backup/pg","rpoMinutes":15,"owner":"ops01","status":"ACTIVE"}'
+
+# 备份运行上报（同一作业重试复用幂等键）
+curl -s -X POST http://127.0.0.1:8080/api/v2/ops/backup/runs -H "$H" \
+  -H 'Content-Type: application/json' -d '{
+    "policyCode":"pg-full","backupType":"FULL","status":"SUCCESS",
+    "idempotencyKey":"pg-full-20261113-0200","startedAt":"2026-11-13T02:00:00Z",
+    "finishedAt":"2026-11-13T02:18:00Z","sizeBytes":1073741824,
+    "checksum":"sha256:...","storageLocation":"s3://backup/pg/20261113"}'
+
+# 演练：创建 → 开始 → 逐步登记 → 第二人复核通过
+curl -s -X POST http://127.0.0.1:8080/api/v2/ops/dr/drills -H "$H" \
+  -H 'Content-Type: application/json' -d '{
+    "title":"2026 Q4 全院灾备演练","scope":"ALL","environment":"PROD",
+    "rtoTargetMinutes":120,"rpoTargetMinutes":15}'
+curl -s -X POST .../ops/dr/drills/<id>/start -H "$H"
+curl -s -X POST .../ops/dr/drills/<id>/steps/1 -H "$H" \
+  -H 'Content-Type: application/json' -d '{"status":"PASSED","evidence":"恢复日志已归档"}'
+# complete 必须换人（ops:dr:verify）
+curl -s -X POST .../ops/dr/drills/<id>/complete -H "$H" \
+  -H 'Content-Type: application/json' -d '{
+    "rtoActualMinutes":30,"rpoActualMinutes":5,"consistencyVerified":true,
+    "evidence":"恢复日志/冒烟截图/一致性核对报表"}'
+
+# 门禁自检
+curl -s ".../ops/dr/gate?scope=ALL&environment=PROD&days=90" -H "$H" | jq .data
+```
+
+### 19.4 发布门禁与排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 部署返回 422 / 53425 | 90 天内没有已复核的 PASSED 演练 | 先完成演练并由第二人复核；确认 scope=组件或 ALL |
+| 部署返回 422 / 53425，但刚做过演练 | 演练通过但未复核（verifier 为空） | 由非执行人执行 complete |
+| 部署返回 422 / 53425，查询报“无法读取” | ops_svc 不可达或迁移未执行 | 检查 ops 服务与 V4 迁移；门禁 fail-closed，不会放行 |
+| 演练 complete 返回 409 / 52439 | 执行人自己复核 | 换 OPS_MANAGER/ADMIN 复核 |
+| 演练 complete 返回 422 / 52437 | 仍有必填步骤未 PASSED | 补登步骤；必填步骤不能跳过 |
+| 演练 complete 返回 422 / 52438 | 实测 RTO/RPO 超目标 | 优化恢复流程后重测，不能改小目标凑数 |
+| 备份上报返回 409 / 52433 | 幂等键已结束为另一种结果 | 新作业用新幂等键；不要覆盖历史结果 |
+
+### 19.5 演练执行清单
+
+- [ ] 明确范围（ALL 或组件）、环境（PROD/STAGING/DRILL）与目标 RTO/RPO；
+- [ ] 关联一次成功的备份运行作为快照；
+- [ ] 每步留证据（日志地址/截图/还原结果），失败步骤写清断点；
+- [ ] 一致性核对：关键表行数、金额汇总、抽样业务对象；
+- [ ] 由另一名负责人复核通过；执行人不得自审；
+- [ ] 记录数据丢失窗口，超过 RPO 时判定失败而不是“差不多”。
+
+### 19.6 数据与备份
+
+- 演练与备份台账属于运营数据，纳入日常备份；恢复后检查状态机与审计流是否连续；
+- 证据文本可能含内部地址，导出前按院内制度脱敏；
+- 备份策略的 `last_run_at` 只反映最近一次上报，不代表备份软件真实调度状态。

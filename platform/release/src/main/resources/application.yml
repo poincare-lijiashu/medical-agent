@@ -43,6 +43,8 @@ medassist:
     max-page-size: ${REL_MAX_PAGE_SIZE:200}
     audit-list-default: ${REL_AUDIT_LIST_DEFAULT:50}
     audit-list-max: ${REL_AUDIT_LIST_MAX:200}
+    # 生产部署要求的灾备演练有效期（天）：超过即视为没有演练（§297）
+    drill-max-age-days: ${REL_DRILL_MAX_AGE_DAYS:90}
 
 management:
   endpoints:

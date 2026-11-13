@@ -13702,3 +13702,80 @@ Python：新增 15 项治理单测 + 7 项契约锁；全量 pytest 2098 passed 
 
 
 
+
+## 297. 2026-11-13 备份与灾备演练纳入发布门禁（第 297 批 / 计划书 G6+G7）
+
+**目标**
+
+把"备份做了没有、能不能恢复"从口头承诺变成可核查的证据链：备份有策略与运行事实，
+恢复有演练与实测 RTO/RPO，生产上线必须凭有效期内的、已复核的演练通过记录。
+
+**数据模型（ops_svc，V4）**
+
+| 表 | 作用 | 关键约束 |
+| --- | --- | --- |
+| `ops_backup_policy` | 备份策略 | 范围（ALL/COMPONENT/SCHEMA）、类型、cron、保留、加密、目标、RPO、负责人 |
+| `ops_backup_run` | 备份运行事实 | `idempotency_key` 唯一；SUCCESS 必须有大小/校验和/位置；FAILED 必须有错误原因 |
+| `ops_dr_drill` | 灾备演练 | PASSED 需：必填步骤全通过、实测 RTO/RPO ≤ 目标、一致性核对、证据、`verifier <> executor` |
+| `ops_dr_drill_step` | 演练步骤 | 默认六步；PASSED 必须有证据；必填步骤不能 SKIPPED |
+
+**规则**
+
+1. **备份幂等**：备份平台重试上报必须复用幂等键；RUNNING 只能被终结一次，
+   已结束的结果不允许改写（失败被重试覆盖成成功，等于把事故抹掉）。
+2. **演练状态机**：`PLANNED → RUNNING → PASSED / FAILED / ABORTED`；
+   失败与中止必须写原因；只有 RUNNING 才能登记步骤与判定结果。
+3. **四眼复核**：执行人不能自己判定通过；判定通过需要 `ops:dr:verify`，
+   执行与步骤登记需要 `ops:dr:manage`。
+4. **发布门禁（fail-closed）**：`PROD` 且非 `ROLLBACK` 的部署，必须存在
+   `environment=PROD`、`completed_at` 在 `drillMaxAgeDays`（默认 90 天）内、
+   `scope=组件` 或 `ALL`、且 `verifier` 非空的 PASSED 演练；
+   查不到、查询失败、过期一律拒绝，回滚不受门禁限制。
+5. **审计**：策略变更、运行上报、演练创建/开始/步骤/通过/失败/中止全部写
+   `ops_change_log`；部署审计额外记录 `drDrill`（凭哪次演练上线）。
+
+**接口与权限**
+
+- `/api/v2/ops/backup/policies`（GET `ops:backup:read`，POST `ops:backup:manage`）
+- `/api/v2/ops/backup/runs`（GET `ops:backup:read`，POST `ops:backup:manage`）
+- `/api/v2/ops/dr/drills`（GET `ops:dr:read`，POST `ops:dr:manage`）
+- `/api/v2/ops/dr/drills/{id}/start|steps/{stepNo}|fail|abort`（`ops:dr:manage`）
+- `/api/v2/ops/dr/drills/{id}/complete`（`ops:dr:verify`，且 actor ≠ executor）
+- `/api/v2/ops/dr/gate?scope=&environment=&days=`（`ops:dr:read`）
+- 角色：OPS_AGENT 可执行不可复核；OPS_MANAGER 可执行+复核；
+  RELEASE_MANAGER / SRE_DEPLOYER 只读门禁；ADMIN 全量。
+- 错误码：`OPS_BACKUP_*` / `OPS_DR_*`（52429–52441）、`REL_DR_DRILL_REQUIRED`（53425）。
+
+**前端**
+
+- 新页「灾备演练」（`/ops/dr`，导航「平台运维」）：门禁自检、备份策略、备份运行、
+  演练列表与详情（步骤登记、判定通过、失败/中止）、证据与 RTO/RPO 展示；
+- 执行人打开「判定通过」时前端直接禁用并说明原因，后端仍强制四眼；
+- 发布页无需改动：部署被门禁拒绝时返回 422 + `REL_DR_DRILL_REQUIRED`，页面展示原因。
+
+**验证**
+
+```
+Java：BackupDrServiceTest 11 项、DeploymentServiceTest 8 项（含无演练/查询失败/回滚放行）；
+      ops+release+common 全量单测通过
+Python：新增 7 项契约锁；迁移安全 lint：scanned=298 known=11 new=0 PASS
+前端：typecheck 通过；build 通过（入口 gzip 101.71 KB）
+真实栈（网关 8080 → ops 8093 / release 8094，真实登录与 PG）：
+  auth V105 已应用（admin 令牌含 ops:backup:* / ops:dr:*）
+  ops V4 已应用；备份策略 upsert 成功；同幂等键两次上报返回同一 runNo
+  演练：创建 → 开始 → 6 步全部通过 → 执行人自审被拒（52439）
+        → 第二人复核 PASSED → 门禁 eligible=true
+  发布门禁：演练前 PROD 部署 422/53425；演练通过后同组件部署 200
+```
+
+**已知边界**
+
+- 备份运行是"上报制"：平台不主动探测备份软件；未接入上报的作业无法自证；
+- 演练证据只存地址/文本，不存大文件；恢复脚本与基础设施拉起仍依赖院方环境；
+- RTO/RPO 的实测值由演练执行人录入，门禁保证"不超目标且有人复核"，不替代第三方审计；
+- 跨组件演练用 `scope=组件` 精确匹配；全院演练用 `ALL` 覆盖所有组件。
+
+**下一批建议（§298）**
+
+跨院区批量发布编排（Cell 分批 + 自动暂停）、恢复演练自动化脚本库（按组件一键拉起）、
+容量与成本联动看板（备份存储增长与保留策略）。
