@@ -28,6 +28,7 @@ from backend.agents import catalog, consult, model_policy, second_opinion, skill
 from backend.agents import skill_ops, skill_trends, skill_usage, sleep_memory, tool_loop
 from backend.agents import skills as skill_cards
 from backend.agents import router as router_agent
+from backend.agents.governance import versions as governance_versions
 from backend.api.deps import model_quota, model_slot, rate_limit, require_role, require_user
 from backend.config import settings
 from backend.core import agent_flags, agent_tools, web_sources, pg_store
@@ -238,6 +239,8 @@ async def agent_consult(req: ConsultReq, user: dict = Depends(require_user)):
         raise HTTPException(422, str(e))
     except consult.ConsultUnavailable as e:
         raise HTTPException(503, str(e))
+    # §296：回答携带当时生效的模型/提示词版本，保证"任一输出可追溯到版本"
+    result["governance"] = governance_versions.trace(result["agent"]["id"])
     await _audit_agent(user, "agent_consult", {
         "agentId": result["agent"]["id"],
         "skills": [s["code"] for s in result["appliedSkills"]],
@@ -327,6 +330,11 @@ async def agent_consult_stream(req: ConsultReq, request: Request,
                 # 评审 S3：客户端断开即停止拉取，finally 中 aclose 释放上游模型连接
                 if await request.is_disconnected():
                     break
+                # §296：meta/done 事件携带生效版本，前端可展示"本次回答由谁/哪版产生"
+                if ev.get("type") in ("meta", "done"):
+                    agent_key = (ev.get("agent") or {}).get("id")
+                    if agent_key:
+                        ev["governance"] = governance_versions.trace(agent_key)
                 if ev.get("type") == "done":
                     await _audit_agent(user, "agent_consult_stream", {
                         "agentId": ev["agent"]["id"],

@@ -681,3 +681,97 @@ curl -X POST "http://127.0.0.1:8080/api/v2/fhir/xds/documents/urn:uuid:<uuid>/de
 - 恢复后先跑一次调阅校验：任一份文档哈希不一致会直接暴露为 57404；
 - 审计表 `xds_access_log` 只增不改，恢复时不得用旧快照覆盖较新的审计数据。
 
+---
+
+## 18. AI 验证与治理（§296 / 计划书 W8.1–W8.4）
+
+### 18.1 四个控制与对应接口
+
+| 控制 | 计划书 | 接口 | 关键规则 |
+| --- | --- | --- | --- |
+| 模型/提示词版本 | W8.2 | `/api/v1/agent/governance/versions` | 四眼审批；同组件同类型单一生效；回滚重激活旧版 |
+| 临床验证 | W8.1 | `/api/v1/agent/governance/studies` | ≥30 例且阳性/阴性各 ≥10；敏感度/特异度 + Wilson CI；批准冻结 |
+| 漂移监测 | W8.3 | `/api/v1/agent/governance/drift` | 样本 <20 不出信号；基线由管理员设定；8 类信号 |
+| 误报闭环 | W8.4 | `/api/v1/agent/governance/incidents` | 根因/纠正措施必填；关闭需非解决人；逾期统计 |
+
+看板：`GET /api/v1/agent/governance/summary`（admin/qc）。
+
+### 18.2 上线前最小动作
+
+1. **登记并生效模型版本**：`component` 可为 `global` 或具体能力域；`MODEL` 必填
+   provider/model，`PROMPT` 必填 promptHash（SHA-256）。
+2. **登记并生效提示词版本**：与模型版本分开审批，便于单独回滚。
+3. **建立漂移基线**：先产生至少 20 次问答，抓取快照后由管理员「设为基线」。
+4. **完成至少一项临床验证**：录入 30 例（阳性/阴性各 10 例），提交并由另一人批准。
+5. **确认问答可追溯**：调用 `/agent/consult`，响应中的 `governance.traceable`
+   应为 true；`complete=false` 表示模型或提示词缺一。
+
+### 18.3 常用命令
+
+```bash
+# 治理看板（admin/qc）
+curl "http://127.0.0.1:8001/api/v1/agent/governance/summary" -H "Authorization: Bearer <token>"
+
+# 登记模型版本（admin）
+curl -X POST http://127.0.0.1:8001/api/v1/agent/governance/versions \
+  -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{
+    "component":"drug","kind":"MODEL","version":"2026.11.1",
+    "provider":"deepseek","model":"deepseek-chat",
+    "changeSummary":"升级模型并收紧证据引用要求"
+  }'
+
+# 批准（qc/admin，不能是创建人）→ 生效（admin）
+curl -X POST .../versions/<versionId>/review -d '{"approve":true,"comment":"同意","rowVersion":2}'
+curl -X POST .../versions/<versionId>/activate -d '{"rowVersion":3}'
+
+# 抓取漂移并设基线
+curl -X POST .../drift/snapshots -d '{"agentIds":["drug"]}'
+curl -X POST .../drift/baseline -d '{"agentId":"drug","snapshotId":"<id>"}'
+
+# 登记事件（doctor/qc/admin）→ 解决（根因/措施）→ 他人关闭
+curl -X POST .../incidents -d '{"agentId":"drug","kind":"FALSE_POSITIVE","severity":"HIGH","title":"...","description":"..."}'
+```
+
+### 18.4 漂移阈值与判读
+
+| 信号 | 触发条件 | 处置 |
+| --- | --- | --- |
+| `ERROR_RATE_HIGH` | 错误率 >20%（>30% 为 HIGH） | 查模型可用性、限流与上游错误 |
+| `ERROR_RATE_UP` | 较基线上升 >10 个百分点 | 对比最近版本/提示词变更 |
+| `ABORTED_RATE_HIGH` | 中止率 >20% | 查前端断开、超时与并发槽 |
+| `QUALITY_FLAG_HIGH` | 质量风险率 >30% | 抽查回答是否过短/缺证据/拒答 |
+| `QUALITY_FLAG_UP` | 较基线上升 >10 个百分点 | 复核提示词与技能卡 |
+| `LATENCY_UP` | >基线 1.5 倍且 >3s（>2 倍且 >5s 为 HIGH） | 查模型延迟与连接池 |
+| `TOKEN_UP` | token/次 >基线 1.5 倍 | 查提示词膨胀、历史轮数 |
+| `TRAFFIC_DROP` | 请求量较基线下降 >50% | 进程重启也会归零，先核对重启 |
+
+> 快照是**进程内**计量，服务重启归零；跨重启/多副本请以 Prometheus 近 30 分钟
+> 窗口为准，快照用于"同一窗口内与基线比较"。
+
+### 18.5 临床验证口径
+
+- 敏感度 = TP/(TP+FN)，特异度 = TN/(TN+FP)，PPV/NPV/准确率/F1 同二分类定义；
+- 置信区间用 Wilson 95%，小样本不会给出 <0 或 >1 的区间；
+- `qualityGate=PASS` 需同时满足：≥30 例、阳性/阴性各 ≥10、敏感度与特异度均达到
+  研究登记的验收阈值；
+- 批准后 `approvedResult` 冻结；病例不可再改，需要新结论请新建研究。
+
+### 18.6 误报闭环与排障
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 批准版本报 403 | 审批人是创建人 | 换另一名 admin/qc 复核 |
+| 生效报 422 | 版本未批准 / 已停用且无审批记录 | 先完成审批；回滚只能选曾审批生效的版本 |
+| 研究提交报 422 | 不足 30 例或阳性/阴性不足 10 例 | 补录病例后重新提交 |
+| 漂移一直是 INSUFFICIENT | 请求量 <20 次 | 增加流量或拉长窗口，不要强行设基线 |
+| 关闭事件报 403 | 关闭人 = 解决人 | 由另一名 admin/qc 复核关闭 |
+| 问答 `traceable=false` | 未登记生效版本 | 按 18.2 登记模型/提示词并生效 |
+
+### 18.7 数据与备份
+
+- 治理表：`agent_model_versions`、`agent_validation_studies`、`agent_drift_snapshots`、
+  `agent_drift_baselines`、`agent_incidents`（PG；JSON 兜底）；
+- 这些表与会话/技能卡同库，纳入日常备份；恢复后检查版本状态与事件流是否连续；
+- 事件标题/描述可能含临床细节，导出或截图前先脱敏；审计只存业务编号。
+
+

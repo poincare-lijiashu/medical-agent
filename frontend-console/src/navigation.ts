@@ -650,6 +650,16 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ['ADMIN', 'QC'],
   },
   {
+    // 第 296 批：AI 临床验证与模型治理（版本/验证/漂移/误报闭环）
+    name: 'ai-governance',
+    path: '/ai/agent/governance',
+    title: 'AI 验证与治理',
+    hint: '模型与提示词版本 · 临床验证敏感度/特异度 · 漂移监测 · 误报闭环 · 四眼审批',
+    icon: 'shield',
+    group: '系统管理',
+    roles: ['ADMIN', 'QC'],
+  },
+  {
     // 第 209 批：技能库闭环（待办 / 经验 / 候选回放）
     name: 'ai-library',
     path: '/ai/agent/library',

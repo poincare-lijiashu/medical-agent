@@ -38,6 +38,12 @@ data/bot_memories.json
 data/skill_experiences.json
 data/skill_proposals.json
 data/skill_advices.json
+# §296 AI 治理运行数据（PG 为真源，JSON 仅本地兜底）
+data/ai_model_versions.json
+data/ai_validation_studies.json
+data/ai_drift_snapshots.json
+data/ai_drift_baselines.json
+data/ai_incidents.json
 
 # 临时产物（安装/种子过程错误日志与一次性验证输出）
 data/*.err

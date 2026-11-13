@@ -1,4 +1,4 @@
-import { download, get, post, put, request, upload } from './http'
+import { aiGet, aiPost, download, get, post, put, request, upload } from './http'
 import type {
   AdmissionView,
   Bed,
@@ -217,6 +217,11 @@ import type {
   WardDischargeReadinessView,
   WardNursingSheets,
   WardOccupancy,
+  AiDriftReport,
+  AiGovernanceSummary,
+  AiIncident,
+  AiModelVersion,
+  AiValidationStudy,
   XdsDocument,
   XdsProvideResult,
   XdsQueryResult,
@@ -1864,6 +1869,106 @@ export const xdsApi = {
       `/fhir/xds/documents/${encodeURIComponent(uniqueId)}/deprecate`,
       body,
     ),
+}
+
+/**
+ * AI 临床验证与模型治理（§296）。
+ * 全部走 AI 中台（/api/v1）裸 JSON；读需 admin/qc，写按端点再收窄。
+ */
+export const aiGovernanceApi = {
+  summary: () => aiGet<AiGovernanceSummary>('/agent/governance/summary'),
+  versions: (params: { component?: string; status?: string; kind?: string } = {}) =>
+    aiGet<{ versions: AiModelVersion[] }>('/agent/governance/versions', params),
+  createVersion: (body: {
+    component: string
+    kind: 'MODEL' | 'PROMPT'
+    version: string
+    provider?: string
+    model?: string
+    promptHash?: string
+    changeSummary: string
+  }) => aiPost<AiModelVersion>('/agent/governance/versions', body),
+  submitVersion: (id: string, rowVersion: number) =>
+    aiPost<AiModelVersion>(`/agent/governance/versions/${id}/submit`, { rowVersion }),
+  reviewVersion: (id: string, body: {
+    approve: boolean
+    comment?: string
+    rowVersion: number
+  }) => aiPost<AiModelVersion>(`/agent/governance/versions/${id}/review`, body),
+  activateVersion: (id: string, rowVersion: number) =>
+    aiPost<{ version: AiModelVersion; superseded: AiModelVersion | null }>(
+      `/agent/governance/versions/${id}/activate`, { rowVersion }),
+  retireVersion: (id: string, reason: string, rowVersion: number) =>
+    aiPost<AiModelVersion>(`/agent/governance/versions/${id}/retire`, { reason, rowVersion }),
+  trace: (component: string) =>
+    aiGet<{ component: string; modelVersion: AiModelVersion | null; promptVersion: AiModelVersion | null; traceable: boolean; complete: boolean }>(
+      '/agent/governance/trace', { component },
+    ),
+
+  studies: (params: { status?: string; agentId?: string } = {}) =>
+    aiGet<{ studies: AiValidationStudy[] }>('/agent/governance/studies', params),
+  study: (code: string) => aiGet<AiValidationStudy>(`/agent/governance/studies/${code}`),
+  createStudy: (body: Record<string, unknown>) =>
+    aiPost<AiValidationStudy>('/agent/governance/studies', body),
+  addCase: (code: string, body: {
+    caseId: string
+    referencePositive: boolean
+    predictionPositive: boolean
+    note?: string
+  }) => aiPost<AiValidationStudy>(`/agent/governance/studies/${code}/cases`, body),
+  submitStudy: (code: string, rowVersion: number) =>
+    aiPost<AiValidationStudy>(`/agent/governance/studies/${code}/submit`, { rowVersion }),
+  reviewStudy: (code: string, body: {
+    approve: boolean
+    conclusion?: string
+    limitations?: string
+    approvalComment?: string
+    rejectReason?: string
+    rowVersion: number
+  }) => aiPost<AiValidationStudy>(`/agent/governance/studies/${code}/review`, body),
+  retireStudy: (code: string, reason: string, rowVersion: number) =>
+    aiPost<AiValidationStudy>(`/agent/governance/studies/${code}/retire`, { reason, rowVersion }),
+
+  drift: (params: { agentId?: string; limit?: number } = {}) =>
+    aiGet<AiDriftReport>('/agent/governance/drift', params),
+  captureDrift: (agentIds?: string[]) =>
+    aiPost<{ captured: unknown[]; thresholds: Record<string, number>; note: string }>(
+      '/agent/governance/drift/snapshots', { agentIds },
+    ),
+  setBaseline: (agentId: string, snapshotId: string) =>
+    aiPost<Record<string, unknown>>('/agent/governance/drift/baseline', { agentId, snapshotId }),
+
+  incidents: (params: {
+    status?: string
+    severity?: string
+    agentId?: string
+    overdueOnly?: boolean
+    limit?: number
+  } = {}) => aiGet<{ incidents: AiIncident[] }>('/agent/governance/incidents', params),
+  incident: (no: string) => aiGet<AiIncident>(`/agent/governance/incidents/${no}`),
+  createIncident: (body: {
+    agentId: string
+    kind: string
+    severity: string
+    title: string
+    description: string
+    source?: string
+    dueAt?: string
+  }) => aiPost<AiIncident>('/agent/governance/incidents', body),
+  assignIncident: (no: string, body: { owner: string; dueAt?: string; rowVersion: number }) =>
+    aiPost<AiIncident>(`/agent/governance/incidents/${no}/assign`, body),
+  startIncident: (no: string, rowVersion: number) =>
+    aiPost<AiIncident>(`/agent/governance/incidents/${no}/start`, { rowVersion }),
+  resolveIncident: (no: string, body: {
+    rootCause: string
+    correctiveAction: string
+    resolutionNote?: string
+    rowVersion: number
+  }) => aiPost<AiIncident>(`/agent/governance/incidents/${no}/resolve`, body),
+  closeIncident: (no: string, body: { closeNote: string; rowVersion: number }) =>
+    aiPost<AiIncident>(`/agent/governance/incidents/${no}/close`, body),
+  reopenIncident: (no: string, reason: string, rowVersion: number) =>
+    aiPost<AiIncident>(`/agent/governance/incidents/${no}/reopen`, { reason, rowVersion }),
 }
 
 export { request }

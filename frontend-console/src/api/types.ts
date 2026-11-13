@@ -4176,6 +4176,255 @@ export interface ConsentVerify {
   status: string
 }
 
+// ---------------------------------------------------------------- AI 治理（§296）
+
+export type AiVersionKind = 'MODEL' | 'PROMPT'
+export type AiVersionStatus = 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'ACTIVE' | 'RETIRED'
+
+export interface AiModelVersion {
+  versionId: string
+  component: string
+  kind: AiVersionKind
+  version: string
+  provider: string | null
+  model: string | null
+  promptHash: string | null
+  changeSummary: string
+  status: AiVersionStatus
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  submittedBy?: string | null
+  submittedAt?: string | null
+  approvedBy?: string | null
+  approvedAt?: string | null
+  approvalComment?: string | null
+  rejectedBy?: string | null
+  rejectedAt?: string | null
+  rejectReason?: string | null
+  activatedBy?: string | null
+  activatedAt?: string | null
+  retiredBy?: string | null
+  retiredAt?: string | null
+  retireReason?: string | null
+  rollbackTo?: string | null
+  rowVersion: number
+}
+
+export interface AiGovernanceTrace {
+  component: string
+  modelVersion: AiModelVersion | null
+  promptVersion: AiModelVersion | null
+  modelScope: 'component' | 'global' | null
+  promptScope: 'component' | 'global' | null
+  traceable: boolean
+  complete: boolean
+  capturedAt: string
+}
+
+export interface AiValidationCase {
+  caseId: string
+  referencePositive: boolean
+  predictionPositive: boolean
+  note: string | null
+  addedBy: string
+  addedAt: string
+}
+
+export interface AiValidationResult {
+  n: number
+  tp: number
+  fp: number
+  tn: number
+  fn: number
+  positives: number
+  negatives: number
+  sensitivity: number
+  specificity: number
+  ppv: number
+  npv: number
+  accuracy: number
+  f1: number
+  sensitivityCi: number[]
+  specificityCi: number[]
+  acceptanceSensitivity: number
+  acceptanceSpecificity: number
+  sufficient: boolean
+  meetsAcceptance: boolean
+  qualityGate: 'PASS' | 'FAIL' | 'INSUFFICIENT'
+  computedAt: string
+}
+
+export interface AiValidationStudy {
+  studyCode: string
+  title: string
+  agentId: string
+  intendedUse: string
+  population: string
+  goldStandard: string
+  protocol: string
+  ethicsApproval: string | null
+  targetSampleSize: number
+  acceptanceSensitivity: number
+  acceptanceSpecificity: number
+  status: 'DRAFT' | 'IN_REVIEW' | 'APPROVED' | 'RETIRED'
+  cases: AiValidationCase[]
+  result: AiValidationResult
+  approvedResult?: AiValidationResult
+  conclusion?: string | null
+  limitations?: string | null
+  approvedBy?: string | null
+  approvedAt?: string | null
+  rejectedBy?: string | null
+  rejectReason?: string | null
+  createdBy: string
+  createdAt: string
+  rowVersion: number
+}
+
+export interface AiDriftMetrics {
+  agentId: string
+  requests: number
+  ok: number
+  error: number
+  aborted: number
+  errorRate: number
+  abortedRate: number
+  qualityFlagged: number
+  qualityFlagRate: number
+  avgLatencyMs: number
+  tokensInput: number
+  tokensOutput: number
+  tokensPerRequest: number
+  sampleCount: number
+}
+
+export interface AiDriftSignal {
+  code: string
+  severity: 'LOW' | 'MEDIUM' | 'HIGH'
+  message: string
+  current: number | string
+  baseline: number | string | null
+  delta: number | null
+}
+
+export interface AiDriftSnapshot {
+  snapshotId: string
+  agentId: string
+  capturedAt: string
+  window: string
+  metrics: AiDriftMetrics
+  baseline: {
+    snapshotId: string
+    setAt: string
+    metrics: AiDriftMetrics | null
+  } | null
+  signals: AiDriftSignal[]
+  status: 'OK' | 'WATCH' | 'ALERT' | 'INSUFFICIENT'
+  capturedBy: string
+}
+
+export interface AiDriftAgent {
+  agentId: string
+  latest: AiDriftSnapshot
+  baseline: {
+    agentId: string
+    snapshotId: string
+    metrics: AiDriftMetrics
+    setBy: string
+    setAt: string
+  } | null
+  history: AiDriftSnapshot[]
+}
+
+export interface AiDriftReport {
+  generatedAt: string
+  window: string
+  thresholds: Record<string, number>
+  agents: AiDriftAgent[]
+  note: string
+}
+
+export interface AiIncidentEvent {
+  action: string
+  fromStatus: string | null
+  toStatus: string
+  actor: string
+  note: string | null
+  at: string
+}
+
+export interface AiIncident {
+  incidentNo: string
+  agentId: string
+  kind: 'FALSE_POSITIVE' | 'FALSE_NEGATIVE' | 'HARMFUL' | 'OTHER'
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+  title: string
+  description: string
+  source: 'CLINICIAN' | 'PATIENT' | 'QC' | 'MONITOR' | 'OTHER'
+  modelVersionId: string | null
+  skillCode: string | null
+  studyCode: string | null
+  status: 'OPEN' | 'INVESTIGATING' | 'RESOLVED' | 'CLOSED'
+  owner: string | null
+  dueAt: string
+  rootCause: string | null
+  correctiveAction: string | null
+  resolutionNote: string | null
+  resolvedBy: string | null
+  resolvedAt: string | null
+  closedBy: string | null
+  closedAt: string | null
+  reopenReason: string | null
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  rowVersion: number
+  events?: AiIncidentEvent[]
+  eventCount?: number
+}
+
+export interface AiGovernanceSummary {
+  generatedAt: string
+  versions: {
+    active: AiModelVersion[]
+    pendingApproval: number
+    checks: Record<string, boolean>
+  }
+  validation: {
+    total: number
+    approved: number
+    meetsAcceptance: number
+    recent: AiValidationStudy[]
+  }
+  drift: {
+    agents: number
+    alert: number
+    watch: number
+    insufficient: number
+    latest: AiDriftSnapshot[]
+    thresholds: Record<string, number>
+  }
+  incidents: {
+    total: number
+    open: number
+    investigating: number
+    resolved: number
+    closed: number
+    overdue: number
+    openHigh: number
+    bySeverity: Record<string, number>
+    closureRate: number
+    meanTimeToCloseHours: number
+  }
+  readiness: {
+    passed: number
+    total: number
+    score: number
+    checks: Record<string, boolean>
+  }
+}
+
 // ---------------------------------------------------------------- IHE XDS 文档共享（§295）
 
 export type XdsAvailability = 'APPROVED' | 'DEPRECATED'

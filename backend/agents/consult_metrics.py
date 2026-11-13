@@ -47,6 +47,10 @@ _lock = threading.Lock()
 _requests: dict[tuple[str, str, str], int] = defaultdict(int)
 _errors: dict[tuple[str, str], int] = defaultdict(int)
 _durations: dict[str, list] = defaultdict(lambda: [0.0, 0])
+# §296：按智能体拆分的耗时与 token（漂移监测按能力域比较，不再只有通道维度）
+_agent_durations: dict[tuple[str, str], list] = defaultdict(lambda: [0.0, 0])
+_agent_tokens: dict[tuple[str, str], int] = defaultdict(int)
+_agent_tokenized: dict[str, int] = defaultdict(int)
 # channel -> 每个 bucket 的累计次数（record 时按 le 递增，导出时天然累积）
 _duration_buckets: dict[str, list[int]] = defaultdict(
     lambda: [0] * (len(_DURATION_BUCKETS) + 1))
@@ -150,6 +154,9 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
         bucket = _durations[ch]
         bucket[0] += ms
         bucket[1] += 1
+        agent_bucket = _agent_durations[(agent, ch)]
+        agent_bucket[0] += ms
+        agent_bucket[1] += 1
         seconds = ms / 1000.0
         hist = _duration_buckets[ch]
         for idx, le in enumerate(_DURATION_BUCKETS):
@@ -169,6 +176,9 @@ def record(agent_id: str, channel: str, status: str, duration_ms: float,
                 _tokens["input"] += usage["input_tokens"]
                 _tokens["output"] += usage["output_tokens"]
                 _tokenized_requests += 1
+                _agent_tokens[(agent, "input")] += usage["input_tokens"]
+                _agent_tokens[(agent, "output")] += usage["output_tokens"]
+                _agent_tokenized[agent] += 1
 
 
 def record_quality(agent_id: str, signals) -> None:
@@ -191,6 +201,11 @@ def snapshot() -> dict:
             "errors": {f"{a}|{r}": n for (a, r), n in _errors.items()},
             "durations": {c: {"sum_ms": v[0], "count": v[1]}
                           for c, v in _durations.items()},
+            # §296：漂移监测按能力域取耗时/token（agent 维度），保持旧字段不变
+            "agent_durations": {f"{a}|{c}": {"sum_ms": v[0], "count": v[1]}
+                                for (a, c), v in _agent_durations.items()},
+            "agent_tokens": {f"{a}|{k}": n for (a, k), n in _agent_tokens.items()},
+            "agent_tokenized": dict(_agent_tokenized),
             "duration_buckets": {c: list(v) for c, v in _duration_buckets.items()},
             "skills": dict(_skill_usage),
             "skill_last_used": dict(_skill_last_used),

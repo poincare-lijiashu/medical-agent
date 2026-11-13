@@ -294,6 +294,12 @@ const router = createRouter({
           component: () => import('@/views/AiLabView.vue'),
         },
         {
+          // 第 296 批：AI 临床验证与模型治理（版本/验证/漂移/误报闭环）
+          path: 'ai/agent/governance',
+          name: 'ai-governance',
+          component: () => import('@/views/AiGovernanceView.vue'),
+        },
+        {
           // 第 203 批：LLM 模型配置（仅管理员）
           path: 'ai/llm',
           name: 'ai-llm',

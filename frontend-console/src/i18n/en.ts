@@ -131,6 +131,8 @@ const messages: Record<MessageKey, string> = {
   'nav.infection-report.hint': 'Diagnosis auto-matching · class A 2h / B-C 24h · submit, accept and return · overdue and missed reporting',
   'nav.document-sharing.title': 'Document Sharing',
   'nav.document-sharing.hint': 'IHE XDS registry · discharge summary and lab report CDA · search by patient and time · SHA-256 verified retrieval',
+  'nav.ai-governance.title': 'AI Validation & Governance',
+  'nav.ai-governance.hint': 'Model and prompt versions · validation sensitivity/specificity · drift monitoring · incident closure · four-eyes approval',
   'nav.open-platform.title': 'Open Platform',
   'nav.open-platform.hint': 'Third-party client_credentials · read-only scope catalog · secret rotation and disable · integration examples',
   'nav.release-console.title': 'Release Management',

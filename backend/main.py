@@ -24,6 +24,7 @@ from backend.core.medical_audit import reset_tool as _audit_reset_tool
 from backend.api.v1.medical.medical_router import router as medical_router
 from backend.api.v1.auth.auth_router import router as auth_router
 from backend.api.v1.agent.agent_router import router as agent_router
+from backend.api.v1.agent.governance_router import router as governance_router
 from backend.agents import catalog as agent_catalog
 from backend.core import agent_flags
 
@@ -310,6 +311,7 @@ app.include_router(medical_router, prefix="/api/v1/medical")
 app.include_router(auth_router, prefix="/api/v1")
 # G86 Agent 控制面：目录 / A2A 能力卡 / 路由预览 / 工具调用 / 运行时开关
 app.include_router(agent_router, prefix="/api/v1/agent")
+app.include_router(governance_router, prefix="/api/v1/agent/governance")
 
 
 @app.get("/.well-known/agent-card.json", include_in_schema=False)

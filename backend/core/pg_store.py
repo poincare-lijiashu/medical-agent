@@ -674,7 +674,13 @@ async def _init_impl() -> bool:
                                # 评审 M-39：睡眠记忆报告此前只写 JSON，多实例读不到
                                ("agent_sleep_reports", "reportId"),
                                # §289：AI 日调用量台账（按日+进程实例成行，便于重启/多 worker 求和）
-                               ("agent_usage_daily", "id")):
+                               ("agent_usage_daily", "id"),
+                               # §296：AI 治理（模型版本/临床验证/漂移快照与基线/事件闭环）
+                               ("agent_model_versions", "versionId"),
+                               ("agent_validation_studies", "studyCode"),
+                               ("agent_drift_snapshots", "snapshotId"),
+                               ("agent_drift_baselines", "agentId"),
+                               ("agent_incidents", "incidentNo")):
                 await c.execute(
                     f"""CREATE TABLE IF NOT EXISTS {table}(
                         {key} text primary key, data jsonb NOT NULL, status text NOT NULL,
@@ -3133,6 +3139,12 @@ _JSON_LIST_KEYS = {
     "agent_sleep_reports": "reportId",
     # §289：AI 日调用量台账（id = <UTC 日期>#<进程实例>，同一天多进程/重启各自一行，合计不丢不重）
     "agent_usage_daily": "id",
+    # §296：AI 治理
+    "agent_model_versions": "versionId",
+    "agent_validation_studies": "studyCode",
+    "agent_drift_snapshots": "snapshotId",
+    "agent_drift_baselines": "agentId",
+    "agent_incidents": "incidentNo",
 }
 
 

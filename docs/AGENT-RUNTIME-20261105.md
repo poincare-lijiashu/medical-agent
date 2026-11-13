@@ -13624,5 +13624,81 @@ Python：全量 pytest 2076 passed / 1 skipped（含 §295 契约锁 7 条）
 
 AI 漂移与误报闭环、单院恢复演练纳入发布门禁、XDS 与区域平台 SOAP 适配器。
 
+---
+
+## 296. 2026-11-13 AI 临床验证与模型治理（第 296 批 / 计划书 W8.1–W8.4）
+
+**为什么需要这一批**
+
+G8 是八道门槛里最低的一项：此前有问答计量、技能卡和模型合规，但回答"这个 AI
+准不准、当时用的是哪版模型、最近有没有漂移、误报有没有闭环"只能靠人工翻日志。
+没有这四件事，AI 能力无法进入临床验证、也无法通过医院的质量与伦理审查。
+
+**本批做了什么**
+
+1. **模型/提示词版本治理（W8.2）**
+   - `DRAFT → IN_REVIEW → APPROVED → ACTIVE → RETIRED`；
+   - 四眼：审批人不能是创建人；同组件同类型只能有一个 `ACTIVE`；
+   - 激活旧版本 = 回滚，`rollbackTo` 记录被替换版本；停用保留历史；
+   - `/agent/consult` 与 SSE `meta/done` 事件携带 `governance`（模型/提示词版本、
+     component/global 作用域、`traceable/complete`），回答可追溯到版本。
+2. **临床验证研究（W8.1）**
+   - 先登记预期用途、人群、金标准、方案、验收阈值；
+   - 逐例录入金标准与模型判断（只收布尔值，不收患者信息）；
+   - 自动计算敏感度、特异度、PPV、NPV、准确率、F1 与 Wilson 95% CI；
+   - 提交门槛：≥30 例且阳性/阴性各 ≥10 例；批准四眼，并冻结 `approvedResult`；
+   - `qualityGate = PASS/FAIL/INSUFFICIENT`，同时记录是否达到验收阈值。
+3. **漂移与性能监测（W8.3）**
+   - `consult_metrics` 新增按能力域的耗时与 token（原通道维度保留）；
+   - 快照含请求、错误率、中止率、质量风险信号率、平均耗时、token/次；
+   - 8 类信号：错误率高/上升、中止率高、质量风险高/上升、耗时上升、token 上升、
+     流量骤降；样本 <20 次为 `INSUFFICIENT`，不产生信号；
+   - 基线由管理员从"样本足够"的快照设定；重启归零的边界在接口与页面明示。
+4. **误报与不良事件闭环（W8.4）**
+   - 事件类型：误报/漏报/有害输出/其他；严重度 CRITICAL/HIGH/MEDIUM/LOW；
+   - `OPEN → INVESTIGATING → RESOLVED → CLOSED`，可重开；
+   - 解决必须写根因与纠正措施；关闭必须由**非解决人**复核；重开顺延 7 天；
+   - 事件流追加式保留；看板统计未闭环、逾期、高严重度、关闭率与平均关闭时长。
+5. **存储、接口与界面**
+   - 5 张 PG 表（JSON 兜底）：`agent_model_versions`、`agent_validation_studies`、
+     `agent_drift_snapshots`、`agent_drift_baselines`、`agent_incidents`；
+   - `/api/v1/agent/governance/**`：看板、版本、验证、漂移、事件；
+   - 前端「AI 验证与治理」页（admin/qc）：四个页签、KPI、四眼与状态机动作；
+   - 所有自由文本入口统一拒绝 PHI；审计只记动作与业务编号，不复制事件内容。
+
+**验证**
+
+```
+Python：新增 15 项治理单测 + 7 项契约锁；全量 pytest 2098 passed / 1 skipped；
+      相关 Agent/Consult 回归 161 passed
+真实栈（8001，dev，真实登录与 PG）：
+  建表        5 张治理表已创建（agent_model_versions / validation_studies /
+              drift_snapshots / drift_baselines / incidents）
+  版本        模型 2026.11.1 + 提示词 p-2026.11.1 → 均 ACTIVE；
+              trace complete=true；真实问答（drug）回答 1124 字并携带版本
+  临床验证    VAL-20261113-001：30 例（14 TP/1 FN/14 TN/1 FP）
+              敏感度 93.33%、特异度 93.33%、Wilson CI 70.18%–98.81%，
+              PASS，已批准并冻结结果
+  漂移        抓取 drug 快照 → INSUFFICIENT（0 请求，样本不足不出信号）
+  事件        AI-INC-20261113-0001：登记→分派→调查→解决→他人关闭→重开，
+              事件流 4 条
+  就绪度      3/4（缺漂移基线，需累计 ≥20 次问答后由管理员设定）
+前端：typecheck 通过；build 通过（入口 gzip 101.37 KB）
+```
+
+**已知边界**
+
+- 漂移快照是进程内计量（重启归零），跨重启/多副本趋势以 Prometheus 为准；
+  JSON 列表存储与既有技能库同一约束，生产建议 AI 中台单 worker；
+- 临床验证是二分类统计；多分类、连续评分、分层一致性（Kappa）需后续扩展；
+- 误报闭环是院内流程，不替代药品/器械不良事件法定上报；
+- 伦理批件只登记编号，不替代伦理委员会审查；IEC 62304/ISO 14971 仍属外部资质项。
+
+**下一批建议（§297）**
+
+单院恢复演练纳入发布门禁（RTO/RPO 实测）、AI 输出与病历签名的联合追溯、
+区域平台 SOAP 适配器。
+
+
 
 
