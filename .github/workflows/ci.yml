@@ -288,7 +288,12 @@ jobs:
           ETCD_AUTO_COMPACTION_MODE: revision
           ETCD_AUTO_COMPACTION_RETENTION: "1000"
           ETCD_QUOTA_BACKEND_BYTES: "4294967296"
-        cmd: etcd -advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
+        # GitHub service 容器不支持 cmd 字段（只支持 image/env/ports/options/
+        # credentials/volumes）。options 会原样追加到 docker create，因此命令写在
+        # options 里；写在 cmd 会让整个 workflow 校验失败（0 job，报 L291 未知键）。
+        options: >-
+          etcd -advertise-client-urls=http://etcd:2379
+          -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
       minio:
         image: minio/minio:latest
         env:
@@ -296,10 +301,10 @@ jobs:
           MINIO_SECRET_KEY: minioadmin
         ports:
           - 9000:9000
-        cmd: minio server /minio_data
+        options: minio server /minio_data
       milvus:
         image: milvusdb/milvus:v2.4.0
-        cmd: ["milvus", "run", "standalone"]
+        options: milvus run standalone
         env:
           ETCD_ENDPOINTS: etcd:2379
           MINIO_ADDRESS: minio:9000
