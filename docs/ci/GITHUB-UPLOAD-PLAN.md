@@ -1,13 +1,12 @@
-# 上传 GitHub 计划书（含 LLM Key 与个人隐私专项排查）
+# 上传 GitHub 计划书与执行记录（含 LLM Key 与个人隐私专项排查）
 
 | 项 | 内容 |
 |---|---|
-| 版本 | v2.0（2026-11-14） |
-| 适用仓库 | `medical_agent`（铭医 MedAssist） |
-| 当前 HEAD | 见 `git log -1`（历史已于 2026-11-14 重写，831 个提交） |
-| 上传目标 | GitHub **私有仓库**（先私有，验收后再评估是否公开） |
-| 当前状态 | **未上传**。仓库无远端（`git remote -v` 为空） |
-| 结论 | 可上传。工作树与历史均已通过密钥/隐私双专项排查（§3、§4） |
+| 版本 | v2.1（2026-11-14，含 2.0 实际上传执行记录） |
+| 适用仓库 | `medical_agent`（铭医 MedAssist 2.0） |
+| 上传目标 | <https://github.com/poincare-lijiashu/medical-agent>（**公开**仓库；1.0 即公开，本仓库承接 2.0） |
+| 当前状态 | **已上传**。默认分支 `main`，另有 `legacy-1.0` 归档 1.0 |
+| 结论 | 已上传。工作树与完整 Git 历史均通过密钥/隐私双专项排查（§3、§4） |
 
 ---
 
@@ -15,9 +14,11 @@
 
 工作树与**完整 Git 历史**已扫描：无真实 LLM Key、无真实个人隐私、无真实患者数据；
 历史中的 26 个含病例原文的提交已用 `git filter-repo` 彻底移除；文档中的本机路径、
-主机名、个人账号、真实口令已全部脱敏。**可以上传到私有仓库。**
+主机名、个人账号、真实口令已全部脱敏；第三方逐字复制内容（`docs/skills-audit/`）已排除在上传之外。
 
-上传后仍需你在 GitHub 后台手动开启 4 项防护（§6），并注意 §7 的两条待决策项。
+**已推送到 `main`（公开仓库）。** 平台防护（Secret scanning / Push protection / Dependabot）
+已通过 API 开启并核验；仍需你手动完成 3 项（§6 的 Social preview、Release、分支保护），
+步骤见 §5.6。仓库可见性若要从公开改回私有，见 §7。
 
 ---
 
@@ -138,15 +139,15 @@
 |---|---|
 | `data/kb/sample_guideline.pdf`（18.75 MB） | **已停止跟踪** + 加入 `.gitignore`；本机文件保留 |
 | `docs/qa/audit-export-2026-09-07.xlsx` | 已解包核验：仅事件类型/日期/队列计数，无 PHI → 保留 |
-| `docs/skills-audit/`（68 个文件，约 742 KB） | 上游仓库**逐字复制**且未随附 LICENSE → **私有仓可留，转公开前必须处理**（§7） |
+| `docs/skills-audit/`（68 个文件，约 742 KB） | 上游仓库**逐字复制**且未随附 LICENSE → **已 `git rm --cached` 并加入 `.gitignore`，未进入 2.0 上传内容**；本机文件保留 |
 | `frontend-console/dist/`（206 个文件） | 构建产物，按既定策略入库（免 node 部署） |
 | 字体 `woff2/woff` | IBM Plex（SIL OFL），保留 |
 
 ---
 
-## 5. 上传执行步骤
+## 5. 上传步骤（已按此执行，可作为另一台机器的复现手册）
 
-### 5.1 第 0 步：备份（必须，且已完成）
+### 5.1 第 0 步：备份（必须，已完成）
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup_repo.ps1 -Dst "C:\backup_repos"
@@ -156,39 +157,49 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup_repo.ps1 -Dst
 > ⚠️ **历史重写前的旧 bundle（`C:\backup_repos\medical_agent_2026111[0-3].bundle` 等）仍含病例原文**，
 > 它们只用于本地灾难恢复，**不要上传、分享或推送到任何远端**。
 
-### 5.2 第 1 步：工作区与远端
+### 5.2 第 1 步：工作区与代理
 
 ```powershell
 git status --short              # 必须为空
-git log --oneline -3
-git remote -v                   # 当前为空（filter-repo 已移除旧 origin）
+git remote add origin https://github.com/<owner>/<repo>.git
+# 开了系统代理时 git 不会自动跟随（gh 会），必须显式配置，否则
+# "Failed to connect to github.com:443 after 21092 ms"
+git config http.proxy http://127.0.0.1:7897
 ```
 
-### 5.3 第 2 步：创建私有仓库并推送
+### 5.3 第 2 步：非破坏性推送 → 再切默认分支
+
+1.0 的内容仍在远端 `main` 上。直接强推会丢掉 1.0，因此分两步：
 
 ```powershell
-# GitHub 上先建 **私有** 仓库（不要勾选自动生成 README/.gitignore/LICENSE）
-git remote add origin https://github.com/<owner>/<repo>.git
-git push -u origin main
+git push origin main:refs/heads/v2.0        # 先推到临时分支，远端 main 不动
+git branch legacy-1.0 origin/main           # 本地留一个 1.0 指针
+git push origin legacy-1.0                  # 远端归档 1.0
+git push origin --delete main               # 删远端旧 main
+git push origin main                        # 用 2.0 重建 main
+gh api -X PATCH repos/<owner>/<repo> -f default_branch=main
+git push origin --delete v2.0
 ```
 
-推送后如被 Push Protection 拦下（仅可能是 §3.2 的 3 处测试假值）：
+> 归档 1.0 的 `legacy-1.0` 分支只有 275 个 blob（1.0 是精简演示版），保留它是为了
+> "1.0 → 2.0 演进"可追溯；不需要时可随时删除。
 
-1. 在 GitHub 上确认告警是 **测试假值**（看文件名与行号，对照 §3.2 表）；
-2. 选择 **"Allow"** 并添加 allowlist 条目（路径级），**不要**为了绕过扫描去改测试代码；
-3. 重新推送。
+### 5.4 第 3 步：仓库元数据与防护（已用 API 完成）
 
-### 5.4 第 3 步：推送后立即开启平台防护
+| 项 | 值 / 状态 |
+|---|---|
+| Description | 医院级临床协同平台 2.0：16 个独立领域服务 · 913 个 HTTP 端点 · 15 schema/334 表 · 医嘱-收费-发药-危急值全闭环 · FHIR R4 / HL7 v2 · AI 循证问答 · 私有化 Helm 交付 |
+| Homepage | `https://poincare-lijiashu.github.io/medical-agent/` |
+| Topics | 20 个（`emr` `his` `fhir` `hl7` `clinical-decision-support` `medical-informatics` `llm` `rag` `multi-tenant` `postgresql` `java` `spring-boot` `vue3` `fastapi` `docker` `kubernetes` `helm` `audit-log` `healthcare` `hospital-information-system`） |
+| Secret scanning | enabled（已核验） |
+| Push protection | enabled（已核验） |
+| Secret scanning non-provider patterns | disabled（非厂商格式的自定义正则；如需开启见 Settings → Code security） |
+| Dependabot alerts + security updates | enabled（已核验；已自动开出首个 PR：`dependabot/pip/pillow-13.0.0`） |
+| Pages | 源 `main` / `/docs`，入口 `docs/index.html` → `docs/showcase/index.html`；`docs/.nojekyll` 关闭 Jekyll（含 `{{ }}` 的大量工程文档会让 Jekyll 构建失败） |
 
-| 项 | 操作 | 验证 |
-|---|---|---|
-| Secret scanning | Settings → Code security → 开启 | 能看到扫描结论 |
-| Push protection | 同上 → 开启 | 后续推送自动拦截 |
-| Dependabot | Settings → Advanced → 开启 alerts + security updates | 出现依赖告警 |
-| 分支保护 | `main` 要求 11 个 required checks + 1 人 review + 禁 force push | 见 `docs/ci/BRANCH-PROTECTION.md` |
-
-11 个 required checks（必须与 `ci.yml` 的 job 名完全一致）：
-`pytest` `lint` `vuln-scan` `postgres-it` `migration-lint` `platform` `frontend` `image-build` `helm` `eval-baseline` `e2e`
+> `gh api -X PATCH` 若返回 403 "Resource not accessible by integration"：说明
+> `GH_TOKEN` 环境变量里是 App token（`ghu_`），先 `$env:GH_TOKEN=""` 让 gh 回落到
+> keyring 里的用户 token（`gho_`）再执行。
 
 ### 5.5 第 4 步：干净克隆验收（必做）
 
@@ -199,7 +210,7 @@ git clone https://github.com/<owner>/<repo>.git ..\verify_clone
 cd ..\verify_clone
 
 # 6.1 敏感文件复查（期望空）
-git ls-files | Select-String -Pattern "consults|prescriptions|case_archive|users\.json|\.env\.local|llm_providers"
+git ls-files | Select-String -Pattern "consults|prescriptions|case_archive|users\.json|\.env\.local|llm_providers|skills-audit"
 
 # 6.2 历史复查（期望空）
 git log --all --oneline -- data/consults.json data/prescriptions.json data/case_archive.json
@@ -217,24 +228,70 @@ powershell -File scripts\run_platform_demo.ps1
 # 打开 http://127.0.0.1:8001 登录并核对驾驶舱
 ```
 
+### 5.6 第 5 步：只能手动做的 3 项（API 做不了）
+
+**（1）Social preview 图片**（仓库链接在社交平台/IM 里分享时的缩略图；GitHub 无 API）
+
+1. 用「画图/浏览器」打开 `docs/showcase/assets/hero-light.png`（2560×1280）或
+   `docs/showcase/assets/hero-dark.png`，另存为 PNG；
+2. 访问 `https://github.com/<owner>/<repo>/settings`；
+3. 找到 **Social preview** → **Edit** → **Upload an image** → 选刚保存的 PNG → **Save**。
+   （单张上限 1 MB；两张 PNG 分别约 597 KB / 659 KB，均在上限内。）
+
+**（2）创建 2.0 Release**
+
+1. 访问 `https://github.com/<owner>/<repo>/releases/new`；
+2. **Choose a tag** 输入 `v2.0.0` → **Create new tag: v2.0.0 on publish**；
+3. **Target**: `main`；
+4. **Release title**：`MedAssist 铭医 2.0.0 — 医院级临床协同平台`；
+5. 描述直接从根 `README.md` 的「⏱ 三十秒看懂」与「✅ 质量信号」两节复制；
+6. 勾选 **Set as the latest release** → **Publish release**。
+
+> 命令行也能建（`gh release create v2.0.0 --target main --title "…" --notes "…"`），
+> 但**不要用 `--generate-notes`**：本仓库有 800+ 提交（历史重写后），自动生成的 notes 是噪音。
+
+**（3）分支保护（等 §10 的 CI 全绿后再开，否则会把自己锁在门外）**
+
+```powershell
+# 11 个 required checks 必须与 ci.yml 的 job 名完全一致
+$checks = '["pytest","lint","vuln-scan","postgres-it","migration-lint","platform","frontend","image-build","helm","eval-baseline","e2e"]'
+$body = '{ "required_status_checks": { "strict": true, "contexts": ' + $checks + ' },
+           "enforce_admins": false,
+           "required_pull_request_reviews": { "required_approving_review_count": 1 },
+           "restrictions": null,
+           "allow_force_pushes": false,
+           "allow_deletions": false }'
+$body | Out-File -Encoding utf8 $env:TEMP\bp.json
+gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input $env:TEMP\bp.json
+```
+
+图形界面等价路径：Settings → Branches → **Add branch protection rule** → 分支名填 `main` →
+勾选 *Require a pull request before merging*（1 个 approval）、*Require status checks to pass*
+（逐个添加上面 11 个）→ **Create**。详见 `docs/ci/BRANCH-PROTECTION.md`。
+
 ---
 
 ## 6. 上传后 24 小时内的动作清单
 
-- [ ] 确认 Secret scanning 与 Push protection 已开启
-- [ ] 确认分支保护生效（推一个故意失败的 PR 验证会被拦）
-- [ ] 观察首个 Actions run 是否 11 个 job 全绿；不绿就先修再谈合并
-- [ ] 把首个全绿 run 的 URL 归档到 `docs/eval/2026-11-13/`
-- [ ] 在 `docs/ci/GITHUB-UPLOAD-PLAN.md` §10 记录实际上传时间、仓库地址与 run 链接
+- [x] 确认 Secret scanning 与 Push protection 已开启（API 核验：均为 `enabled`）
+- [x] 确认 Dependabot alerts + security updates 已开启（已自动出首个 PR）
+- [ ] 确认分支保护生效（推一个故意失败的 PR 验证会被拦）→ 见 §5.6(3)，**等 CI 全绿后做**
+- [ ] 观察首个 Actions run 是否 11 个 job 全绿；不绿就先修再谈合并（当前进度见 §10）
+- [ ] 把首个全绿 run 的 URL 归档到 `docs/eval/2026-11-13/README.md`
+- [ ] 完成 §5.6 的 Social preview 与 Release（API 不支持，只能手动）
+- [x] 在 §10 记录实际上传时间、仓库地址与 run 链接
 
 ---
 
-## 7. 仍待你决策的两项（不阻塞私有仓库上传）
+## 7. 残留风险与一处可选项
 
-| # | 事项 | 现状 | 建议 |
+| # | 事项 | 现状 | 可选动作 |
 |---|---|---|---|
-| 1 | `docs/skills-audit/`（68 个文件 / 742 KB） | 上游仓库逐字复制正文，未随附 LICENSE | 私有仓保留；**转公开前**只留 `manifest.json` + 索引摘要，或补齐各上游 LICENSE/NOTICE |
-| 2 | `docs/reviews/`、`docs/EVAL-*/`、`docs/eval/`（约 6,000 行内部负面评审） | 已脱敏，但含"可被利用的越权路径"等定性结论与未公开路线图 | 私有仓保留；**转公开前**需商务/法务确认是否披露 |
+| 1 | `docs/skills-audit/`（68 个文件 / 742 KB） | **已解决**：`git rm --cached` + `.gitignore`，未上传 | 无 |
+| 2 | `docs/reviews/`、`docs/EVAL-*/`、`docs/eval/`（约 6,000 行内部负面评审） | 已脱敏，但含"可被利用的越权路径"等定性结论与未公开路线图；**仓库当前是公开的，这些内容已可被读到** | 若你认为不宜公开：`gh api -X PATCH repos/<owner>/<repo> -f private=true`（一键转私有）；或把这三处目录移出仓库 |
+| 3 | 仓库可见性 | 公开（1.0 起即公开） | 同上，一条命令可转私有 |
+
+> 这三项都不涉及密钥或患者数据，属于"信息披露口径"问题，按你的判断处理即可。
 
 ---
 
@@ -250,17 +307,23 @@ powershell -File scripts\run_platform_demo.ps1
 
 ---
 
-## 9. 展示资产（本次新增）
+## 9. 展示资产（2.0 新增，均已上传）
 
 | 路径 | 内容 |
 |---|---|
+| `README.md` | 2.0 主页：双色 hero（`<picture>` + `prefers-color-scheme`）→ 三十秒看懂 → 架构取舍 → 界面 → 能力矩阵 → 十分钟跑起来 → 质量信号 → 已知边界 → 文档地图 |
+| `docs/showcase/assets/hero-light.png` / `hero-dark.png` | 2560×1280 双色首屏横幅（597 KB / 659 KB） |
+| `docs/showcase/assets/arch.png` | 2320×840 架构横幅（343 KB，SVG 源同目录） |
 | `docs/showcase/index.html` | 单文件展示页：hero + 统计 + 架构图 + 12 行能力矩阵 + 50 张截图画廊（点击放大、键盘可达）+ 质量与边界 + 文档地图；深浅色自适应；Mermaid 三镜像回退 |
 | `docs/showcase/screenshots/*.png` | 50 张截图（已裁掉浏览器工具栏，1600px 宽，约 15.6 MB） |
 | `docs/showcase/manifest.json` | 截图清单（文件名 / 业务域 / 标题 / 说明） |
-| `docs/showcase/README-DRAFT.md` | 可直接替换根 README 的展示稿 |
+| `docs/showcase/README-DRAFT.md` | 展示稿草稿（正稿已并入根 `README.md`） |
 | `docs/showcase/GITHUB-SHOWCASE.md` | 设计规范：视觉系统、页面结构、仓库主页设置、素材清单、发布节奏 |
-| `docs/showcase/assets/hero.svg` | 1280×340 矢量首屏（Social preview 可由它导出 PNG） |
+| `docs/index.html` | Pages 入口页（0 秒重定向到 `showcase/index.html`） |
+| `docs/.nojekyll` | 关闭 Jekyll；否则含 `{{ }}` 的工程文档会让 Pages 构建失败 |
 | `docs/architecture/ARCHITECTURE.md` | 7 张 Mermaid 架构图（上下文 / 服务地图 / 医嘱链路 / AI 链路 / 数据 / 部署 / 安全纵深） |
+| `LICENSE` / `NOTICE` | 专有许可声明 + 第三方组件许可清单 |
+| `docs/archive/README-1.0.md` | 1.0 版主页存档 |
 
 > 截图来源为本机演示环境，已裁掉浏览器工具栏；患者标识为合成数据。
 
@@ -268,16 +331,37 @@ powershell -File scripts\run_platform_demo.ps1
 
 ## 10. 执行记录
 
-| 日期 | 动作 | 结果 |
+时间均为北京时间（+08:00）。
+
+| 时间 | 动作 | 结果 |
 |---|---|---|
-| 2026-11-14 | 文档全量审计（159 个 Markdown） | 6 类敏感项已处理 |
+| 2026-11-14 | 文档全量审计（159 个 Markdown，分两批逐份通读） | 6 类敏感项已处理 |
 | 2026-11-14 | 文档脱敏（45 个文件改写） | 复核 0 命中 |
-| 2026-11-14 | `sample_guideline.pdf` 停止跟踪 | `.gitignore` 已加 |
-| 2026-11-14 | `git filter-repo` 历史重写（831 提交） | 病例/口令/主机名/账号历史均 0 |
-| 2026-11-14 | 50 张截图核验与导入 | 无真实 Key、无真实隐私 |
+| 2026-11-14 | `data/kb/sample_guideline.pdf`（18.75 MB）停止跟踪 | `.gitignore` 已加 |
+| 2026-11-14 | `docs/skills-audit/`（68 个文件）`git rm --cached` | 未进入上传内容 |
+| 2026-11-14 | `git filter-repo` 历史重写（831 个提交） | 病例/口令/主机名/账号历史均 0 |
+| 2026-11-14 | 50 张截图核验、裁剪、按业务域重命名并导入 | 无真实 Key、无真实隐私 |
 | 2026-11-14 | 展示页浏览器验收（3 轮） | 50/50 图加载、8 项问题全修 |
-| — | **创建 GitHub 私有仓库并推送** | ⏳ 待你指示后执行 |
-| — | 开启 Secret scanning / Push protection / Dependabot / 分支保护 | ⏳ 推送后手动执行 |
+| 07:02 | **首次推送 2.0 到临时分支 `v2.0`**（`git push origin main:refs/heads/v2.0`） | 远端旧 `main`（1.0）全程未被覆盖 |
+| 07:0x | 归档 1.0 → `legacy-1.0`（tip `7e64b404`，2026-09-15） | 1.0 可追溯 |
+| 07:0x | 删旧 `main` → 用 2.0 重建 → 默认分支切回 `main` → 删 `v2.0` | 远端 `main` = 2.0 |
+| 07:1x | 仓库元数据：description / homepage / 20 个 topics | 已生效 |
+| 07:1x | Secret scanning / Push protection / Dependabot（alerts + security updates） | 全部 `enabled`（API 核验） |
+| 07:2x | 启用 Pages（源 `main` / `/docs`） | 两次构建失败（Jekyll）→ 已加 `docs/.nojekyll` |
+| 07:33 | Actions 首轮 run [`43527957843`](https://github.com/poincare-lijiashu/medical-agent/actions/runs/43527957843)：整份 workflow 校验失败（0 job） | 根因 `services.*.cmd` 非法 → `91ab5854` 修复 → 10 个 job 真实执行 |
+| 07:40 | 首轮结论：`migration-lint` / `vuln-scan` / `frontend` / `image-build` 通过；`platform` / `helm` / `lint` / `pytest` / `postgres-it` / `e2e` 红 | 逐个取原始日志定位（§10.1） |
+| 07:56 | 六红修复提交 `f18dc5ac` | 见 §10.1；下一轮 run 验证 |
+
+### 10.1 首轮 6 个红灯的根因与修复（均取 CI 原始日志定位，本地复现验证）
+
+| job | CI 报错原文 | 根因 | 修复 | 本地验证 |
+|---|---|---|---|---|
+| `helm` | `parse error at (_helpers.tpl:202): undefined variable "$isGateway"` | Go 模板变量按声明顺序作用域，变量在 236 行才声明 | 声明前置到第 196 行、删掉重复声明 | 待 CI（本机无 helm） |
+| `platform` | 12 例日期相关失败：`RegistrationServiceTest.registerCreatesVisitAndCharge/fullSlotRejected/occupySlotCasFailureAbortsRegistration/duplicateVisitRejected`、`NursingServiceTest.*`、`BillingServiceTest.dailyBillRejectsFutureDate`、`DailyDispenseServiceTest.*` | runner 时区 UTC，业务用 `BusinessTime`（Asia/Shanghai）算"今天"，测试用 `LocalDate.now()`；在北京时间 00:00–08:00 差一天 | surefire 强制测试 JVM 时区 = Asia/Shanghai（与生产 `-Duser.timezone` 同口径） | ✅ 以 `BUSINESS_ZONE=UTC` 复现出同样的 4 例失败；恢复默认后 716 tests 全绿 |
+| `pytest` + `e2e` | `AttributeError: module 'marshmallow' has no attribute '__version_info__'`（**所有**用例在收集阶段就失败） | `pymilvus==2.4.9 → environs(<=9.5.0) → marshmallow>=3.0.0`，全新环境解析到 4.4.0，而 environs 9.5.0 读 4.x 已删除的属性 | `requirements.txt` 固定 `marshmallow==3.26.2` | ✅ 依赖链与报错行号已核对（`environs/__init__.py:58`） |
+| `lint` | `settings.app_version 为 "<无法导入 backend.config: ModuleNotFoundError: No module named 'pydantic_settings'>"` | lint job 只装 ruff，`release_check.py` 延迟导入 `backend.config` 需要 pydantic-settings | lint job 增装 `pydantic-settings==2.11.0` | — |
+| `postgres-it` | `ERROR: null value in column "campus_id" of relation "charge" violates not-null constraint` | 迁移 `V57` 给 `charge` 加 `campus_id NOT NULL`，IT 夹具只补了 `visit` | 夹具补 `campus_id`（与 `insertVisit` 同口径，抽常量 `CAMPUS`） | ✅ 编译通过（真库用例需 Docker） |
+| Pages | `Page build failed.`（构建状态 `errored`） | 仓库源目录 `/docs` 走 Jekyll，大量含 `{{ }}` 的工程文档使其解析失败 | 新增 `docs/.nojekyll` 关闭 Jekyll，按静态文件直出 | 待 Pages 重建后访问验收 |
 
 ---
 
@@ -288,3 +372,6 @@ powershell -File scripts\run_platform_demo.ps1
 - 历史重写**已执行且不可逆**：全部 commit ID 已变化；旧 bundle 仍含旧历史，不要外传。
 - 若真实 Key 曾写进任何**聊天工具、工单、邮件**，GitHub 清理不影响那些副本，需一并轮换。
 - 「上传后一切正常」只能以**干净克隆里的实测**为依据——请执行 §5.5 第 6.4 步。
+- 本文件记录的 CI/Pages 状态截至最后一次提交；远端实际结论以
+  <https://github.com/poincare-lijiashu/medical-agent/actions> 与
+  <https://poincare-lijiashu.github.io/medical-agent/> 为准。
