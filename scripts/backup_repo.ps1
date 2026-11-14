@@ -52,7 +52,11 @@ if (-not $Src) {
     }
 }
 if (-not $Src) { throw "ABORT: cannot derive repo root from script path; pass -Src explicitly" }
-if (-not $Dst) { $Dst = Join-Path $env:USERPROFILE "backup_repos" }
+if (-not $Dst) {
+    # Storage policy: bulky backups live on the data drive (D:), never on the system
+    # drive (C:). Fall back to the user profile only when D: is absent.
+    if (Test-Path "D:\") { $Dst = "D:\backup_repos" } else { $Dst = Join-Path $env:USERPROFILE "backup_repos" }
+}
 
 # -- 0) source sanity: refuse to "back up" from a broken tree
 if (-not (Test-Path (Join-Path $Src ".git"))) {

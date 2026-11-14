@@ -25,7 +25,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-if (-not $BackupDir) { $BackupDir = Join-Path $env:USERPROFILE "backup_repos" }
+if (-not $BackupDir) {
+    # Storage policy: backups go to D: first (system drive is for the OS only).
+    if (Test-Path "D:\") { $BackupDir = "D:\backup_repos" } else { $BackupDir = Join-Path $env:USERPROFILE "backup_repos" }
+}
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 

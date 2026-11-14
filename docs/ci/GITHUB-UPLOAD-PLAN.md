@@ -151,11 +151,13 @@
 ### 5.1 第 0 步：备份（必须，已完成）
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup_repo.ps1 -Dst "C:\backup_repos"
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup_repo.ps1 -Dst "D:\backup_repos"
+# 默认落点已是 D:\backup_repos（脚本内置：D 盘存在就用 D，否则回退 %USERPROFILE%），
+# 目的只有一个：2 GB 级备份永远不占系统盘。
 # → BACKUP OK ... HEAD=<当前提交>
 ```
 
-> ⚠️ **历史重写前的旧 bundle（`C:\backup_repos\medical_agent_2026111[0-3].bundle` 等）仍含病例原文**，
+> ⚠️ **历史重写前的旧 bundle（`D:\backup_repos\medical_agent_2026111[0-3].bundle` 等）仍含病例原文**，
 > 它们只用于本地灾难恢复，**不要上传、分享或推送到任何远端**。
 
 ### 5.2 第 1 步：工作区与代理
