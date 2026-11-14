@@ -355,9 +355,9 @@ gh api -X PUT repos/poincare-lijiashu/medical-agent/branches/main/protection --i
 | 07:1x | 仓库元数据：description / homepage / 20 个 topics | 已生效 |
 | 07:1x | Secret scanning / Push protection / Dependabot（alerts + security updates） | 全部 `enabled`（API 核验） |
 | 07:2x | 启用 Pages（源 `main` / `/docs`） | 两次构建失败（Jekyll）→ 已加 `docs/.nojekyll` |
-| 07:33 | Actions 首轮 run [`43527957843`](https://github.com/poincare-lijiashu/medical-agent/actions/runs/43527957843)：整份 workflow 校验失败（0 job） | 根因 `services.*.cmd` 非法 → `91ab5854` 修复 → 10 个 job 真实执行 |
+| 07:33 | Actions 首轮 run [`43527957843`](https://github.com/poincare-lijiashu/medical-agent/actions/runs/43527957843)：整份 workflow 校验失败（0 job） | 根因 `services.*.cmd` 非法 → `76e6a023` 修复 → 10 个 job 真实执行 |
 | 07:40 | 首轮结论：`migration-lint` / `vuln-scan` / `frontend` / `image-build` 通过；`platform` / `helm` / `lint` / `pytest` / `postgres-it` / `e2e` 红 | 逐个取原始日志定位（§10.1） |
-| 07:56 | 六红修复提交 `f18dc5ac` | 见 §10.1；下一轮 run 验证 |
+| 07:56 | 六红修复提交 `c90c8cb1` | 见 §10.1；下一轮 run 验证 |
 
 ### 10.1 首轮 6 个红灯的根因与修复（均取 CI 原始日志定位，本地复现验证）
 
@@ -374,15 +374,17 @@ gh api -X PUT repos/poincare-lijiashu/medical-agent/branches/main/protection --i
 
 | 轮次 | 剩余红灯 | 根因（均取自 CI 原始日志） | 修复 | 结果 |
 |---|---|---|---|---|
-| 2 `1ce299be` | `helm` `pytest` `e2e` | ① `helm`：`job-migrate-license.yaml:37` → `platform-license:0.1.0-SNAPSHOT`，staging/prod 的 values 从未覆盖 `license.image.tag`；② `pytest`：`ImportError: Initializing ChatOpenAI requires the langchain-openai package`（3 例）；③ `e2e`：marshmallow 修好后浏览器用例真正跑起来，但 `POST /api/v2/auth/login → 502`——只起了 Python 半个栈，登录必须经 Java 网关 | ① 补 license 不可变 tag；② requirements 加 `langchain-openai`；③ e2e 增加"平台栈可达"探针 | `platform` / `lint` / `postgres-it` / `image-build` 转绿（716 个 Java 用例全过，时区修复生效） |
-| 3 `4b153b19` | `helm` `pytest` `e2e` `image-build` | ① `helm`：换成 `platform-fhir` 的同类问题（同类组件逐个暴露）；② `pytest`/`e2e`/`image-build` 三个 job 同时卡在 `pip install`：`langchain-openai 1.1.10 depends on openai<3.0.0 and >=2.20.0` 与 `openai==1.66.3` 冲突 → `ResolutionImpossible` | ① staging/prod 补 fhir tag，并用 **helm v3.19.0 本地实测** `lint` + 三环境 `template` 全过；② `openai` 升到 2.54.0（本机 2140 例回归实测版本；业务代码不直接 `import openai`），并 dry-run 验证 `langchain 1.2.10 / langchain-core 1.2.16 / langchain-openai 1.1.10 / openai 2.54.0` 可解 | `e2e` / `helm` / `platform` / `postgres-it` 全绿 |
-| 4 `b9d649b6` | `pytest`（仅 1 例） | `test_deploy_path_consistency.py::test_deploy_docs_show_single_frontend` 断言根 README 必须写明 `frontend-console/dist`——2.0 新版 README 重写后漏掉这条上线口径 | 在「部署形态」补"唯一前端 / 根路径托管 / dist 已入库"一段 | 覆盖率 85.95%（阈值 85%）通过；仅剩该例 |
+| 2 `4a755e96` | `helm` `pytest` `e2e` | ① `helm`：`job-migrate-license.yaml:37` → `platform-license:0.1.0-SNAPSHOT`，staging/prod 的 values 从未覆盖 `license.image.tag`；② `pytest`：`ImportError: Initializing ChatOpenAI requires the langchain-openai package`（3 例）；③ `e2e`：marshmallow 修好后浏览器用例真正跑起来，但 `POST /api/v2/auth/login → 502`——只起了 Python 半个栈，登录必须经 Java 网关 | ① 补 license 不可变 tag；② requirements 加 `langchain-openai`；③ e2e 增加"平台栈可达"探针 | `platform` / `lint` / `postgres-it` / `image-build` 转绿（716 个 Java 用例全过，时区修复生效） |
+| 3 `05b02ddb` | `helm` `pytest` `e2e` `image-build` | ① `helm`：换成 `platform-fhir` 的同类问题（同类组件逐个暴露）；② `pytest`/`e2e`/`image-build` 三个 job 同时卡在 `pip install`：`langchain-openai 1.1.10 depends on openai<3.0.0 and >=2.20.0` 与 `openai==1.66.3` 冲突 → `ResolutionImpossible` | ① staging/prod 补 fhir tag，并用 **helm v3.19.0 本地实测** `lint` + 三环境 `template` 全过；② `openai` 升到 2.54.0（本机 2140 例回归实测版本；业务代码不直接 `import openai`），并 dry-run 验证 `langchain 1.2.10 / langchain-core 1.2.16 / langchain-openai 1.1.10 / openai 2.54.0` 可解 | `e2e` / `helm` / `platform` / `postgres-it` 全绿 |
+| 4 `abe0ea7b` | `pytest`（仅 1 例） | `test_deploy_path_consistency.py::test_deploy_docs_show_single_frontend` 断言根 README 必须写明 `frontend-console/dist`——2.0 新版 README 重写后漏掉这条上线口径 | 在「部署形态」补"唯一前端 / 根路径托管 / dist 已入库"一段 | 覆盖率 85.95%（阈值 85%）通过；仅剩该例 |
 
 ### 10.3 收口状态（2026-11-14 08:5x）
 
 | 项 | 状态 |
 |---|---|
-| 远端 `main` HEAD | 见 `git log -1`（本节首次落笔时为 `736d7279`） |
+| 远端 `main` HEAD | 见 `git log -1`（本节首次落笔时为 `db669c0d`；2026-11-14 二次历史清洗后全部 commit ID 已重新生成，见 §10.4） |
+| 二次历史清洗 | `git filter-repo --replace-text`：口令 / 主机名 / 内网 IP 四类字面量在**当前树与全历史**均 0 命中（`git log -S` 复核）；`legacy-1.0`（11 个提交）复核无命中，保留 |
+| 清洗代价 | 本次清洗后 commit ID 全部变化；本文档内引用的 SHA 已按 `commit-map` 同步替换，run 链接（run id 不变）仍可访问 |
 | 首个全绿 CI run | <https://github.com/poincare-lijiashu/medical-agent/actions/runs/43534683795> —— **10/10 job 绿**：`pytest`（2,134 passed / 12 skipped，覆盖率 85.95%）、`lint`、`vuln-scan`、`postgres-it`、`migration-lint`、`platform`（716 tests）、`frontend`、`image-build`、`helm`、`e2e`；`eval-baseline` 按设计 skipped |
 | 分支保护 | `main`：10 项 required checks + 禁 force push + 禁删除（`gh api` 回读核验） |
 | GitHub Pages | <https://poincare-lijiashu.github.io/medical-agent/> → 展示页（入口 `docs/index.html` 0 秒跳转），截图与横幅实测 200 |
