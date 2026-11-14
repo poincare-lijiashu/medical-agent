@@ -48,7 +48,7 @@ openai==2.54.0
 # 而 langchain 只声明 langchain-core，不装 langchain-openai 会在首次调用时
 # ImportError（与 PyJWT 同类问题：本机已装、全新环境才炸）。2026-11-14 CI 实测
 # test_llm_config / test_llm_extra_params 3 例因缺包失败。版本与本机实测一致。
-langchain-openai==1.1.10
+langchain-openai==1.1.14
 # Nacos 服务注册（P0-5，计划书 D6.1）：Nacos 2.5.1 服务端实测须用 SDK 3.x——
 # 2.0.11 连接/心跳"成功"但服务端查不到实例（静默失败，2026-10-30 实测），3.2.0 正常。
 # NACOS_ENABLED=false（默认）时仅占空间、零副作用；开启后 AI 中台以
