@@ -361,7 +361,15 @@ gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input $env:TEMP\bp
 | `pytest` + `e2e` | `AttributeError: module 'marshmallow' has no attribute '__version_info__'`（**所有**用例在收集阶段就失败） | `pymilvus==2.4.9 → environs(<=9.5.0) → marshmallow>=3.0.0`，全新环境解析到 4.4.0，而 environs 9.5.0 读 4.x 已删除的属性 | `requirements.txt` 固定 `marshmallow==3.26.2` | ✅ 依赖链与报错行号已核对（`environs/__init__.py:58`） |
 | `lint` | `settings.app_version 为 "<无法导入 backend.config: ModuleNotFoundError: No module named 'pydantic_settings'>"` | lint job 只装 ruff，`release_check.py` 延迟导入 `backend.config` 需要 pydantic-settings | lint job 增装 `pydantic-settings==2.11.0` | — |
 | `postgres-it` | `ERROR: null value in column "campus_id" of relation "charge" violates not-null constraint` | 迁移 `V57` 给 `charge` 加 `campus_id NOT NULL`，IT 夹具只补了 `visit` | 夹具补 `campus_id`（与 `insertVisit` 同口径，抽常量 `CAMPUS`） | ✅ 编译通过（真库用例需 Docker） |
-| Pages | `Page build failed.`（构建状态 `errored`） | 仓库源目录 `/docs` 走 Jekyll，大量含 `{{ }}` 的工程文档使其解析失败 | 新增 `docs/.nojekyll` 关闭 Jekyll，按静态文件直出 | 待 Pages 重建后访问验收 |
+| Pages | `Page build failed.`（构建状态 `errored`） | 仓库源目录 `/docs` 走 Jekyll，大量含 `{{ }}` 的工程文档使其解析失败 | 新增 `docs/.nojekyll` 关闭 Jekyll，按静态文件直出 | ✅ 站点 200，展示页/横幅/截图全部可达 |
+
+### 10.2 后续三轮收敛（run `43530613450` → `43532415472` → `43533313198`）
+
+| 轮次 | 剩余红灯 | 根因（均取自 CI 原始日志） | 修复 | 结果 |
+|---|---|---|---|---|
+| 2 `1ce299be` | `helm` `pytest` `e2e` | ① `helm`：`job-migrate-license.yaml:37` → `platform-license:0.1.0-SNAPSHOT`，staging/prod 的 values 从未覆盖 `license.image.tag`；② `pytest`：`ImportError: Initializing ChatOpenAI requires the langchain-openai package`（3 例）；③ `e2e`：marshmallow 修好后浏览器用例真正跑起来，但 `POST /api/v2/auth/login → 502`——只起了 Python 半个栈，登录必须经 Java 网关 | ① 补 license 不可变 tag；② requirements 加 `langchain-openai`；③ e2e 增加"平台栈可达"探针 | `platform` / `lint` / `postgres-it` / `image-build` 转绿（716 个 Java 用例全过，时区修复生效） |
+| 3 `4b153b19` | `helm` `pytest` `e2e` `image-build` | ① `helm`：换成 `platform-fhir` 的同类问题（同类组件逐个暴露）；② `pytest`/`e2e`/`image-build` 三个 job 同时卡在 `pip install`：`langchain-openai 1.1.10 depends on openai<3.0.0 and >=2.20.0` 与 `openai==1.66.3` 冲突 → `ResolutionImpossible` | ① staging/prod 补 fhir tag，并用 **helm v3.19.0 本地实测** `lint` + 三环境 `template` 全过；② `openai` 升到 2.54.0（本机 2140 例回归实测版本；业务代码不直接 `import openai`），并 dry-run 验证 `langchain 1.2.10 / langchain-core 1.2.16 / langchain-openai 1.1.10 / openai 2.54.0` 可解 | `e2e` / `helm` / `platform` / `postgres-it` 全绿 |
+| 4 `b9d649b6` | `pytest`（仅 1 例） | `test_deploy_path_consistency.py::test_deploy_docs_show_single_frontend` 断言根 README 必须写明 `frontend-console/dist`——2.0 新版 README 重写后漏掉这条上线口径 | 在「部署形态」补"唯一前端 / 根路径托管 / dist 已入库"一段 | 覆盖率 85.95%（阈值 85%）通过；仅剩该例 |
 
 ---
 
