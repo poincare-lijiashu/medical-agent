@@ -98,6 +98,9 @@ ingress:
 fhir:
   # FHIR Bundle 的 fullUrl/self 必须是对外可回查地址（见 deployment-fhir.yaml）
   baseUrl: https://medassist-staging.hospital.local/api/v2/fhir
+  # 同 license：此前无 tag 覆盖 → 回落 0.1.0-SNAPSHOT → M9 守卫让整份渲染失败
+  replicaCount: 2
+  image: {repository: platform-fhir, tag: "0.1.0", pullPolicy: IfNotPresent}
 
 masterdata:
   replicaCount: 2

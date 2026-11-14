@@ -40,7 +40,10 @@ pytest-timeout==2.4.0
 # 第 70 批：覆盖率门禁（CI 强制 backend ≥85%；本地实测 87%）
 pytest-cov==6.1.1
 # LLM client (Qwen MaaS via DashScope openai-compat)
-openai==1.66.3
+# 2.x 是本机全量回归（2140 例）实际验证的版本；此前钉的 1.66.3 是早期快照，
+# 与 langchain-openai 1.x 的 openai>=2.20.0 冲突（CI 解析直接 ResolutionImpossible）。
+# 业务代码不直接 import openai（只用 langchain 的 ChatOpenAI），升级面可控。
+openai==2.54.0
 # ChatOpenAI 的**运行时**依赖：backend/core/llm.py 走 langchain 的 ChatOpenAI，
 # 而 langchain 只声明 langchain-core，不装 langchain-openai 会在首次调用时
 # ImportError（与 PyJWT 同类问题：本机已装、全新环境才炸）。2026-11-14 CI 实测
