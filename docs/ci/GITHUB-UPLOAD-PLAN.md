@@ -98,14 +98,15 @@
 
 | 类别 | 具体发现 | 处理结果 |
 |---|---|---|
-| **真实口令** | `docs/HANDOFF.md` 记录了另一项目容器账号 `ljs/<redacted-password>` | 已删除 + 历史重写 |
-| **主机名** | `<host>`（3 处：L3 证据包 + 2 份性能报告） | → `<host>` |
-| **个人 GitHub 账号** | `poincare-lijiashu`（5 处，含一个已公开仓库地址） | → `<github-owner>` |
+| **真实口令** | `docs/HANDOFF.md` 记录了另一项目容器账号 `ljs` / `<redacted-password>` | 已删除 + 历史重写 |
+| **主机名** | 本机主机名（3 处：L3 证据包 + 2 份性能报告） | → `<host>` |
+| **个人 GitHub 账号** | 早期文档中的本人账号（5 处，含一个已公开仓库地址） | → `<github-owner>`；**例外**：`README.md` 的 clone 地址、徽章与 Pages 链接必须是真实仓库地址，属于仓库自述，不构成额外暴露 |
 | **本机路径** | `d:\workspace_AI\...`、`D:\software_work\...`、`C:\backup_repos`、临时代理端口 | → `<repo>` / `<backup-dir>` / 删除；脚本改为从脚本位置推导 |
 | **凭据明文** | 演示口令、开发库口令、带口令 DSN、开发 JWT 密钥 | → `<demo-password>` / `<dev-password>` / `<dev-jwt-secret>` |
-| **内网地址** | `192.0.2.13`、`192.0.2.20` | → 文档保留网段 `192.0.2.x` |
+| **内网地址** | 两处内网 IP（证据包里的采集端） | → 文档保留网段 `192.0.2.x` |
 
-复核（`git grep`）：`<redacted-password>` / `<host>` / `poincare-lijiashu` / 本机绝对路径 —— **均为 0 命中**。
+复核（`git grep` 全树 + `git log -S` 全历史）：真实口令字面量 / 主机名 / 本机绝对路径 / 内网 IP —— **均为 0 命中**；
+`poincare-lijiashu` 仅存在于"本仓库自身地址"语境（README clone 链接、徽章、Pages、Actions 链接）。
 
 ### 4.2 患者数据
 
@@ -305,8 +306,9 @@ gh api -X PUT repos/poincare-lijiashu/medical-agent/branches/main/protection --i
 3. 在 GitHub 删除旧分支/Tag/Release 附件，联系 GitHub Support 清理缓存；
 4. 记录事件：暴露窗口、轮换时间、影响范围。
 
-> 另有一件**本仓库管不了**的事：`ljs/<redacted-password>` 属于另一个项目 `ai_dev` 的容器账号，
-> 本仓库已删除并重写历史，但**该口令曾暴露过**，请在 `ai_dev` 项目里改密。
+> 另有一件**本仓库管不了**的事：早期 `HANDOFF.md` 里还残留过另一个项目 `ai_dev` 的容器账号口令
+> （本仓库已删除正文并对历史做 `--replace-text` 清洗，字面量在**当前树与历史中均 0 命中**）。
+> 但"删历史"不等于"口令安全"：**请在 `ai_dev` 项目里改掉那个口令**，这是唯一彻底的处置。
 
 ---
 
@@ -314,8 +316,10 @@ gh api -X PUT repos/poincare-lijiashu/medical-agent/branches/main/protection --i
 
 | 路径 | 内容 |
 |---|---|
-| `README.md` | 2.0 主页：双色 hero（`<picture>` + `prefers-color-scheme`）→ 三十秒看懂 → 架构取舍 → 界面 → 能力矩阵 → 十分钟跑起来 → 质量信号 → 已知边界 → 文档地图 |
-| `docs/showcase/assets/hero-light.png` / `hero-dark.png` | 2560×1280 双色首屏横幅（597 KB / 659 KB） |
+| `README.md` | 2.0 主页：动画 hero（SMIL）→ 三十秒看懂 → **Mermaid 原生服务拓扑 + 医嘱时序图** → 架构取舍 → **全部 50 张界面图墙** → 能力矩阵 → 十分钟跑起来 → 质量信号 → 已知边界 → 文档地图 |
+| `docs/showcase/assets/hero-anim-light.svg` / `hero-anim-dark.svg` | 首屏动画横幅（SMIL：心电节律描边 + 渐变扫光 + 呼吸点 + 漂浮粒子），13 KB/个，随系统深浅色切换 |
+| `docs/showcase/thumbs/*.jpg` | 50 张 760px 缩略图（共 1.69 MB），供 README 全量图片墙使用；点击回全尺寸 PNG |
+| `docs/showcase/assets/hero-light.png` / `hero-dark.png` | 2560×1280 双色首屏横幅（静态回退，597 KB / 659 KB） |
 | `docs/showcase/assets/arch.png` | 2320×840 架构横幅（343 KB，SVG 源同目录） |
 | `docs/showcase/index.html` | 单文件展示页：hero + 统计 + 架构图 + 12 行能力矩阵 + 50 张截图画廊（点击放大、键盘可达）+ 质量与边界 + 文档地图；深浅色自适应；Mermaid 三镜像回退 |
 | `docs/showcase/screenshots/*.png` | 50 张截图（已裁掉浏览器工具栏，1600px 宽，约 15.6 MB） |

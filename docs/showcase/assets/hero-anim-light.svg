@@ -1,0 +1,243 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 680" width="1600" height="680"
+     role="img" aria-label="MedAssist 铭医 — 医院级临床协同平台 · v2.0">
+  <title>MedAssist 铭医 — 医院级临床协同平台 · v2.0</title>
+  <defs>
+    <linearGradient id="bg-light" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#f4faf7"/>
+      <stop offset="100%" stop-color="#e8f4ee"/>
+    </linearGradient>
+    <linearGradient id="bar-light" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1f6f5c"/>
+      <stop offset="100%" stop-color="#2f9e83"/>
+    </linearGradient>
+    <linearGradient id="sweep-light" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2f9e83" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#2f9e83" stop-opacity="1"/>
+      <stop offset="100%" stop-color="#2f9e83" stop-opacity="0"/>
+      <animate attributeName="x1" values="-1;1" dur="5.5s" repeatCount="indefinite"/>
+      <animate attributeName="x2" values="0;2" dur="5.5s" repeatCount="indefinite"/>
+    </linearGradient>
+    <radialGradient id="halo-light" cx="0.18" cy="0.3" r="0.6">
+      <stop offset="0%" stop-color="#2f9e83" stop-opacity="0.18"/>
+      <stop offset="100%" stop-color="#2f9e83" stop-opacity="0"/>
+    </radialGradient>
+    <pattern id="grid-light" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0 H0 V40" fill="none" stroke="#dcebe4" stroke-width="1" opacity="0.55"/>
+    </pattern>
+    <filter id="soft-light" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="8"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="680" fill="url(#bg-light)"/>
+  <rect width="1600" height="680" fill="url(#grid-light)"/>
+  <rect width="1600" height="680" fill="url(#halo-light)"/>
+  
+  <circle cx="60" cy="80" r="2.2" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="5s" begin="0.0s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="7s" begin="0.0s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="173" cy="271" r="3.3" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="6s" begin="-0.4s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="8s" begin="-0.6s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="286" cy="462" r="4.4" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="7s" begin="-0.8s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="9s" begin="-1.2s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="399" cy="653" r="2.2" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="8s" begin="-1.2000000000000002s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="10s" begin="-1.7999999999999998s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="512" cy="244" r="3.3" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="9s" begin="-1.6s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="7s" begin="-2.4s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="625" cy="435" r="4.4" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="5s" begin="-2.0s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="8s" begin="-3.0s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="738" cy="626" r="2.2" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="6s" begin="-2.4000000000000004s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="9s" begin="-3.5999999999999996s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="851" cy="217" r="3.3" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="7s" begin="-2.8000000000000003s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="10s" begin="-4.2s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="964" cy="408" r="4.4" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="8s" begin="-3.2s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="7s" begin="-4.8s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1077" cy="599" r="2.2" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="9s" begin="-3.6s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="8s" begin="-5.3999999999999995s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1190" cy="190" r="3.3" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="5s" begin="-4.0s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="9s" begin="-6.0s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1303" cy="381" r="4.4" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="6s" begin="-4.4s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="10s" begin="-6.6s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1416" cy="572" r="2.2" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="7s" begin="-4.800000000000001s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="7s" begin="-7.199999999999999s"
+             repeatCount="indefinite"/>
+  </circle>
+  <circle cx="1529" cy="163" r="3.3" fill="#9fd6c4" opacity="0.5">
+    <animate attributeName="opacity" values="0.15;0.65;0.15"
+             dur="8s" begin="-5.2s" repeatCount="indefinite"/>
+    <animateTransform attributeName="transform" type="translate"
+             values="0 0; 0 -14; 0 0" dur="8s" begin="-7.8s"
+             repeatCount="indefinite"/>
+  </circle>
+
+  <!-- 左：标题 -->
+  <g>
+    <rect x="96" y="150" width="64" height="6" rx="3" fill="url(#bar-light)">
+      <animate attributeName="width" values="64;180;64" dur="6s" repeatCount="indefinite"/>
+    </rect>
+    <text x="96" y="252" font-size="86" font-weight="700" letter-spacing="1"
+          fill="#0b1f18" font-family="Segoe UI,Noto Sans SC,sans-serif">MedAssist 铭医</text>
+    <text x="96" y="312" font-size="30" fill="#1f6f5c"
+          font-family="Segoe UI,Noto Sans SC,sans-serif">医院级临床协同平台 · v2.0</text>
+    <text x="96" y="362" font-size="19" fill="#4a6b60"
+          font-family="Segoe UI,Noto Sans SC,sans-serif">16 个领域服务 · 913 个 HTTP 端点 · 15 schema / 334 表 · 医嘱-收费-发药-危急值全闭环</text>
+  </g>
+  
+  <g>
+    <rect x="96" y="392" width="171" height="40" rx="20" fill="none"
+          stroke="#2f9e83" stroke-width="1.4" opacity="0.75"/>
+    <text x="182" y="418" font-size="17" text-anchor="middle"
+          fill="#1f6f5c" font-family="Segoe UI,Noto Sans SC,sans-serif">HL7 FHIR R4</text>
+  </g>
+  <g>
+    <rect x="281" y="392" width="105" height="40" rx="20" fill="none"
+          stroke="#2f9e83" stroke-width="1.4" opacity="0.75"/>
+    <text x="334" y="418" font-size="17" text-anchor="middle"
+          fill="#1f6f5c" font-family="Segoe UI,Noto Sans SC,sans-serif">HL7 v2</text>
+  </g>
+  <g>
+    <rect x="400" y="392" width="224" height="40" rx="20" fill="none"
+          stroke="#2f9e83" stroke-width="1.4" opacity="0.75"/>
+    <text x="512" y="418" font-size="17" text-anchor="middle"
+          fill="#1f6f5c" font-family="Segoe UI,Noto Sans SC,sans-serif">OAuth2 只读 scope</text>
+  </g>
+  <g>
+    <rect x="638" y="392" width="132" height="40" rx="20" fill="none"
+          stroke="#2f9e83" stroke-width="1.4" opacity="0.75"/>
+    <text x="704" y="418" font-size="17" text-anchor="middle"
+          fill="#1f6f5c" font-family="Segoe UI,Noto Sans SC,sans-serif">私有化 Helm</text>
+  </g>
+
+  <!-- 左：心电节律（医学语义的「系统存活」） -->
+  <g transform="translate(96,516)">
+    <line x1="0" y1="0" x2="788" y2="0" stroke="#cfe3d9" stroke-width="2"/>
+    <path d="M0,0 L120,0 L138,-26 L156,34 L174,-64 L192,58 L208,-14 L224,0 L300,0 L318,-20 L336,26 L354,-48 L372,44 L388,-10 L404,0 L520,0 L538,-24 L556,30 L574,-56 L592,52 L608,-12 L624,0 L760,0" fill="none" stroke="#1f6f5c" stroke-width="3.2"
+          stroke-linecap="round" stroke-linejoin="round" opacity="0.95"/>
+    <path d="M0,0 L120,0 L138,-26 L156,34 L174,-64 L192,58 L208,-14 L224,0 L300,0 L318,-20 L336,26 L354,-48 L372,44 L388,-10 L404,0 L520,0 L538,-24 L556,30 L574,-56 L592,52 L608,-12 L624,0 L760,0" fill="none" stroke="url(#sweep-light)" stroke-width="5"
+          stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="150 1400">
+      <animate attributeName="stroke-dashoffset" values="1550;0" dur="4.2s"
+               repeatCount="indefinite"/>
+    </path>
+    <circle cx="624" cy="0" r="6" fill="#2f9e83">
+      <animate attributeName="r" values="4;9;4" dur="2.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" values="1;0.45;1" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <text x="0" y="98" font-size="15" fill="#4a6b60" letter-spacing="2"
+          font-family="ui-monospace,Consolas,monospace">AUDIT · FHIR · ORDER · CHARGE · DISPENSE · CRITICAL-VALUE</text>
+  </g>
+
+  <!-- 右：关键数字 -->
+  
+  <g>
+    <rect x="1016" y="150" width="228" height="164" rx="18" fill="#ffffff"
+          stroke="#d7e8df" stroke-width="1.5"/>
+    <rect x="1016" y="150" width="228" height="3" rx="1.5" fill="url(#bar-light)">
+      <animate attributeName="opacity" values="0.35;1;0.35" dur="4.0s"
+               repeatCount="indefinite"/>
+    </rect>
+    <text x="1038" y="232" font-size="52" font-weight="700"
+          fill="#0b1f18" font-family="Segoe UI,Noto Sans SC,sans-serif">16</text>
+    <text x="1038" y="272" font-size="17" fill="#4a6b60"
+          font-family="Segoe UI,Noto Sans SC,sans-serif">独立领域服务</text>
+  </g>
+  <g>
+    <rect x="1268" y="150" width="228" height="164" rx="18" fill="#ffffff"
+          stroke="#d7e8df" stroke-width="1.5"/>
+    <rect x="1268" y="150" width="228" height="3" rx="1.5" fill="url(#bar-light)">
+      <animate attributeName="opacity" values="0.35;1;0.35" dur="4.7s"
+               repeatCount="indefinite"/>
+    </rect>
+    <text x="1290" y="232" font-size="52" font-weight="700"
+          fill="#0b1f18" font-family="Segoe UI,Noto Sans SC,sans-serif">913</text>
+    <text x="1290" y="272" font-size="17" fill="#4a6b60"
+          font-family="Segoe UI,Noto Sans SC,sans-serif">HTTP 端点</text>
+  </g>
+  <g>
+    <rect x="1016" y="340" width="228" height="164" rx="18" fill="#ffffff"
+          stroke="#d7e8df" stroke-width="1.5"/>
+    <rect x="1016" y="340" width="228" height="3" rx="1.5" fill="url(#bar-light)">
+      <animate attributeName="opacity" values="0.35;1;0.35" dur="5.4s"
+               repeatCount="indefinite"/>
+    </rect>
+    <text x="1038" y="422" font-size="52" font-weight="700"
+          fill="#0b1f18" font-family="Segoe UI,Noto Sans SC,sans-serif">334</text>
+    <text x="1038" y="462" font-size="17" fill="#4a6b60"
+          font-family="Segoe UI,Noto Sans SC,sans-serif">数据表</text>
+  </g>
+  <g>
+    <rect x="1268" y="340" width="228" height="164" rx="18" fill="#ffffff"
+          stroke="#d7e8df" stroke-width="1.5"/>
+    <rect x="1268" y="340" width="228" height="3" rx="1.5" fill="url(#bar-light)">
+      <animate attributeName="opacity" values="0.35;1;0.35" dur="6.1s"
+               repeatCount="indefinite"/>
+    </rect>
+    <text x="1290" y="422" font-size="52" font-weight="700"
+          fill="#0b1f18" font-family="Segoe UI,Noto Sans SC,sans-serif">2,140</text>
+    <text x="1290" y="462" font-size="17" fill="#4a6b60"
+          font-family="Segoe UI,Noto Sans SC,sans-serif">回归用例</text>
+  </g>
+
+  <rect x="0" y="675" width="1600" height="5" fill="url(#bar-light)"/>
+</svg>
