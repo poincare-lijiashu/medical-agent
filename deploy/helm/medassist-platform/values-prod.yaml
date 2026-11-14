@@ -294,6 +294,13 @@ release:
   env:
     - {name: NACOS_NAMESPACE, value: production}
 
+# 授权后端（8095）。此前 prod 未覆盖 license.image.tag，回落到 values.yaml 的
+# 0.1.0-SNAPSHOT，被 M9 守卫（非 dev 禁 SNAPSHOT）在 `helm template` 阶段整份
+# 渲染失败。补不可变基线，发布时由 CI --set license.image.tag=<build> 覆盖。
+license:
+  replicaCount: 2
+  image: {repository: platform-license, tag: "1.0.0", pullPolicy: IfNotPresent}
+
 serviceMonitor:
   enabled: true
   interval: 30s

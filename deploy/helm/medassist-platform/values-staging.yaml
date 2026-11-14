@@ -123,6 +123,13 @@ release:
   env:
     - {name: NACOS_NAMESPACE, value: staging}
 
+# 授权后端（8095）。此前 staging/prod 都没覆盖 license.image.tag，回落到
+# values.yaml 的 0.1.0-SNAPSHOT，被 M9 守卫（非 dev 禁 SNAPSHOT）在
+# `helm template` 阶段整份渲染失败。这里补同口径的不可变基线，发布时由 CI
+# --set license.image.tag=<build> 覆盖。
+license:
+  image: {repository: platform-license, tag: "0.1.0", pullPolicy: IfNotPresent}
+
 auth:
   replicaCount: 2
   image: {repository: platform-auth, tag: "0.1.0", pullPolicy: IfNotPresent}
