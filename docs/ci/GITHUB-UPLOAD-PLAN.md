@@ -250,24 +250,27 @@ powershell -File scripts\run_platform_demo.ps1
 > 命令行也能建（`gh release create v2.0.0 --target main --title "…" --notes "…"`），
 > 但**不要用 `--generate-notes`**：本仓库有 800+ 提交（历史重写后），自动生成的 notes 是噪音。
 
-**（3）分支保护（等 §10 的 CI 全绿后再开，否则会把自己锁在门外）**
+**（3）分支保护 —— 已由我通过 `gh api` 应用并回读核验（2026-11-14）**
+
+`main` 现有保护：required checks 10 项（`pytest` `lint` `vuln-scan` `postgres-it`
+`migration-lint` `platform` `frontend` `image-build` `helm` `e2e`）+ 禁 force push + 禁删除。
+
+两处刻意的取舍（单人维护不被锁死）：不要求 PR review（自己无法 approve 自己的 PR）、
+`enforce_admins=false`（管理员仍可直推，协作方必须 PR + 绿灯）。
+`eval-baseline` **故意不设为 required**：它只在手动/定时跑，PR 上不产生 check run，
+设了会让所有 PR 卡在 "Expected — Waiting for status to be reported"。
+
+如果需要改成"协作模式"（≥2 名维护者时），在 GitHub 界面 Settings → Branches 编辑该规则，
+或：
 
 ```powershell
-# 11 个 required checks 必须与 ci.yml 的 job 名完全一致
-$checks = '["pytest","lint","vuln-scan","postgres-it","migration-lint","platform","frontend","image-build","helm","eval-baseline","e2e"]'
-$body = '{ "required_status_checks": { "strict": true, "contexts": ' + $checks + ' },
-           "enforce_admins": false,
-           "required_pull_request_reviews": { "required_approving_review_count": 1 },
-           "restrictions": null,
-           "allow_force_pushes": false,
-           "allow_deletions": false }'
+$env:GH_TOKEN=""
+$body = '{"required_status_checks":{"strict":true,"contexts":["pytest","lint","vuln-scan","postgres-it","migration-lint","platform","frontend","image-build","helm","e2e"]},"enforce_admins":true,"required_pull_request_reviews":{"required_approving_review_count":1},"restrictions":null,"allow_force_pushes":false,"allow_deletions":false}'
 $body | Out-File -Encoding utf8 $env:TEMP\bp.json
-gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input $env:TEMP\bp.json
+gh api -X PUT repos/poincare-lijiashu/medical-agent/branches/main/protection --input $env:TEMP\bp.json
 ```
 
-图形界面等价路径：Settings → Branches → **Add branch protection rule** → 分支名填 `main` →
-勾选 *Require a pull request before merging*（1 个 approval）、*Require status checks to pass*
-（逐个添加上面 11 个）→ **Create**。详见 `docs/ci/BRANCH-PROTECTION.md`。
+详见 `docs/ci/BRANCH-PROTECTION.md`。
 
 ---
 
@@ -275,9 +278,9 @@ gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input $env:TEMP\bp
 
 - [x] 确认 Secret scanning 与 Push protection 已开启（API 核验：均为 `enabled`）
 - [x] 确认 Dependabot alerts + security updates 已开启（已自动出首个 PR）
-- [ ] 确认分支保护生效（推一个故意失败的 PR 验证会被拦）→ 见 §5.6(3)，**等 CI 全绿后做**
-- [ ] 观察首个 Actions run 是否 11 个 job 全绿；不绿就先修再谈合并（当前进度见 §10）
-- [ ] 把首个全绿 run 的 URL 归档到 `docs/eval/2026-11-13/README.md`
+- [x] 确认分支保护生效（10 项 required checks + 禁 force push / 删除，API 回读核验）
+- [x] 首个 Actions run 10 个 job 全绿（run `43534683795`，唯一 skipped 的 `eval-baseline` 按设计只在手动/定时跑）
+- [x] 把首个全绿 run 的 URL 记入本文件 §10.3
 - [ ] 完成 §5.6 的 Social preview 与 Release（API 不支持，只能手动）
 - [x] 在 §10 记录实际上传时间、仓库地址与 run 链接
 
@@ -370,6 +373,18 @@ gh api -X PUT repos/<owner>/<repo>/branches/main/protection --input $env:TEMP\bp
 | 2 `1ce299be` | `helm` `pytest` `e2e` | ① `helm`：`job-migrate-license.yaml:37` → `platform-license:0.1.0-SNAPSHOT`，staging/prod 的 values 从未覆盖 `license.image.tag`；② `pytest`：`ImportError: Initializing ChatOpenAI requires the langchain-openai package`（3 例）；③ `e2e`：marshmallow 修好后浏览器用例真正跑起来，但 `POST /api/v2/auth/login → 502`——只起了 Python 半个栈，登录必须经 Java 网关 | ① 补 license 不可变 tag；② requirements 加 `langchain-openai`；③ e2e 增加"平台栈可达"探针 | `platform` / `lint` / `postgres-it` / `image-build` 转绿（716 个 Java 用例全过，时区修复生效） |
 | 3 `4b153b19` | `helm` `pytest` `e2e` `image-build` | ① `helm`：换成 `platform-fhir` 的同类问题（同类组件逐个暴露）；② `pytest`/`e2e`/`image-build` 三个 job 同时卡在 `pip install`：`langchain-openai 1.1.10 depends on openai<3.0.0 and >=2.20.0` 与 `openai==1.66.3` 冲突 → `ResolutionImpossible` | ① staging/prod 补 fhir tag，并用 **helm v3.19.0 本地实测** `lint` + 三环境 `template` 全过；② `openai` 升到 2.54.0（本机 2140 例回归实测版本；业务代码不直接 `import openai`），并 dry-run 验证 `langchain 1.2.10 / langchain-core 1.2.16 / langchain-openai 1.1.10 / openai 2.54.0` 可解 | `e2e` / `helm` / `platform` / `postgres-it` 全绿 |
 | 4 `b9d649b6` | `pytest`（仅 1 例） | `test_deploy_path_consistency.py::test_deploy_docs_show_single_frontend` 断言根 README 必须写明 `frontend-console/dist`——2.0 新版 README 重写后漏掉这条上线口径 | 在「部署形态」补"唯一前端 / 根路径托管 / dist 已入库"一段 | 覆盖率 85.95%（阈值 85%）通过；仅剩该例 |
+
+### 10.3 收口状态（2026-11-14 08:5x）
+
+| 项 | 状态 |
+|---|---|
+| 远端 `main` HEAD | 见 `git log -1`（本节首次落笔时为 `736d7279`） |
+| 首个全绿 CI run | <https://github.com/poincare-lijiashu/medical-agent/actions/runs/43534683795> —— **10/10 job 绿**：`pytest`（2,134 passed / 12 skipped，覆盖率 85.95%）、`lint`、`vuln-scan`、`postgres-it`、`migration-lint`、`platform`（716 tests）、`frontend`、`image-build`、`helm`、`e2e`；`eval-baseline` 按设计 skipped |
+| 分支保护 | `main`：10 项 required checks + 禁 force push + 禁删除（`gh api` 回读核验） |
+| GitHub Pages | <https://poincare-lijiashu.github.io/medical-agent/> → 展示页（入口 `docs/index.html` 0 秒跳转），截图与横幅实测 200 |
+| 仓库元数据 | description / homepage / 20 topics / Secret scanning / Push protection / Dependabot 全部生效 |
+| 待你手动 | ① Social preview 上传（`docs/showcase/assets/hero-light.png`）；② 建 `v2.0.0` Release —— 步骤见 §5.6 |
+| 已知缺口 | 3 项浏览器冒烟需要"Java 网关 + auth"完整栈，CI 只起 Python 进程时会显式 skip（不假红也不假绿）；补齐方式是后续加一个 compose 版 e2e job |
 
 ---
 
