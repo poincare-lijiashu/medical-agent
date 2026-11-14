@@ -9,11 +9,14 @@
 覆盖：登录 → 运营驾驶舱渲染 → 侧栏可用 → 进入「上线指挥台」→ 进入「药房工作台」→
 返回驾驶舱（验证会话未丢、未跳登录页）。
 
-环境要求：服务已在 127.0.0.1:8001 运行且注入了演示账号（AUTH_SEED_DEMO=true）。
-服务不可达时整文件 skip（不在无服务的开发机上制造假红）。
+环境要求：服务已在 127.0.0.1:8001 运行且注入了演示账号（AUTH_SEED_DEMO=true），
+**并且 Java 平台栈可达**——2.0 控制台的登录走 `/api/v2/auth/login`，由本进程反代到
+Java 网关（见 backend/main.py `gateway_proxy`），只起 Python 进程时该请求必然 502。
+两者任一不可达就整文件 skip（不在无栈的开发机/CI 上制造假红）。
 """
 from __future__ import annotations
 
+import urllib.error
 import urllib.request
 
 import pytest
@@ -38,10 +41,30 @@ def _service_up() -> bool:
         return False
 
 
+def _platform_stack_up() -> bool:
+    """Java 平台栈是否可达（控制台登录的唯一通道）。
+
+    2026-11-14 CI 现场：Python 进程健康、静态资源全 200，但
+    `POST /api/v2/auth/login` → 502（uvicorn.log: "All connection attempts failed"），
+    浏览器停在登录页 20s 超时。这不是前端缺陷，而是"只起了半个栈"。
+    探针用无副作用、免登录的 SSO 配置接口：上游不可达时反代返回 5xx。
+    """
+    try:
+        with urllib.request.urlopen(BASE_URL + "/api/v2/auth/sso/config", timeout=5) as r:
+            return r.status < 500
+    except urllib.error.HTTPError as exc:  # 4xx 说明网关在、路由在；5xx 说明上游不可达
+        return exc.code < 500
+    except Exception:  # noqa: BLE001
+        return False
+
+
 @pytest.fixture(scope="module")
 def page():
     if not _service_up():
         pytest.skip(f"服务不可达：{BASE_URL}（healthz 未通过）")
+    if not _platform_stack_up():
+        pytest.skip(f"平台栈不可达：{BASE_URL}/api/v2/auth/** 返回 5xx"
+                    "（控制台登录经 Java 网关；仅起 Python 进程无法完成登录）")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         ctx = browser.new_context(base_url=BASE_URL, locale="zh-CN")
