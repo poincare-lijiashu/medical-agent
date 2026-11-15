@@ -5,6 +5,16 @@
            可复核数字 → 已知边界。信息密度递增，读完仍能一句话复述。
      ═══════════════════════════════════════════════════════════════════════════ -->
 
+<h1 align="center">Medical Agent · 医疗智能体 · 医疗 AI Agent</h1>
+
+<p align="center">
+  <sub>
+    Hospital-grade <b>clinical AI agent</b> / <b>hospital AI assistant</b> —
+    EMR · FHIR R4 · HL7 v2 · clinical decision support (CDS) ·
+    medication &amp; billing closed loop · evidence-first RAG Q&amp;A.
+  </sub>
+</p>
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)"  srcset="docs/showcase/assets/hero-anim-dark.svg">
